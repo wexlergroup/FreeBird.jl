@@ -1,5 +1,9 @@
 module FreeBird
 
-# Write your package code here.
+include("Potentials.jl")
+
+using .Potentials
+
+export LennardJonesParameters, lennardjonesenergy
 
 end

@@ -1,0 +1,59 @@
+module AtomsMCMoves
+
+using ExtXYZ
+using LinearAlgebra
+using Setfield
+using Distributions
+
+using ..Potentials
+using ..AbstractWalkers
+
+export compute_total_energy, random_walk
+
+
+function compute_total_energy(at::Atoms, lj::LennardJonesParameters)
+    total_energy = 0.0
+    for i in 1:length(at)
+        for j in (i+1):length(at)
+            r = norm(at.atom_data.position[i] - at.atom_data.position[j]).val
+            total_energy += lennard_jones_energy(r,lj)
+        end
+    end
+    return total_energy
+end
+
+
+
+"Perform a random walk on the atoms object at, taking n_steps steps of size step_size."
+function random_walk(n_steps::Int, at::Atoms, lj::LennardJonesParameters, step_size::Float64, emax::Float64, frozen::Int)
+    n_accept = 0
+    for i_mc_step in 1:n_steps
+        for i_at in (frozen+1):length(at)
+            dx = rand(Uniform(-step_size,step_size))
+            dy = rand(Uniform(-step_size,step_size))
+            dz = rand(Uniform(-step_size,step_size))
+            orig_energy = at.system_data.energy
+            # println("orig_energy: ", orig_energy) # debug
+            orig_pos = at.atom_data.position[i_at]
+            # println("orig_pos: ", orig_pos) # debug
+            at = @set at.atom_data.position[i_at][1].val += dx
+            at = @set at.atom_data.position[i_at][2].val += dy
+            at = @set at.atom_data.position[i_at][3].val += dz
+            energy = compute_total_energy(at, lj)
+            if energy >= emax
+                # println("energy too high: ", energy, " >= ", emax) # debug
+                at = @set at.atom_data.position[i_at] = orig_pos
+            else
+                at = @set at.system_data.energy = energy
+                # println("accepted energy: ", energy) # debug
+                n_accept += 1
+            end
+        end
+    end
+    # println("after walk at.system_data.energy: ", at.system_data.energy) # debug
+    return n_accept, at
+end
+
+
+
+end # module AtomsMonteCarloMoves

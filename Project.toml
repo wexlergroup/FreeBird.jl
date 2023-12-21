@@ -3,6 +3,15 @@ uuid = "b4936512-85e8-430f-a91d-7f510ed448a2"
 authors = ["Ray Yang <mingrui.yang@outlook.com> and contributors"]
 version = "1.0.0-DEV"
 
+[deps]
+AtomBase = "ccf6c0ac-cd45-4eaf-bc3d-e8176fb87b3b"
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+ExtXYZ = "352459e4-ddd7-4360-8937-99dcb397b478"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
+Setfield = "efcf1570-3423-57d1-acb7-fd33fddbac46"
+
 [compat]
 julia = "1"
 

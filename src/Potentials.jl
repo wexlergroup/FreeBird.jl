@@ -10,9 +10,9 @@ export LennardJonesParameters, lennard_jones_energy
 A struct representing the parameters for the Lennard-Jones potential.
 
 # Fields
-- `epsilon::Float64`: The depth of the potential well.
-- `sigma::Float64`: The distance at which the potential is zero.
-- `cutoff::Float64`: The distance at which the potential is truncated.
+- `epsilon::Float64`: The depth of the potential well. In units of eV.
+- `sigma::Float64`: The distance at which the potential is zero. In units of Å.
+- `cutoff::Float64`: The distance at which the potential is truncated. In units of sigma.
 - `shift::Float64`: The energy shift applied to the potential caclulated at the cutoff distance.
 """
 struct LennardJonesParameters
@@ -70,7 +70,7 @@ end
 Calculate the Lennard-Jones energy for a given distance `r` and LennardJonesParameters `lj`.
 """
 function lennard_jones_energy(r::Float64, lj::LennardJonesParameters)
-    if r > lj.cutoff
+    if r > lj.cutoff * lj.sigma
         return 0.0
     else
         return lennard_jones_energy(lj.sigma, lj.epsilon, r) - lj.shift

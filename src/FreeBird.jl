@@ -14,6 +14,7 @@ export compute_total_energy, random_walk, AtomsSystem
 
 include("NestedSamplingLoops.jl")
 using .NestedSamplingLoops
+export NestedSamplingParameters
 export highest_energy, sort_by_energy!, nested_sampling_step!, assign_lj_energies!
 
 end

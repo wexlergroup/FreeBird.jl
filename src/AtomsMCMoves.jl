@@ -23,8 +23,10 @@ function compute_total_energy(at::Atoms, lj::LennardJonesParameters)
 end
 
 
-
-"Perform a random walk on the atoms object at, taking n_steps steps of size step_size."
+"""
+    random_walk(n_steps::Int, at::Atoms, lj::LennardJonesParameters, step_size::Float64, emax::Float64, frozen::Int)
+Perform a random walk of `n_steps` steps on the atoms in `at` using a step size of `step_size`.
+"""
 function random_walk(n_steps::Int, at::Atoms, lj::LennardJonesParameters, step_size::Float64, emax::Float64, frozen::Int)
     n_accept = 0
     for i_mc_step in 1:n_steps

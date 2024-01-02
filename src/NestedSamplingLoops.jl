@@ -9,31 +9,57 @@ using ..AbstractWalkers
 
 export NestedSamplingParameters
 export highest_energy, sort_by_energy!, nested_sampling_step!, assign_lj_energies!
+export nested_sampling_loop!
 
 abstract type SamplingParameters end
 
+"""
+    struct NestedSamplingParameters <: SamplingParameters
+
+The `NestedSamplingParameters` struct represents the parameters used in nested sampling.
+
+# Fields
+- `mc_steps::Int64`: The number of Monte Carlo steps.
+- `step_size::Float64`: The step size for each Monte Carlo step.
+- `frozen::Int64`: The number of frozen particles that are not subject to the random walk.
+"""
 struct NestedSamplingParameters <: SamplingParameters
     mc_steps::Int64
     step_size::Float64
     frozen::Int64
 end
 
+
+"""
+    assign_lj_energies!(liveset::LennardJonesAtomsWalkers)
+
+Assigns the Lennard-Jones potential energies to the walkers in the given `liveset`.
+
+# Arguments
+- `liveset::LennardJonesAtomsWalkers`: The liveset of walkers to be assigned energies.
+"""
 function assign_lj_energies!(liveset::LennardJonesAtomsWalkers)
     ats = liveset.walkers
     lj = liveset.lennard_jones_potential
     @debug println("ats[1].system_data.energy: ", ats[1].system_data.energy)
-    # for at in ats
-    #     println("at.system_data.energy: ", at.system_data.energy)
-    #     at = @set at.system_data.energy = compute_total_energy(at, lj)
-    # end
     for i in eachindex(ats)
         at = ats[i]
         at = @set at.system_data.energy = compute_total_energy(at, lj)
-        # println("at.system_data.energy[$i]: ", at.system_data.energy)
         ats[i] = at
     end
 end
 
+"""
+    sort_by_energy!(liveset::LennardJonesAtomsWalkers)
+
+Sorts the walkers in the liveset by their energy in descending order.
+
+# Arguments
+- `liveset::LennardJonesAtomsWalkers`: The liveset of walkers to be sorted.
+
+# Returns
+- `liveset::LennardJonesAtomsWalkers`: The sorted liveset.
+"""
 function sort_by_energy!(liveset::LennardJonesAtomsWalkers)
     sort!(liveset.walkers, by = x -> x.system_data.energy, rev=true)
     # println("after sort ats[1].system_data.energy: ", ats[1].system_data.energy)
@@ -42,6 +68,19 @@ end
 
 
 
+"""
+    nested_sampling_step!(liveset::LennardJonesAtomsWalkers, ns_params::NestedSamplingParameters)
+
+Performs a single step of the nested sampling algorithm.
+
+# Arguments
+- `liveset::LennardJonesAtomsWalkers`: The current set of walkers in the nested sampling algorithm.
+- `ns_params::NestedSamplingParameters`: The parameters for the nested sampling algorithm.
+
+# Returns
+- `emax`: The maximum energy among the walkers in the liveset.
+- `liveset`: The updated liveset after performing the nested sampling step.
+"""
 function nested_sampling_step!(liveset::LennardJonesAtomsWalkers, ns_params::NestedSamplingParameters)
     sort_by_energy!(liveset)
     @debug println("liveset.walkers[1].system_data.energy: ", liveset.walkers[1].system_data.energy)
@@ -59,7 +98,29 @@ function nested_sampling_step!(liveset::LennardJonesAtomsWalkers, ns_params::Nes
 end
 
 
+"""
+    nested_sampling_loop!(liveset::LennardJonesAtomsWalkers, ns_params::NestedSamplingParameters, n_steps::Int64)
 
+Perform nested sampling loop for a given number of steps.
+
+# Arguments
+- `liveset::LennardJonesAtomsWalkers`: The initial set of walkers.
+- `ns_params::NestedSamplingParameters`: The parameters for nested sampling.
+- `n_steps::Int64`: The number of steps to perform.
+
+# Returns
+- `energies`: An array of energies at each step.
+- `liveset`: The final set of walkers.
+"""
+function nested_sampling_loop!(liveset::LennardJonesAtomsWalkers, ns_params::NestedSamplingParameters, n_steps::Int64)
+    energies = zeros(Float64, n_steps)
+    assign_lj_energies!(liveset)
+    for i in 1:n_steps
+        emax, liveset = nested_sampling_step!(liveset, ns_params)
+        energies[i] = emax
+    end
+    return energies, liveset
+end
 
 
 

@@ -16,5 +16,6 @@ include("NestedSamplingLoops.jl")
 using .NestedSamplingLoops
 export NestedSamplingParameters
 export highest_energy, sort_by_energy!, nested_sampling_step!, assign_lj_energies!
+export nested_sampling_loop!
 
 end

@@ -6,9 +6,4 @@ lj = LennardJonesParameters(cutoff=4.0,shift=true)
 liveset = LennardJonesAtomsWalkers(ats, lj)
 ns_params = NestedSamplingParameters(100, 0.01, 12)
 
-assign_lj_energies!(liveset)
-
-for i in 1:10000
-    emax, _ = nested_sampling_step!(liveset, ns_params)
-    println("emax: ", emax)
-end
+energies, _ = nested_sampling_loop!(liveset, ns_params, 10000)

@@ -7,8 +7,8 @@ export AtomsWalkers, LennardJonesAtomsWalkers
 
 abstract type AtomsWalkers end
 
-struct LennardJonesAtomsWalkers <: AtomsWalkers
-    walkers::Vector
+struct LennardJonesAtomsWalkers{T} <: AtomsWalkers
+    walkers::Vector{T}
     lennard_jones_potential::LennardJonesParameters
 end
 

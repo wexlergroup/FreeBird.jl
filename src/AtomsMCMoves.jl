@@ -1,26 +1,14 @@
 module AtomsMCMoves
 
 using ExtXYZ
-using LinearAlgebra
+# using LinearAlgebra
 using Setfield
 using Distributions
 
 using ..Potentials
 using ..AbstractWalkers
 
-export compute_total_energy, random_walk
-
-
-function compute_total_energy(at::Atoms, lj::LJParameters)
-    total_energy = 0.0
-    for i in 1:length(at)
-        for j in (i+1):length(at)
-            r = norm(at.atom_data.position[i] - at.atom_data.position[j]).val
-            total_energy += lj_energy(r,lj)
-        end
-    end
-    return total_energy
-end
+export random_walk
 
 
 """

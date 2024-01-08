@@ -2,15 +2,15 @@ module FreeBird
 
 include("Potentials.jl")
 using .Potentials
-export LennardJonesParameters, lennard_jones_energy
+export LJParameters, lj_energy
 
 include("AbstractWalkers.jl")
 using .AbstractWalkers
-export AtomsWalkers, LennardJonesAtomsWalkers
+export AtomWalkers, LJAtomWalkers, LJAtomWalkersWithFrozenPart
 
 include("AtomsMCMoves.jl")
 using .AtomsMCMoves
-export compute_total_energy, random_walk, AtomsSystem
+export compute_total_energy, random_walk
 
 include("NestedSamplingLoops.jl")
 using .NestedSamplingLoops

@@ -3,13 +3,20 @@ module AbstractWalkers
 # using ExtXYZ
 using ..Potentials
 
-export AtomsWalkers, LennardJonesAtomsWalkers
+export AtomWalkers, LJAtomWalkers, LJAtomWalkersWithFrozenPart
 
-abstract type AtomsWalkers end
+abstract type AtomWalkers end
 
-struct LennardJonesAtomsWalkers{T} <: AtomsWalkers
+struct LJAtomWalkers{T} <: AtomWalkers
     walkers::Vector{T}
-    lennard_jones_potential::LennardJonesParameters
+    lj_potential::LJParameters
+end
+
+struct LJAtomWalkersWithFrozenPart{T} <: AtomWalkers
+    walkers::Vector{T}
+    lj_potential::LJParameters
+    num_frozen_particles::Int64
+    energy_frozen_particles::Float64
 end
 
 end # module AbstractWalkers

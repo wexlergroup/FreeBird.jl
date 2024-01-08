@@ -11,12 +11,12 @@ using ..AbstractWalkers
 export compute_total_energy, random_walk
 
 
-function compute_total_energy(at::Atoms, lj::LennardJonesParameters)
+function compute_total_energy(at::Atoms, lj::LJParameters)
     total_energy = 0.0
     for i in 1:length(at)
         for j in (i+1):length(at)
             r = norm(at.atom_data.position[i] - at.atom_data.position[j]).val
-            total_energy += lennard_jones_energy(r,lj)
+            total_energy += lj_energy(r,lj)
         end
     end
     return total_energy
@@ -24,10 +24,10 @@ end
 
 
 """
-    random_walk(n_steps::Int, at::Atoms, lj::LennardJonesParameters, step_size::Float64, emax::Float64, frozen::Int)
+    random_walk(n_steps::Int, at::Atoms, lj::LJParameters, step_size::Float64, emax::Float64, frozen::Int)
 Perform a random walk of `n_steps` steps on the atoms in `at` using a step size of `step_size`.
 """
-function random_walk(n_steps::Int, at::Atoms, lj::LennardJonesParameters, step_size::Float64, emax::Float64, frozen::Int)
+function random_walk(n_steps::Int, at::Atoms, lj::LJParameters, step_size::Float64, emax::Float64, frozen::Int)
     n_accept = 0
     for i_mc_step in 1:n_steps
         for i_at in (frozen+1):length(at)

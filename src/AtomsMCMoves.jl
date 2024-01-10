@@ -15,7 +15,8 @@ export random_walk
     random_walk(n_steps::Int, at::Atoms, lj::LJParameters, step_size::Float64, emax::Float64, frozen::Int)
 Perform a random walk of `n_steps` steps on the atoms in `at` using a step size of `step_size`.
 """
-function random_walk(n_steps::Int, at::Atoms, lj::LJParameters, step_size::Float64, emax::Float64, frozen::Int)
+function random_walk(n_steps::Int, at::Atoms, lj::LJParameters, step_size::Float64, emax::Float64; 
+                    frozen::Int=0, e_shift::Float64=0.0)
     n_accept = 0
     for i_mc_step in 1:n_steps
         for i_at in (frozen+1):length(at)
@@ -29,7 +30,7 @@ function random_walk(n_steps::Int, at::Atoms, lj::LJParameters, step_size::Float
             at = @set at.atom_data.position[i_at][1].val += dx
             at = @set at.atom_data.position[i_at][2].val += dy
             at = @set at.atom_data.position[i_at][3].val += dz
-            energy = compute_total_energy(at, lj)
+            energy = interaction_energy(at, lj; frozen=frozen) + e_shift
             if energy >= emax
                 # println("energy too high: ", energy, " >= ", emax) # debug
                 at = @set at.atom_data.position[i_at] = orig_pos

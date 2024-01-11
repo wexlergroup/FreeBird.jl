@@ -21,7 +21,6 @@ The `NestedSamplingParameters` struct represents the parameters used in nested s
 # Fields
 - `mc_steps::Int64`: The number of Monte Carlo steps.
 - `step_size::Float64`: The step size for each Monte Carlo step.
-- `frozen::Int64`: The number of frozen particles that are not subject to the random walk.
 """
 struct NestedSamplingParameters <: SamplingParameters
     mc_steps::Int64

@@ -8,7 +8,7 @@ using Distributions
 using ..Potentials
 using ..AbstractWalkers
 
-export random_walk
+export random_walk, single_atom_demon_walk, MC_nve_walk
 
 
 """
@@ -58,30 +58,43 @@ function single_atom_demon_walk(at::Atoms, lj::LJParameters, step_size::Float64;
     new_energy = interaction_energy(at, lj; frozen=frozen) + e_shift
     ΔE = new_energy - orig_energy
     if ΔE <= 0
-        e_demon += ΔE
+        e_demon -= ΔE
         accept = true
-        at = @set at.system_data.energy = energy
+        at = @set at.system_data.energy = new_energy
+        @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon gains energy, accept"
     elseif 0 < ΔE <= e_demon
         e_demon -= ΔE
         accept = true
-        at = @set at.system_data.energy = energy
+        at = @set at.system_data.energy = new_energy
+        @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon gives energy, accept"
     else
         at = @set at.atom_data.position[i_at] = orig_pos
+        @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon has no enough energy, reject"
     end
     return accept, at, e_demon
 end
 
-function MC_nve_walk(n_steps::Int, at::Atoms, lj::LJParameters, step_size::Float64, emax::Float64; 
+function MC_nve_walk(n_steps::Int, at::Atoms, lj::LJParameters, step_size::Float64; 
     frozen::Int=0, e_shift::Float64=0.0)
     e_demon = 0.0
-    accempt_count = 0
-    for _ in 1:n_steps
+    accept_count = 0
+    initial_energy  = at.system_data.energy
+    for i in 1:n_steps
         accept, at, e_demon = single_atom_demon_walk(at, lj, step_size; frozen=frozen, e_shift=e_shift, e_demon=e_demon)
         if accept
-            accempt_count += 1
+            accept_count += 1
+        end
+        if i > n_steps/2 && e_demon <= 1e-10
+            @debug "demon give up all energy, stop"
+            break
         end
     end
-    return accempt_count/n_steps, at
+    final_energy = at.system_data.energy + e_demon
+    @debug "initial_energy: ", initial_energy, " final_energy: ", final_energy
+    if e_demon > 1e-10
+        @warn "demon has too much energy remain: ", e_demon
+    end
+    return accept_count/n_steps, at
 end
 
 

@@ -12,7 +12,7 @@ export interaction_energy, total_energy
 
 include("AtomsMCMoves.jl")
 using .AtomsMCMoves
-export random_walk
+export random_walk, single_atom_demon_walk, MC_nve_walk
 
 include("NestedSamplingLoops.jl")
 using .NestedSamplingLoops

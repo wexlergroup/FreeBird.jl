@@ -55,7 +55,7 @@ function free_frozen_energy(at::Atoms, lj::LJParameters, frozen::Int64)
         for j in (frozen+1):length(at)
             r = norm(at.atom_data.position[i] - at.atom_data.position[j]).val
             free_frozen_energy += lj_energy(r,lj)
-            @debug println("free_frozen_energy: ", free_frozen_energy, " r: ", r, " i and j: ", i, " ", j)
+            # @debug println("free_frozen_energy: ", free_frozen_energy, " r: ", r, " i and j: ", i, " ", j)
         end
     end
     return free_frozen_energy

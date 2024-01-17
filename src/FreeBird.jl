@@ -20,4 +20,8 @@ export NestedSamplingParameters
 export highest_energy, sort_by_energy!, nested_sampling_step!, assign_lj_energies!
 export nested_sampling_loop!
 
+include("FreeBirdIO.jl")
+using .FreeBirdIO
+export read_liveset, save_liveset, read_walker, save_walker
+
 end

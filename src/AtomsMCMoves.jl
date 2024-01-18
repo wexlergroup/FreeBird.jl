@@ -15,8 +15,15 @@ export random_walk, single_atom_demon_walk, MC_nve_walk
     random_walk(n_steps::Int, at::Atoms, lj::LJParameters, step_size::Float64, emax::Float64, frozen::Int)
 Perform a random walk of `n_steps` steps on the atoms in `at` using a step size of `step_size`.
 """
-function random_walk(n_steps::Int, at::Atoms, lj::LJParameters, step_size::Float64, emax::Float64; 
-                    frozen::Int=0, e_shift::Float64=0.0)
+function random_walk(
+                    n_steps::Int, 
+                    at::Atoms, 
+                    lj::LJParameters, 
+                    step_size::Float64, 
+                    emax::Float64; 
+                    frozen::Int=0, 
+                    e_shift::Float64=0.0
+                    )
     n_accept = 0
     for i_mc_step in 1:n_steps
         for i_at in (frozen+1):length(at)
@@ -45,8 +52,14 @@ end
 
 
 
-function single_atom_demon_walk(at::Atoms, lj::LJParameters, step_size::Float64; 
-                    frozen::Int=0, e_shift::Float64=0.0, e_demon::Float64=0.0)
+function single_atom_demon_walk(
+                        at::Atoms, 
+                        lj::LJParameters, 
+                        step_size::Float64; 
+                        frozen::Int=0, 
+                        e_shift::Float64=0.0, 
+                        e_demon::Float64=0.0
+                        )
     accept = false
     i_at = rand((frozen+1):length(at))
     orig_pos = deepcopy(at.atom_data.position[i_at])
@@ -74,8 +87,14 @@ function single_atom_demon_walk(at::Atoms, lj::LJParameters, step_size::Float64;
     return accept, at, e_demon
 end
 
-function MC_nve_walk(n_steps::Int, at::Atoms, lj::LJParameters, step_size::Float64; 
-    frozen::Int=0, e_shift::Float64=0.0)
+function MC_nve_walk(
+                    n_steps::Int, 
+                    at::Atoms, 
+                    lj::LJParameters, 
+                    step_size::Float64; 
+                    frozen::Int=0, 
+                    e_shift::Float64=0.0, 
+                    e_demon_tolerance::Float64=1e-10)
     e_demon = 0.0
     accept_count = 0
     initial_energy  = at.system_data.energy
@@ -84,15 +103,15 @@ function MC_nve_walk(n_steps::Int, at::Atoms, lj::LJParameters, step_size::Float
         if accept
             accept_count += 1
         end
-        if i > n_steps/2 && e_demon <= 1e-10
+        if i > n_steps/2 && e_demon <= e_demon_tolerance
             @debug "demon give up all energy, stop"
             break
         end
     end
     final_energy = at.system_data.energy + e_demon
     @debug "initial_energy: ", initial_energy, " final_energy: ", final_energy
-    if e_demon > 1e-10
-        @warn "demon has too much energy remain: ", e_demon
+    if e_demon > e_demon_tolerance
+        @warn "demon has too much energy remain (>tolerance=$(e_demon_tolerance)): ", e_demon
     end
     return accept_count/n_steps, at
 end

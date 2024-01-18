@@ -7,6 +7,7 @@ using Distributions
 
 using ..Potentials
 using ..AbstractWalkers
+using ..EnergyEval
 
 export random_walk, single_atom_demon_walk, MC_nve_walk
 

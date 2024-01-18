@@ -6,9 +6,10 @@ using Setfield
 using ..AtomsMCMoves
 using ..Potentials
 using ..AbstractWalkers
+using ..EnergyEval
 
 export NestedSamplingParameters
-export highest_energy, sort_by_energy!, nested_sampling_step!, assign_lj_energies!
+export sort_by_energy!, nested_sampling_step!, assign_lj_energies!
 export nested_sampling_loop!
 
 abstract type SamplingParameters end

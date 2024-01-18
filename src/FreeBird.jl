@@ -25,7 +25,8 @@ export nested_sampling_loop!
 
 include("FreeBirdIO.jl")
 using .FreeBirdIO
-export read_liveset, save_liveset, read_walker, save_walker
-export save_df
+export read_walkers, write_walkers
+export read_single_walker, write_single_walker
+export write_df
 
 end

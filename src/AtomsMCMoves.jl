@@ -1,7 +1,6 @@
 module AtomsMCMoves
 
 using ExtXYZ
-# using LinearAlgebra
 using Setfield
 using Distributions
 

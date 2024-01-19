@@ -1,7 +1,5 @@
 module AbstractWalkers
 
-using ExtXYZ
-using LinearAlgebra
 using Setfield
 using ..Potentials
 using ..EnergyEval

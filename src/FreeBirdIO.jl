@@ -14,7 +14,7 @@ read_single_walker(filename::String) = Atoms(read_frame(filename::String))
 
 write_single_walker(filename::String, at::Atoms) = save_system(filename::String, at)
 
-write_df(filename::String, df::DataFrame) = CSV.write(filename, df)
+write_df(filename::String, df::DataFrame) = CSV.write(filename, df; append=true)
 
 
 end # module

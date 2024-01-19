@@ -20,7 +20,7 @@ export random_walk, single_atom_demon_walk, MC_nve_walk
 include("NestedSamplingLoops.jl")
 using .NestedSamplingLoops
 export NestedSamplingParameters
-export sort_by_energy!, nested_sampling_step!, assign_lj_energies!
+export sort_by_energy!, nested_sampling_step!
 export nested_sampling_loop!
 
 include("FreeBirdIO.jl")

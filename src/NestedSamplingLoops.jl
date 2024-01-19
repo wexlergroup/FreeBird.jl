@@ -9,7 +9,7 @@ using ..AbstractWalkers
 using ..EnergyEval
 
 export NestedSamplingParameters
-export sort_by_energy!, nested_sampling_step!, assign_lj_energies!
+export sort_by_energy!, nested_sampling_step!
 export nested_sampling_loop!
 
 abstract type SamplingParameters end
@@ -28,38 +28,6 @@ struct NestedSamplingParameters <: SamplingParameters
     step_size::Float64
 end
 
-
-"""
-    assign_lj_energies!(liveset::LJAtomWalkers)
-
-Assigns the Lennard-Jones potential energies to the walkers in the given `liveset`.
-
-# Arguments
-- `liveset::LJAtomWalkers`: The liveset of walkers to be assigned energies.
-"""
-function assign_lj_energies!(liveset::LJAtomWalkers)
-    ats = liveset.walkers
-    lj = liveset.lj_potential
-    @debug println("ats[1].system_data.energy: ", ats[1].system_data.energy)
-    for i in eachindex(ats)
-        at = ats[i]
-        at = @set at.system_data.energy = total_energy(at, lj)
-        ats[i] = at
-    end
-end
-
-function assign_lj_energies!(liveset::LJAtomWalkersWithFrozenPart)
-    ats = liveset.walkers
-    lj = liveset.lj_potential
-    frozen = liveset.num_frozen_particles
-    e_frozen = liveset.energy_frozen_particles
-    @debug println("ats[1].system_data.energy: ", ats[1].system_data.energy)
-    for i in eachindex(ats)
-        at = ats[i]
-        at = @set at.system_data.energy = interaction_energy(at, lj; frozen=frozen) + e_frozen
-        ats[i] = at
-    end
-end
 
 """
     sort_by_energy!(liveset::LJAtomWalkers)
@@ -133,7 +101,6 @@ Perform nested sampling loop for a given number of steps.
 """
 function nested_sampling_loop!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, n_steps::Int64)
     energies = zeros(Float64, n_steps)
-    assign_lj_energies!(liveset)
     for i in 1:n_steps
         emax, liveset = nested_sampling_step!(liveset, ns_params)
         energies[i] = emax

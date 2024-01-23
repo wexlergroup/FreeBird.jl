@@ -58,7 +58,8 @@ function single_atom_demon_walk(
                         step_size::Float64; 
                         frozen::Int=0, 
                         e_shift::Float64=0.0, 
-                        e_demon::Float64=0.0
+                        e_demon::Float64=0.0,
+                        give_energy_to_demon::Bool=true
                         )
     accept = false
     i_at = rand((frozen+1):length(at))
@@ -70,7 +71,7 @@ function single_atom_demon_walk(
     at = @set at.atom_data.position[i_at][3].val += dz
     new_energy = interaction_energy(at, lj; frozen=frozen) + e_shift
     ΔE = new_energy - orig_energy
-    if ΔE <= 0
+    if ΔE <= 0 && give_energy_to_demon
         e_demon -= ΔE
         accept = true
         at = @set at.system_data.energy = new_energy
@@ -87,6 +88,37 @@ function single_atom_demon_walk(
     return accept, at, e_demon
 end
 
+function addintional_demon_walk(
+                    e_demon::Float64,
+                    at::Atoms, 
+                    lj::LJParameters, 
+                    step_size::Float64; 
+                    frozen::Int=0, 
+                    e_shift::Float64=0.0, 
+                    e_demon_tolerance::Float64=1e-10,
+                    max_add_steps::Int=1_000_000
+                    )
+    accept_this_walker = false
+    new_accept_count=0
+    additional_steps = 1
+    while e_demon > e_demon_tolerance && additional_steps < max_add_steps
+        accept, at, e_demon = single_atom_demon_walk(at, lj, step_size; frozen=frozen, e_shift=e_shift, e_demon=e_demon, give_energy_to_demon=false)
+        if accept
+            new_accept_count += 1
+        end
+        additional_steps += 1
+    end
+    if additional_steps >= max_add_steps
+        @warn "Maximum additional steps reached, breaking. NVE condition not satisfied with an energy by a factor of $(e_demon/e_demon_tolerance)."
+    else
+        accept_this_walker = true
+    end
+    @info "Performed $additional_steps additional demon walk.
+    New accept rate: $(new_accept_count/additional_steps).
+    Final demon energy: $e_demon."
+    return accept_this_walker, new_accept_count/additional_steps, at
+end
+
 function MC_nve_walk(
                     n_steps::Int, 
                     at::Atoms, 
@@ -94,7 +126,9 @@ function MC_nve_walk(
                     step_size::Float64; 
                     frozen::Int=0, 
                     e_shift::Float64=0.0, 
-                    e_demon_tolerance::Float64=1e-10)
+                    e_demon_tolerance::Float64=1e-10,
+                    max_add_steps::Int=1_000_000)
+    accept_this_walker = false
     e_demon = 0.0
     accept_count = 0
     initial_energy  = at.system_data.energy
@@ -103,17 +137,21 @@ function MC_nve_walk(
         if accept
             accept_count += 1
         end
-        if i > n_steps/2 && e_demon <= e_demon_tolerance
-            @debug "demon give up all energy, stop"
-            break
-        end
     end
+    if e_demon > e_demon_tolerance
+        @info "Demon has too much energy remain (>tolerance=$(e_demon_tolerance)): $e_demon, performing more demon walk.
+        Current accept rate: $(accept_count/n_steps). Step size is lowered."
+        step_size /= 10
+        accept_this_walker, _, at = addintional_demon_walk(e_demon, at, lj, step_size; 
+                                                frozen=frozen, e_shift=e_shift, e_demon_tolerance=e_demon_tolerance, 
+                                                max_add_steps=max_add_steps)
+    else
+        accept_this_walker = true
+    end
+
     final_energy = at.system_data.energy + e_demon
     @debug "initial_energy: ", initial_energy, " final_energy: ", final_energy
-    if e_demon > e_demon_tolerance
-        @warn "demon has too much energy remain (>tolerance=$(e_demon_tolerance)): ", e_demon
-    end
-    return accept_count/n_steps, at
+    return accept_this_walker, accept_count/n_steps, at
 end
 
 

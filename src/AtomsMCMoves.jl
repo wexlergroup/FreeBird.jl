@@ -27,7 +27,7 @@ function random_walk(
     n_accept = 0
     for i_mc_step in 1:n_steps
         for i_at in (frozen+1):length(at)
-            dx, dy, dz = [rand(Uniform(-step_size,step_size)) for _ in 1:3]
+            dx, dy, dz = (rand(Uniform(-step_size,step_size)) for _ in 1:3)
             # println("orig_energy: ", at.system_data.energy) # debug
             orig_pos = deepcopy(at.atom_data.position[i_at])
             # println("orig_pos: ", orig_pos) # debug
@@ -88,7 +88,7 @@ function single_atom_demon_walk(
     return accept, at, e_demon
 end
 
-function addintional_demon_walk(
+function additional_demon_walk(
                     e_demon::Float64,
                     at::Atoms, 
                     lj::LJParameters, 
@@ -142,7 +142,7 @@ function MC_nve_walk(
         @info "Demon has too much energy remain (>tolerance=$(e_demon_tolerance)): $e_demon, performing more demon walk.
         Current accept rate: $(accept_count/n_steps). Step size is lowered."
         step_size /= 10
-        accept_this_walker, _, at = addintional_demon_walk(e_demon, at, lj, step_size; 
+        accept_this_walker, _, at = additional_demon_walk(e_demon, at, lj, step_size; 
                                                 frozen=frozen, e_shift=e_shift, e_demon_tolerance=e_demon_tolerance, 
                                                 max_add_steps=max_add_steps)
     else

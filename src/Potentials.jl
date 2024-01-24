@@ -13,7 +13,7 @@ A struct representing the parameters for the Lennard-Jones potential.
 - `epsilon::Float64`: The depth of the potential well. In units of eV.
 - `sigma::Float64`: The distance at which the potential is zero. In units of Å.
 - `cutoff::Float64`: The distance at which the potential is truncated. In units of sigma.
-- `shift::Float64`: The energy shift applied to the potential caclulated at the cutoff distance.
+- `shift::Float64`: The energy shift applied to the potential calculated at the cutoff distance.
 """
 struct LJParameters
     epsilon::Float64
@@ -49,7 +49,7 @@ LJParameters(1.0, 1.0, 3.5, 0.0)
 
 ```
 """
-function LJParameters(;epsilon=1.0, sigma=1.0, cutoff=Inf, shift=false)
+function LJParameters(;epsilon=1.0, sigma=1.0, cutoff=Inf, shift=true)
     if isa(shift,Bool) && shift
         shiftenergy = lj_energy(Float64(epsilon), Float64(sigma), Float64(cutoff))
         

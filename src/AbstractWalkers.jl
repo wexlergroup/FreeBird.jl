@@ -17,9 +17,7 @@ function assign_lj_energies!(ats::Vector{T}, lj::LJParameters; frozen::Int64=0, 
         # check if energy is already in system_data
         if !hasproperty(at.system_data, :energy)
             @debug "energy not in system_data, adding it"
-            k = (k..., :energy)
-            v = (v..., e_total)
-            at = @set at.system_data = NamedTuple{k}(v)
+            at = @set at.system_data = (; at.system_data..., energy=e_total)
             ats = @set ats[i] = at
         else
             at = @set at.system_data.energy = e_total
@@ -28,9 +26,7 @@ function assign_lj_energies!(ats::Vector{T}, lj::LJParameters; frozen::Int64=0, 
         # check if iter is already in system_data
         if !hasproperty(at.system_data, :iter)
             @debug "iter not in system_data, adding it"
-            k = (k..., :iter)
-            v = (v..., 0::Int)
-            at = @set at.system_data = NamedTuple{k}(v)
+            at = @set at.system_data = (; at.system_data..., iter=0)
             ats = @set ats[i] = at
         else
             at = @set at.system_data.iter = 0

@@ -15,6 +15,7 @@ export AtomWalkers, LJAtomWalkers, LJAtomWalkersWithFrozenPart
 
 include("AtomsMCMoves.jl")
 using .AtomsMCMoves
+export periodic_boundary_wrap!
 export MC_random_walk!, MC_nve_walk!
 
 include("NestedSamplingLoops.jl")

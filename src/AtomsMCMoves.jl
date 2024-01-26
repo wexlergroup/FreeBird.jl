@@ -1,6 +1,7 @@
 module AtomsMCMoves
 
 using ExtXYZ
+using AtomsBase
 using Setfield
 using Distributions
 using Unitful
@@ -9,7 +10,21 @@ using ..Potentials
 using ..AbstractWalkers
 using ..EnergyEval
 
+export periodic_boundary_wrap!
 export MC_random_walk!, MC_nve_walk!
+
+
+function periodic_boundary_wrap!(pos::Vector{T}, system::Atoms) where T
+    pbc::Vector{Periodic} = system.system_data.boundary_conditions
+    box::Vector{Vector{T}} = system.system_data.bounding_box
+    for i in eachindex(pos)
+        if pbc[i] == Periodic()
+            pos[i] = mod(pos[i], box[i][i])
+        end 
+    end
+    return pos
+end
+
 
 
 function single_atom_random_walk!(pos::Vector{T}, step_size::Float64) where T

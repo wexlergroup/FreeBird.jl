@@ -8,13 +8,13 @@ export read_single_walker, write_single_walker
 export write_df
 export generate_initial_liveset
 
-read_walkers(filename::String) = Atoms.(read_frames(filename::String))
+read_walkers(filename::String) = FlexibleSystem.(Atoms.(read_frames(filename::String)))
 
 write_walkers(filename::String, ats::Vector) = save_trajectory(filename::String, ats) 
 
-read_single_walker(filename::String) = Atoms(read_frame(filename::String))
+read_single_walker(filename::String) = FlexibleSystem(Atoms(read_frame(filename::String)))
 
-write_single_walker(filename::String, at::Atoms) = save_system(filename::String, at)
+write_single_walker(filename::String, at::FlexibleSystem) = save_system(filename::String, at)
 
 write_df(filename::String, df::DataFrame) = CSV.write(filename, df; append=true)
 

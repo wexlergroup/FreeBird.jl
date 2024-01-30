@@ -29,5 +29,6 @@ using .FreeBirdIO
 export read_walkers, write_walkers
 export read_single_walker, write_single_walker
 export write_df
+export generate_initial_liveset
 
 end

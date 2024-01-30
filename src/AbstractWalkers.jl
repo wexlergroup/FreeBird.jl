@@ -1,6 +1,7 @@
 module AbstractWalkers
 
 using Setfield
+using AtomsBase
 using ..Potentials
 using ..EnergyEval
 
@@ -10,38 +11,18 @@ abstract type AtomWalkers end
 
 function assign_lj_energies!(ats::Vector{T}, lj::LJParameters; frozen::Int64=0, e_frozen::Float64=0.0) where T
     for i in eachindex(ats)
-        at = ats[i]
-        e_total = interaction_energy(at, lj; frozen=frozen) + e_frozen
-        k = keys(at.system_data)
-        v = values(at.system_data)
-        # check if energy is already in system_data
-        if !hasproperty(at.system_data, :energy)
-            @debug "energy not in system_data, adding it"
-            at = @set at.system_data = (; at.system_data..., energy=e_total)
-            ats = @set ats[i] = at
-        else
-            at = @set at.system_data.energy = e_total
-            ats[i] = at
-        end
-        # check if iter is already in system_data
-        if !hasproperty(at.system_data, :iter)
-            @debug "iter not in system_data, adding it"
-            at = @set at.system_data = (; at.system_data..., iter=0)
-            ats = @set ats[i] = at
-        else
-            at = @set at.system_data.iter = 0
-            ats[i] = at
-        end
+        e_total = interaction_energy(ats[i], lj; frozen=frozen) + e_frozen
+        ats[i] = FlexibleSystem(ats[i].particles, ats[i].bounding_box, ats[i].boundary_conditions; iter = 0, energy = e_total)
     end
-    return ats, typeof(ats[1])
+    return ats
 end
 
 struct LJAtomWalkers{T} <: AtomWalkers
     walkers::Vector{T}
     lj_potential::LJParameters
     function LJAtomWalkers(walkers::Vector{T}, lj_potential::LJParameters) where T
-        walkers, new_T = assign_lj_energies!(walkers, lj_potential)
-        return new{new_T}(walkers, lj_potential)
+        assign_lj_energies!(walkers, lj_potential)
+        return new{T}(walkers, lj_potential)
     end
 end
 
@@ -54,8 +35,8 @@ end
 
 function LJAtomWalkersWithFrozenPart(walkers::Vector{T}, lj_potential::LJParameters, num_frozen_particles::Int64) where T
     energy_frozen_particles = frozen_energy(walkers[1], lj_potential, num_frozen_particles)
-    walkers, new_T = assign_lj_energies!(walkers, lj_potential; frozen=num_frozen_particles, e_frozen=energy_frozen_particles)
-    return LJAtomWalkersWithFrozenPart{new_T}(walkers, lj_potential, num_frozen_particles, energy_frozen_particles)
+    assign_lj_energies!(walkers, lj_potential; frozen=num_frozen_particles, e_frozen=energy_frozen_particles)
+    return LJAtomWalkersWithFrozenPart{T}(walkers, lj_potential, num_frozen_particles, energy_frozen_particles)
 end
 
 

@@ -5,6 +5,7 @@ using AtomsBase
 using Setfield
 using Distributions
 using Unitful
+using StaticArrays
 
 using ..Potentials
 using ..AbstractWalkers
@@ -14,9 +15,9 @@ export periodic_boundary_wrap!
 export MC_random_walk!, MC_nve_walk!
 
 
-function periodic_boundary_wrap!(pos::Vector{T}, system::Atoms) where T
-    pbc::Vector{Periodic} = system.system_data.boundary_conditions
-    box::Vector{Vector{T}} = system.system_data.bounding_box
+function periodic_boundary_wrap!(pos::Vector{T}, system::AbstractSystem) where T
+    pbc = system.boundary_conditions
+    box = system.bounding_box
     for i in eachindex(pos)
         if pbc[i] == Periodic()
             pos[i] = mod(pos[i], box[i][i])
@@ -25,11 +26,24 @@ function periodic_boundary_wrap!(pos::Vector{T}, system::Atoms) where T
     return pos
 end
 
-
+function pbc_distance(pos1::Vector{T}, 
+                      pos2::Vector{T}, 
+                      pbc::SVector{3, BoundaryCondition},
+                      box::SVector{3, SVector{3,T}}
+                      ) where T
+    dist = 0.0u"Å"^2
+    for i in eachindex(pos1)
+        if pbc[i] isa Periodic()
+            dist += min(abs(pos1[i] - pos2[i]), box[i][i] - abs(pos1[i] - pos2[i]))^2
+        else
+            dist += (pos1[i] - pos2[i])^2
+        end
+    end
+    return sqrt(dist)
+end
 
 function single_atom_random_walk!(pos::Vector{T}, step_size::Float64) where T
-    units = unit(pos |> eltype)
-    (dx, dy, dz) = (rand(Uniform(-step_size,step_size)) for _ in 1:3) .* units
+    (dx, dy, dz) = (rand(Uniform(-step_size,step_size)) for _ in 1:3) .* unit(T)
     pos .+= (dx, dy, dz)
     return pos 
 end
@@ -41,7 +55,7 @@ Perform a random walk of `n_steps` steps on the atoms in `at` using a step size 
 """
 function MC_random_walk!(
                     n_steps::Int, 
-                    at::Atoms, 
+                    at::AbstractSystem, 
                     lj::LJParameters, 
                     step_size::Float64, 
                     emax::Float64; 
@@ -51,20 +65,19 @@ function MC_random_walk!(
     n_accept = 0
     accept_this_walker = false
     for i_mc_step in 1:n_steps
-        for i_at in (frozen+1):length(at)
-            pos = at.atom_data.position[i_at]
-            orig_pos = deepcopy(at.atom_data.position[i_at])
-            pos = single_atom_random_walk!(pos, step_size)
-            energy = interaction_energy(at, lj; frozen=frozen) + e_shift
-            if energy >= emax
-                # reject the move, revert to original position
-                at.atom_data.position[i_at] = orig_pos
-            else
-                at = @set at.system_data.energy = energy
-                # accept the move
-                n_accept += 1
-                accept_this_walker = true
-            end
+        i_at = rand((frozen+1):length(at))
+        pos = at.particles[i_at][:position]
+        orig_pos = deepcopy(at.particles[i_at][:position])
+        pos = single_atom_random_walk!(pos, step_size)
+        energy = interaction_energy(at, lj; frozen=frozen) + e_shift
+        if energy >= emax
+            # reject the move, revert to original position
+            at.particles[i_at][:position] .= orig_pos
+        else
+            at.data[:energy] = energy
+            # accept the move
+            n_accept += 1
+            accept_this_walker = true
         end
     end
     return accept_this_walker, n_accept, at

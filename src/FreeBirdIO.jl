@@ -14,7 +14,7 @@ write_walkers(filename::String, ats::Vector) = save_trajectory(filename::String,
 
 read_single_walker(filename::String) = FlexibleSystem(Atoms(read_frame(filename::String)))
 
-write_single_walker(filename::String, at::FlexibleSystem) = save_system(filename::String, at)
+write_single_walker(filename::String, at::AbstractSystem) = save_system(filename::String, at)
 
 write_df(filename::String, df::DataFrame) = CSV.write(filename, df; append=true)
 
@@ -26,7 +26,7 @@ function generate_random_starting_config(volume_per_particle::Float64, num_parti
     box = [[box_length, 0.0, 0.0], [0.0, box_length, 0.0], [0.0, 0.0, box_length]]u"Å"
     list_of_atoms = [particle_type => [rand(), rand(), rand()] for _ in 1:num_particle]
     system = periodic_system(list_of_atoms, box, fractional=true)
-    return Atoms(system)
+    return FlexibleSystem(Atoms(system))
 end
 
 function generate_initial_liveset(num_walkers::Int, volume_per_particle::Float64, num_particle::Int; particle_type::Symbol=:H)

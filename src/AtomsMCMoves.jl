@@ -26,21 +26,7 @@ function periodic_boundary_wrap!(pos::Vector{T}, system::AbstractSystem) where T
     return pos
 end
 
-function pbc_distance(pos1::Vector{T}, 
-                      pos2::Vector{T}, 
-                      pbc::SVector{3, BoundaryCondition},
-                      box::SVector{3, SVector{3,T}}
-                      ) where T
-    dist = 0.0u"Å"^2
-    for i in eachindex(pos1)
-        if pbc[i] isa Periodic()
-            dist += min(abs(pos1[i] - pos2[i]), box[i][i] - abs(pos1[i] - pos2[i]))^2
-        else
-            dist += (pos1[i] - pos2[i])^2
-        end
-    end
-    return sqrt(dist)
-end
+
 
 function single_atom_random_walk!(pos::Vector{T}, step_size::Float64) where T
     (dx, dy, dz) = (rand(Uniform(-step_size,step_size)) for _ in 1:3) .* unit(T)
@@ -66,8 +52,8 @@ function MC_random_walk!(
     accept_this_walker = false
     for i_mc_step in 1:n_steps
         i_at = rand((frozen+1):length(at))
-        pos = at.particles[i_at][:position]
-        orig_pos = deepcopy(at.particles[i_at][:position])
+        pos = position(at, i_at)
+        orig_pos = deepcopy(pos)
         pos = single_atom_random_walk!(pos, step_size)
         energy = interaction_energy(at, lj; frozen=frozen) + e_shift
         if energy >= emax

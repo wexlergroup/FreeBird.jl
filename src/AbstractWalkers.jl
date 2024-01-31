@@ -1,44 +1,46 @@
 module AbstractWalkers
 
-using Setfield
 using AtomsBase
+using Unitful
 using ..Potentials
 using ..EnergyEval
 
-export AtomWalkers, LJAtomWalkers, LJAtomWalkersWithFrozenPart
+export AtomWalker, AtomWalkers, LJAtomWalkers
 
 abstract type AtomWalkers end
 
-function assign_lj_energies!(ats::Vector{T}, lj::LJParameters; frozen::Int64=0, e_frozen::Float64=0.0) where T
-    for i in eachindex(ats)
-        e_total = interaction_energy(ats[i], lj; frozen=frozen) + e_frozen
-        ats[i] = FlexibleSystem(ats[i].particles, ats[i].bounding_box, ats[i].boundary_conditions; iter = 0, energy = e_total)
+mutable struct AtomWalker 
+    configuration::FastSystem
+    energy::typeof(0.0u"eV")
+    iter::Int64
+    num_frozen_part::Int64
+    energy_frozen_part::typeof(0.0u"eV")
+    function AtomWalker(configuration::FastSystem; energy=0.0u"eV", iter=0, num_frozen_part=0, energy_frozen_part=0.0u"eV")
+        return new(configuration, energy, iter, num_frozen_part, energy_frozen_part)
     end
-    return ats
 end
 
-struct LJAtomWalkers{T} <: AtomWalkers
-    walkers::Vector{T}
+function assign_lj_energies!(walkers::Vector{AtomWalker}, lj::LJParameters)#; frozen::Int64=0, e_frozen=0.0u"eV")
+    for walker in walkers
+        if walker.num_frozen_part > 0
+            e_frozen = frozen_energy(walker.configuration, lj, walker.num_frozen_part)
+            walker.energy_frozen_part = e_frozen
+        else
+            e_frozen = 0.0u"eV"
+        end
+        e_total = interaction_energy(walker.configuration, lj; frozen=walker.num_frozen_part) + e_frozen
+        walker.energy = e_total
+    end
+    return walkers
+end
+
+struct LJAtomWalkers <: AtomWalkers
+    walkers::Vector{AtomWalker}
     lj_potential::LJParameters
-    function LJAtomWalkers(walkers::Vector{T}, lj_potential::LJParameters) where T
+    function LJAtomWalkers(walkers::Vector{AtomWalker}, lj_potential::LJParameters)
         assign_lj_energies!(walkers, lj_potential)
-        return new{T}(walkers, lj_potential)
+        return new(walkers, lj_potential)
     end
 end
-
-struct LJAtomWalkersWithFrozenPart{T} <: AtomWalkers
-    walkers::Vector{T}
-    lj_potential::LJParameters
-    num_frozen_particles::Int64
-    energy_frozen_particles::Float64
-end
-
-function LJAtomWalkersWithFrozenPart(walkers::Vector{T}, lj_potential::LJParameters, num_frozen_particles::Int64) where T
-    energy_frozen_particles = frozen_energy(walkers[1], lj_potential, num_frozen_particles)
-    assign_lj_energies!(walkers, lj_potential; frozen=num_frozen_particles, e_frozen=energy_frozen_particles)
-    return LJAtomWalkersWithFrozenPart{T}(walkers, lj_potential, num_frozen_particles, energy_frozen_particles)
-end
-
-
 
 end # module AbstractWalkers

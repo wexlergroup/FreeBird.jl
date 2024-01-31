@@ -8,11 +8,11 @@ export read_single_walker, write_single_walker
 export write_df
 export generate_initial_liveset
 
-read_walkers(filename::String) = FlexibleSystem.(Atoms.(read_frames(filename::String)))
+read_walkers(filename::String) = FastSystem.(Atoms.(read_frames(filename::String)))
 
 write_walkers(filename::String, ats::Vector) = save_trajectory(filename::String, ats) 
 
-read_single_walker(filename::String) = FlexibleSystem(Atoms(read_frame(filename::String)))
+read_single_walker(filename::String) = FastSystem(Atoms(read_frame(filename::String)))
 
 write_single_walker(filename::String, at::AbstractSystem) = save_system(filename::String, at)
 
@@ -26,7 +26,7 @@ function generate_random_starting_config(volume_per_particle::Float64, num_parti
     box = [[box_length, 0.0, 0.0], [0.0, box_length, 0.0], [0.0, 0.0, box_length]]u"Å"
     list_of_atoms = [particle_type => [rand(), rand(), rand()] for _ in 1:num_particle]
     system = periodic_system(list_of_atoms, box, fractional=true)
-    return FlexibleSystem(Atoms(system))
+    return FastSystem(Atoms(system))
 end
 
 function generate_initial_liveset(num_walkers::Int, volume_per_particle::Float64, num_particle::Int; particle_type::Symbol=:H)

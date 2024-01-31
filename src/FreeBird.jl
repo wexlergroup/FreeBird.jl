@@ -1,34 +1,24 @@
 module FreeBird
 
+using Reexport
+
 include("Potentials.jl")
-using .Potentials
-export LJParameters, lj_energy
+@reexport using .Potentials
 
 include("EnergyEval.jl")
-using .EnergyEval
-export free_free_energy, frozen_energy, free_frozen_energy
-export interaction_energy, total_energy
+@reexport using .EnergyEval
 
 include("AbstractWalkers.jl")
-using .AbstractWalkers
-export AtomWalkers, LJAtomWalkers, LJAtomWalkersWithFrozenPart
+@reexport using .AbstractWalkers
 
 include("AtomsMCMoves.jl")
-using .AtomsMCMoves
-export periodic_boundary_wrap!
-export MC_random_walk!, MC_nve_walk!
+@reexport using .AtomsMCMoves
 
 include("NestedSamplingLoops.jl")
-using .NestedSamplingLoops
-export NestedSamplingParameters
-export sort_by_energy!, nested_sampling_step!
-export nested_sampling_loop!
+@reexport using .NestedSamplingLoops
 
 include("FreeBirdIO.jl")
-using .FreeBirdIO
-export read_walkers, write_walkers
-export read_single_walker, write_single_walker
-export write_df
-export generate_initial_liveset
+@reexport using .FreeBirdIO
+
 
 end

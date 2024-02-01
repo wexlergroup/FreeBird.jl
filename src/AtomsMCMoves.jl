@@ -15,22 +15,18 @@ export periodic_boundary_wrap!
 export MC_random_walk!, MC_nve_walk!
 
 
-function periodic_boundary_wrap!(pos::Vector{T}, system::AbstractSystem) where T
+function periodic_boundary_wrap!(pos::SVector{3,T}, system::AbstractSystem) where T
     pbc = system.boundary_conditions
     box = system.bounding_box
-    for i in eachindex(pos)
-        if pbc[i] == Periodic()
-            pos[i] = mod(pos[i], box[i][i])
-        end 
-    end
+    pos = SVector{3,T}([pbc[i]==Periodic() ? mod(pos[i], box[i][i]) : pos[i] for i in eachindex(pbc)])
     return pos
 end
 
 
 
-function single_atom_random_walk!(pos::Vector{T}, step_size::Float64) where T
+function single_atom_random_walk!(pos::SVector{3,T}, step_size::Float64) where T
     (dx, dy, dz) = (rand(Uniform(-step_size,step_size)) for _ in 1:3) .* unit(T)
-    pos .+= (dx, dy, dz)
+    pos = pos .+ (dx, dy, dz)
     return pos 
 end
 
@@ -41,93 +37,103 @@ Perform a random walk of `n_steps` steps on the atoms in `at` using a step size 
 """
 function MC_random_walk!(
                     n_steps::Int, 
-                    at::AbstractSystem, 
+                    at::AtomWalker, 
                     lj::LJParameters, 
                     step_size::Float64, 
-                    emax::Float64; 
-                    frozen::Int=0, 
-                    e_shift::Float64=0.0
+                    emax::typeof(0.0u"eV")
                     )
     n_accept = 0
     accept_this_walker = false
     for i_mc_step in 1:n_steps
-        i_at = rand((frozen+1):length(at))
-        pos = position(at, i_at)
+        config = at.configuration
+        frozen = at.num_frozen_part
+        e_shift = at.energy_frozen_part
+        i_at = rand((frozen+1):length(config))
+        pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
         orig_pos = deepcopy(pos)
         pos = single_atom_random_walk!(pos, step_size)
-        energy = interaction_energy(at, lj; frozen=frozen) + e_shift
+        pos = periodic_boundary_wrap!(pos, config)
+        deleteat!(config.position, i_at)
+        insert!(config.position, i_at, pos)
+        energy = interaction_energy(config, lj; frozen=frozen) + e_shift
         if energy >= emax
             # reject the move, revert to original position
-            at.particles[i_at][:position] .= orig_pos
+            deleteat!(config.position, i_at)
+            insert!(config.position, i_at, orig_pos)
         else
-            at.data[:energy] = energy
+            at.energy = energy
             # accept the move
             n_accept += 1
             accept_this_walker = true
         end
     end
-    return accept_this_walker, n_accept, at
+    return accept_this_walker, n_accept/n_steps, at
 end
 
 
 
 
 function single_atom_demon_walk!(
-                        at::Atoms, 
+                        at::AtomWalker, 
                         lj::LJParameters, 
-                        step_size::Float64; 
-                        frozen::Int=0, 
-                        e_shift::Float64=0.0, 
-                        e_demon::Float64=0.0,
-                        demon_energy_threshold::Float64=0.0
+                        step_size::Float64;
+                        e_demon=0.0u"eV",
+                        demon_energy_threshold=Inf*u"eV"
                         )
     accept = false
-    i_at = rand((frozen+1):length(at))
-    orig_energy = at.system_data.energy
-    pos = at.atom_data.position[i_at]
-    orig_pos = deepcopy(at.atom_data.position[i_at])
+    orig_energy = at.energy
+    config = at.configuration
+    frozen = at.num_frozen_part
+    e_shift = at.energy_frozen_part
+    i_at = rand((frozen+1):length(config))
+    pos = position(config, i_at)
+    orig_pos = deepcopy(pos)
     pos = single_atom_random_walk!(pos, step_size)
-    new_energy = interaction_energy(at, lj; frozen=frozen) + e_shift
+    pos = periodic_boundary_wrap!(pos, config)
+    deleteat!(config.position, i_at)
+    insert!(config.position, i_at, pos)
+    new_energy = interaction_energy(config, lj; frozen=frozen) + e_shift
     ΔE = new_energy - orig_energy
-    if ΔE <= 0 && e_demon < demon_energy_threshold
+    if ΔE <= 0.0u"eV" && e_demon < demon_energy_threshold
         e_demon -= ΔE
         accept = true
-        at = @set at.system_data.energy = new_energy
+        at.energy = new_energy
         @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon gains energy, accept"
-    elseif 0 < ΔE <= e_demon
+    elseif 0.0u"eV" < ΔE <= e_demon
         e_demon -= ΔE
         accept = true
-        at = @set at.system_data.energy = new_energy
+        at.energy = new_energy
         @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon gives energy, accept"
     else
-        at = @set at.atom_data.position[i_at] = orig_pos
+        deleteat!(config.position, i_at)
+        insert!(config.position, i_at, orig_pos)
         @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon has no enough energy, reject"
     end
     return accept, at, e_demon
 end
 
 function additional_demon_walk!(
-                    e_demon::Float64,
-                    at::Atoms, 
+                    e_demon::typeof(0.0u"eV"),
+                    at::AtomWalker,
                     lj::LJParameters, 
-                    step_size::Float64; 
-                    frozen::Int=0, 
-                    e_shift::Float64=0.0, 
-                    e_demon_tolerance::Float64=1e-10,
+                    step_size::Float64;
+                    e_demon_tolerance=1e-10u"eV",
                     max_add_steps::Int=1_000_000
                     )
     accept_this_walker = false
     new_accept_count::Int = 0
     additional_steps::Int = 1
+    allow_step_size_reduction = true
     while e_demon > e_demon_tolerance && additional_steps < max_add_steps
-        accept, at, e_demon = single_atom_demon_walk!(at, lj, step_size; frozen=frozen, e_shift=e_shift, e_demon=e_demon, demon_energy_threshold=0.0)
+        accept, at, e_demon = single_atom_demon_walk!(at, lj, step_size; e_demon=e_demon, demon_energy_threshold=0.0u"eV")
         if accept
             new_accept_count += 1
         end
         additional_steps += 1
-        if additional_steps > max_add_steps ÷ 2
-            step_size /= 2
+        if additional_steps > (max_add_steps ÷ 2) && allow_step_size_reduction
+            step_size /= 10
             @info "Further reduced step size to $(step_size/10)."
+            allow_step_size_reduction = false
         end
     end
     if additional_steps >= max_add_steps
@@ -143,41 +149,42 @@ end
 
 function MC_nve_walk!(
                     n_steps::Int, 
-                    at::Atoms, 
+                    at::AtomWalker, 
                     lj::LJParameters, 
                     step_size::Float64; 
-                    frozen::Int=0, 
-                    e_shift::Float64=0.0, 
-                    e_demon_tolerance::Float64=1e-10,
-                    demon_energy_threshold::Float64=0.0,
+                    e_demon_tolerance=1e-10u"eV",
+                    demon_energy_threshold=Inf*u"eV",
                     max_add_steps::Int=1_000_000)
     accept_this_walker = false
-    e_demon::Float64 = 0.0
+    e_demon = 0.0u"eV"
     accept_count::Int64 = 0
-    initial_energy::Float64  = at.system_data.energy
-    @info "Initial energy: $(at.system_data.energy)"
+    initial_energy  = at.energy
+    @info "Initial energy: $(at.energy)"
+    demon_energies = Array{typeof(0.0u"eV")}(undef, n_steps)
     for i in 1:n_steps
         accept, at, e_demon = single_atom_demon_walk!(at, lj, step_size; 
-                                frozen=frozen, e_shift=e_shift, e_demon=e_demon, 
+                                e_demon=e_demon, 
                                 demon_energy_threshold=demon_energy_threshold,
                                 )
+        demon_energies[i] = e_demon
         if accept
             accept_count += 1
         end
     end
+    #TODO: statistics on demon energies
     if e_demon > e_demon_tolerance
         @info "Demon has too much energy remain (>tolerance=$(e_demon_tolerance)): $e_demon, performing more demon walk.
         Current accept rate: $(accept_count/n_steps). Step size is lowered."
         step_size /= 10
         accept_this_walker, _, at = additional_demon_walk!(e_demon, at, lj, step_size; 
-                                                frozen=frozen, e_shift=e_shift, e_demon_tolerance=e_demon_tolerance, 
+                                                e_demon_tolerance=e_demon_tolerance, 
                                                 max_add_steps=max_add_steps)
     else
         accept_this_walker = true
     end
 
-    final_energy = at.system_data.energy + e_demon
-    @info "Final energy: $(at.system_data.energy)"
+    final_energy = at.energy + e_demon
+    @info "Final energy: $(at.energy)"
     @debug "initial_energy: ", initial_energy, " final_energy: ", final_energy
     return accept_this_walker, accept_count/n_steps, at
 end

@@ -26,7 +26,7 @@ function generate_random_starting_config(volume_per_particle::Float64, num_parti
     box = [[box_length, 0.0, 0.0], [0.0, box_length, 0.0], [0.0, 0.0, box_length]]u"Å"
     list_of_atoms = [particle_type => [rand(), rand(), rand()] for _ in 1:num_particle]
     system = periodic_system(list_of_atoms, box, fractional=true)
-    return FastSystem(Atoms(system))
+    return FastSystem(system)
 end
 
 function generate_initial_liveset(num_walkers::Int, volume_per_particle::Float64, num_particle::Int; particle_type::Symbol=:H)

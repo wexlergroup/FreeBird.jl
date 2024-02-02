@@ -85,7 +85,7 @@ Calculate the Lennard-Jones energy for a given distance `r` and LJParameters `lj
 """
 function lj_energy(r::typeof(1.0u"Å"), lj::LJParameters)
     if r > lj.cutoff * lj.sigma
-        return 0.0
+        return 0.0u"eV"
     else
         return lj_energy(lj.epsilon, lj.sigma, r) - lj.shift
     end

@@ -157,6 +157,7 @@ function MC_nve_walk!(
                     max_add_steps::Int=1_000_000)
     accept_this_walker = false
     e_demon = 0.0u"eV"
+    at_original = deepcopy(at)
     accept_count::Int64 = 0
     initial_energy  = at.energy
     @info "Initial energy: $(at.energy)"
@@ -186,7 +187,11 @@ function MC_nve_walk!(
     final_energy = at.energy + e_demon
     @info "Final energy: $(at.energy)"
     @debug "initial_energy: ", initial_energy, " final_energy: ", final_energy
-    return accept_this_walker, accept_count/n_steps, at
+    if !accept_this_walker
+        return accept_this_walker, accept_count/n_steps, at_original
+    else
+        return accept_this_walker, accept_count/n_steps, at
+    end
 end
 
 

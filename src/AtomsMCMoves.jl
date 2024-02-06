@@ -18,7 +18,15 @@ export MC_random_walk!, MC_nve_walk!
 function periodic_boundary_wrap!(pos::SVector{3,T}, system::AbstractSystem) where T
     pbc = system.boundary_conditions
     box = system.bounding_box
-    pos = SVector{3,T}([pbc[i]==Periodic() ? mod(pos[i], box[i][i]) : pos[i] for i in eachindex(pbc)])
+    new_pos = Vector{typeof(0.0u"Å")}(undef, 3)
+    for i in eachindex(pbc)
+        if pbc[i] == Periodic()
+            new_pos[i] = mod(pos[i], box[i][i])
+        else
+            new_pos[i] = pos[i]
+        end
+    end
+    pos = SVector{3,T}(new_pos)
     return pos
 end
 
@@ -53,13 +61,15 @@ function MC_random_walk!(
         orig_pos = deepcopy(pos)
         pos = single_atom_random_walk!(pos, step_size)
         pos = periodic_boundary_wrap!(pos, config)
-        deleteat!(config.position, i_at)
-        insert!(config.position, i_at, pos)
+        config.position[i_at] = pos
+        # deleteat!(config.position, i_at)
+        # insert!(config.position, i_at, pos)
         energy = interaction_energy(config, lj; frozen=frozen) + e_shift
         if energy >= emax
             # reject the move, revert to original position
-            deleteat!(config.position, i_at)
-            insert!(config.position, i_at, orig_pos)
+            config.position[i_at] = orig_pos
+            # deleteat!(config.position, i_at)
+            # insert!(config.position, i_at, orig_pos)
         else
             at.energy = energy
             # accept the move

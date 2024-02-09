@@ -7,6 +7,7 @@ using ..Potentials
 
 export free_free_energy, frozen_energy, free_frozen_energy
 export interaction_energy, total_energy
+export pbc_dist
 
 function pbc_dist(pos1::Union{SVector{T},Vector{T}},
                       pos2::Union{SVector{T},Vector{T}},

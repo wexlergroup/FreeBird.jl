@@ -2,6 +2,7 @@ module SamplingSchemes
 
 using ExtXYZ
 using Setfield
+using Unitful
 
 using ..AtomsMCMoves
 using ..Potentials
@@ -11,8 +12,15 @@ using ..EnergyEval
 export NestedSamplingParameters
 export sort_by_energy!, nested_sampling_step!
 export nested_sampling_loop!
+export MCRoutine, MCRandomWalk, MCDemonWalk
 
 abstract type SamplingParameters end
+
+abstract type MCRoutine end
+
+struct MCRandomWalk <: MCRoutine end
+
+struct MCDemonWalk <: MCRoutine end
 
 """
     struct NestedSamplingParameters <: SamplingParameters
@@ -41,7 +49,7 @@ Sorts the walkers in the liveset by their energy in descending order.
 - `liveset::LJAtomWalkers`: The sorted liveset.
 """
 function sort_by_energy!(liveset::AtomWalkers)
-    sort!(liveset.walkers, by = x -> x.system_data.energy, rev=true)
+    sort!(liveset.walkers, by = x -> x.energy, rev=true)
     # println("after sort ats[1].system_data.energy: ", ats[1].system_data.energy)
     return liveset
 end
@@ -61,26 +69,37 @@ Performs a single step of the nested sampling algorithm.
 - `emax`: The maximum energy among the walkers in the liveset.
 - `liveset`: The updated liveset after performing the nested sampling step.
 """
-function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters)
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRandomWalk)
     sort_by_energy!(liveset)
-    @debug println("liveset.walkers[1].system_data.energy: ", liveset.walkers[1].system_data.energy)
     ats = liveset.walkers
     lj = liveset.lj_potential
-    emax = liveset.walkers[1].system_data.energy::Float64
-    @debug println("emax: ", emax) # debug
-    to_walk = ats[1]::Atoms
-    if liveset isa LJAtomWalkersWithFrozenPart
-        frozen = liveset.num_frozen_particles
-        e_frozen = liveset.energy_frozen_particles
-    else
-        frozen = 0
-        e_frozen = 0.0
+    emax::typeof(0.0u"eV") = liveset.walkers[1].energy
+    to_walk = ats[1]
+    accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
+    @info "acceptance rate: $rate, emax: $emax, is_accepted: $accept"
+    if accept
+        push!(ats, at)
+        popfirst!(ats)
     end
-    n_accept, at = random_walk(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax; frozen=frozen, e_shift=e_frozen)
-    @debug println("n_accept: ", n_accept) # debug
-    push!(ats, at)
-    popfirst!(ats)
-    liveset = @set liveset.walkers = ats
+    return emax, liveset
+end
+
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCDemonWalk)
+    sort_by_energy!(liveset)
+    ats = liveset.walkers
+    lj = liveset.lj_potential
+    emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
+    pick_a_random_walker = rand(ats[2:end])
+    to_walk = deepcopy(pick_a_random_walker)
+    accept, rate, at, _, _ = MC_nve_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size)
+    @info "acceptance rate: $rate, emax: $emax, is_accepted: $accept"
+    if accept
+        push!(ats, at)
+        popfirst!(ats)
+    else
+        @warn "Failed to accept MC move"
+        emax = missing
+    end
     return emax, liveset
 end
 
@@ -99,10 +118,10 @@ Perform nested sampling loop for a given number of steps.
 - `energies`: An array of energies at each step.
 - `liveset`: The final set of walkers.
 """
-function nested_sampling_loop!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, n_steps::Int64)
-    energies = zeros(Float64, n_steps)
+function nested_sampling_loop!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, n_steps::Int64, mc_routine::MCRoutine)
+    energies = Array{Union{typeof(0.0u"eV"),Missing}}(undef, n_steps)
     for i in 1:n_steps
-        emax, liveset = nested_sampling_step!(liveset, ns_params)
+        emax, liveset = nested_sampling_step!(liveset, ns_params, mc_routine)
         energies[i] = emax
     end
     return energies, liveset

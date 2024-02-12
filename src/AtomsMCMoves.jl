@@ -147,7 +147,7 @@ function additional_demon_walk!(
         additional_steps += 1
         if additional_steps > (max_add_steps ÷ 2) && allow_step_size_reduction
             step_size /= 10
-            @info "Further reduced step size to $(step_size/10)."
+            @info "Further reduced step size to $(step_size)."
             allow_step_size_reduction = false
         end
     end

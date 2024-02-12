@@ -31,12 +31,14 @@ function periodic_boundary_wrap!(pos::SVector{3,T}, system::AbstractSystem) wher
     return pos
 end
 
-function ave_dist_correlator(at::AtomWalker, at_orig::AtomWalker)
-    dist::typeof(0.0u"Å") = 0.0u"Å"
-    for i in eachindex(at.configuration.position)
-        dist += pbc_dist(at.configuration.position[i], at_orig.configuration.position[i], at.configuration)
+function mean_sq_displacement(at::AtomWalker, at_orig::AtomWalker)
+    distsq::typeof(0.0u"Å"^2) = 0.0u"Å"^2
+    frozen = at.num_frozen_part
+    for i in (frozen+1):length(at.configuration)
+        dist::typeof(0.0u"Å") = pbc_dist(at.configuration.position[i], at_orig.configuration.position[i], at.configuration)
+        distsq += dist^2
     end
-    return dist/length(at.configuration)   
+    return distsq/(length(at.configuration)-frozen)
 end
 
 
@@ -212,8 +214,8 @@ function MC_nve_walk!(
     if !accept_this_walker
         return accept_this_walker, accept_count/n_steps, at_original, demon_energies, temp_estimate
     else
-        ave_mc_dist = ave_dist_correlator(at, at_original)
-        @info "Average collective MC moves distance per particle: $ave_mc_dist."
+        mean_sq_displace = mean_sq_displacement(at, at_original)
+        @info "Mean squared displacement: $mean_sq_displace."
         return accept_this_walker, accept_count/n_steps, at, demon_energies, temp_estimate
     end
 end

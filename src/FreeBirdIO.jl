@@ -12,11 +12,7 @@ export generate_initial_liveset
 
 read_walkers(filename::String) = FastSystem.(Atoms.(read_frames(filename::String)))
 
-write_walkers(filename::String, ats::Vector) = save_trajectory(filename::String, ats) 
-
 read_single_walker(filename::String) = FastSystem(Atoms(read_frame(filename::String)))
-
-# write_single_walker(filename::String, at::AbstractSystem) = save_system(filename::String, at)
 
 write_df(filename::String, df::DataFrame) = CSV.write(filename, df; append=true)
 
@@ -33,6 +29,11 @@ end
 function write_single_walker(filename::String, at::AtomWalker)
     flex = convert_walker_to_system(at)
     save_system(filename::String, flex)
+end
+
+function write_walkers(filename::String, ats::Vector{AtomWalker})
+    flex = convert_walker_to_system.(ats)
+    save_trajectory(filename::String, flex)
 end
 
 

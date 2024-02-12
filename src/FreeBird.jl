@@ -14,8 +14,8 @@ include("AbstractWalkers.jl")
 include("AtomsMCMoves.jl")
 @reexport using .AtomsMCMoves
 
-include("NestedSamplingLoops.jl")
-@reexport using .NestedSamplingLoops
+include("SamplingSchemes.jl")
+@reexport using .SamplingSchemes
 
 include("FreeBirdIO.jl")
 @reexport using .FreeBirdIO

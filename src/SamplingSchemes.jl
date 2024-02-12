@@ -1,4 +1,4 @@
-module NestedSamplingLoops
+module SamplingSchemes
 
 using ExtXYZ
 using Setfield

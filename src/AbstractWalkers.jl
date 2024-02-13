@@ -6,6 +6,7 @@ using ..Potentials
 using ..EnergyEval
 
 export AtomWalker, AtomWalkers, LJAtomWalkers
+export update_walker!
 
 abstract type AtomWalkers end
 
@@ -41,6 +42,11 @@ struct LJAtomWalkers <: AtomWalkers
         assign_lj_energies!(walkers, lj_potential)
         return new(walkers, lj_potential)
     end
+end
+
+function update_walker!(walker::AtomWalker, key::Symbol, value)
+    setproperty!(walker, key, value)
+    return walker
 end
 
 end # module AbstractWalkers

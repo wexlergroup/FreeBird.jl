@@ -6,6 +6,7 @@ using AtomsBase, Unitful
 using ..AbstractWalkers
 
 export read_single_config, read_configs, read_single_walker, read_walkers
+export write_single_walker, write_walkers
 export write_df
 export generate_initial_configs
 export convert_system_to_walker, convert_walker_to_system

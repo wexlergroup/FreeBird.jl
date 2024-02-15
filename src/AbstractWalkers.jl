@@ -49,4 +49,11 @@ function update_walker!(walker::AtomWalker, key::Symbol, value)
     return walker
 end
 
+function LJAtomWalkers(ats::Vector{AtomWalker}, lj::LJParameters, num_frozen_part::Int64)
+    for at in ats
+        at.num_frozen_part = num_frozen_part
+    end
+    return LJAtomWalkers(ats, lj)
+end
+
 end # module AbstractWalkers

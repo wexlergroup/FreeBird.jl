@@ -31,12 +31,12 @@ function set_pbc(at::Atoms, pbc::Vector)
     return FlexibleSystem(at;boundary_conditions=pbc_conditions)
 end
 
-function convert_system_to_walker(at::FlexibleSystem)
+function convert_system_to_walker(at::FlexibleSystem, resume::Bool)
     data = at.data
-    energy = haskey(data, :energy) ? data[:energy]*u"eV" : 0.0u"eV"
-    iter = haskey(data, :iter) ? data[:iter] : 0
-    num = haskey(data, :num_frozen_part) ? data[:num_frozen_part] : 0
-    e_frozen = haskey(data, :energy_frozen_part) ? data[:energy_frozen_part]*u"eV" : 0.0u"eV"
+    energy = (haskey(data, :energy) && resume) ? data[:energy]*u"eV" : 0.0u"eV"
+    iter = (haskey(data, :iter) && resume && data[:iter]>=0) ? data[:iter] : 0
+    num = (haskey(data, :num_frozen_part)  && resume) ? data[:num_frozen_part] : 0
+    e_frozen = (haskey(data, :energy_frozen_part) && resume) ? data[:energy_frozen_part]*u"eV" : 0.0u"eV"
     at = FastSystem(at)
     return AtomWalker(at; energy=energy, iter=iter, num_frozen_part=num, energy_frozen_part=e_frozen)
 end
@@ -61,14 +61,14 @@ function read_configs(filename::String; pbc::String="TTT")
     read_configs(filename, pbc)
 end
 
-function read_single_walker(filename::String; pbc::String="TTT")
+function read_single_walker(filename::String; pbc::String="TTT", resume::Bool=true)
     at = read_single_config(filename; pbc=pbc)
-    return convert_system_to_walker(at)    
+    return convert_system_to_walker(at, resume)    
 end
 
-function read_walkers(filename::String; pbc::String="TTT")
+function read_walkers(filename::String; pbc::String="TTT", resume::Bool=true)
     ats = read_configs(filename; pbc=pbc)
-    return convert_system_to_walker.(ats)
+    return convert_system_to_walker.(ats, resume)
 end
 
 function convert_walker_to_system(at::AtomWalker)

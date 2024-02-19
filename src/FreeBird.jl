@@ -14,11 +14,11 @@ include("AbstractWalkers.jl")
 include("AtomsMCMoves.jl")
 @reexport using .AtomsMCMoves
 
-include("SamplingSchemes.jl")
-@reexport using .SamplingSchemes
-
 include("FreeBirdIO.jl")
 @reexport using .FreeBirdIO
+
+include("SamplingSchemes.jl")
+@reexport using .SamplingSchemes
 
 
 end

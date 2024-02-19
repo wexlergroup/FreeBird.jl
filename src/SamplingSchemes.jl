@@ -3,11 +3,13 @@ module SamplingSchemes
 using ExtXYZ
 using Setfield
 using Unitful
+using DataFrames
 
 using ..AtomsMCMoves
 using ..Potentials
 using ..AbstractWalkers
 using ..EnergyEval
+using ..FreeBirdIO
 
 export NestedSamplingParameters
 export sort_by_energy!, nested_sampling_step!
@@ -71,8 +73,8 @@ function sort_by_energy!(liveset::AtomWalkers)
     return liveset
 end
 
-function update_iter!(live_set::AtomWalkers)
-    for at in live_set.walkers
+function update_iter!(liveset::AtomWalkers)
+    for at in liveset.walkers
         at.iter += 1
     end
 end
@@ -95,6 +97,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.lj_potential
+    iter::Union{Missing,Int} = missing
     emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
     to_walk = ats[1]
     accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
@@ -104,19 +107,21 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         popfirst!(ats)
         update_iter!(liveset)
         ns_params.fail_count = 0
+        iter = liveset.walkers[1].iter
     else
         @warn "Failed to accept MC move"
         emax = missing
         ns_params.fail_count += 1
     end
     adjust_step_size(ns_params, rate)
-    return emax, liveset, ns_params
+    return iter, emax, liveset, ns_params
 end
 
 function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCDemonWalk)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.lj_potential
+    iter::Union{Missing,Int} = missing
     emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
     pick_a_random_walker = rand(ats[2:end])
     to_walk = deepcopy(pick_a_random_walker)
@@ -131,20 +136,21 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         popfirst!(ats)
         update_iter!(liveset)
         ns_params.fail_count = 0
+        iter = liveset.walkers[1].iter
     else
         @warn "Failed to accept MC move"
         emax = missing
         ns_params.fail_count += 1
     end
     adjust_step_size(ns_params, rate)
-    return emax, liveset, ns_params
+    return iter, emax, liveset, ns_params
 end
 
 function adjust_step_size(ns_params::NestedSamplingParameters, rate::Float64)
-    if rate > 0.9
-        ns_params.step_size *= 1.05
-    elseif rate < 0.1
-        ns_params.step_size *= 0.95
+    if rate > 0.75
+        ns_params.step_size *= 1.01
+    elseif rate < 0.25
+        ns_params.step_size *= 0.99
     end
     return ns_params
 end
@@ -169,34 +175,40 @@ function nested_sampling_loop!(liveset::AtomWalkers,
                                 n_steps::Int64, 
                                 mc_routine::MCRoutine;
                                 args...)
-    energies = Array{Union{typeof(0.0u"eV"),Missing}}(undef, n_steps)
+    df = DataFrame(iter=Int[], emax=typeof(0.0u"eV")[])
     for i in 1:n_steps
-        emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+        iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
         if ns_params.fail_count >= 10
             @warn "Failed to accept MC move 10 times in a row. Break!"
             ns_params.fail_count = 0
             break
         end
-        energies[i] = emax
+        if !(iter isa typeof(missing))
+            push!(df, (iter, emax))
+        end
     end
-    return energies, liveset, ns_params
+    return df, liveset, ns_params
 end
 
 
 function nested_sampling_loop!(liveset::AtomWalkers,  
                                 n_steps::Int64, 
-                                mc_routine::MixedMCRoutine)
-    energies = Array{Union{typeof(0.0u"eV"),Missing}}(undef, n_steps)
+                                mc_routine::MixedMCRoutine,
+                                save_strategy::DataSavingStrategy)
+    df = DataFrame(iter=Int[], emax=typeof(0.0u"eV")[])
     for i in 1:n_steps
-        emax, liveset, mc_routine.ns_params_main = nested_sampling_step!(liveset, mc_routine.ns_params_main, mc_routine.main_routine)
+        iter, emax, liveset, mc_routine.ns_params_main = nested_sampling_step!(liveset, mc_routine.ns_params_main, mc_routine.main_routine)
         if mc_routine.ns_params_main.fail_count >= 10
             @warn "Failed to accept $(mc_routine.main_routine) move 10 times in a row. Switching to back up routine $(mc_routine.back_up_routine)!"
             mc_routine.ns_params_main.fail_count = 0
-            emax, liveset, mc_routine.ns_params_back_up = nested_sampling_step!(liveset, mc_routine.ns_params_back_up, mc_routine.back_up_routine)
+            iter, emax, liveset, mc_routine.ns_params_back_up = nested_sampling_step!(liveset, mc_routine.ns_params_back_up, mc_routine.back_up_routine)
         end
-        energies[i] = emax
+        if !(iter isa typeof(missing))
+            push!(df, (iter, emax))
+        end
+        write_df_every_n(df, i, save_strategy)
     end
-    return energies, liveset, mc_routine.ns_params_main
+    return df, liveset, mc_routine.ns_params_main
 end
 
 

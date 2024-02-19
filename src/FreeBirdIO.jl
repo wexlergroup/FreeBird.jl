@@ -7,7 +7,10 @@ using ..AbstractWalkers
 
 export read_single_config, read_configs, read_single_walker, read_walkers
 export write_single_walker, write_walkers
-export write_df
+
+export DataSavingStrategy, SaveEveryN
+export write_df, write_df_every_n
+
 export generate_initial_configs
 export convert_system_to_walker, convert_walker_to_system
 
@@ -105,6 +108,19 @@ function generate_initial_configs(num_walkers::Int, volume_per_particle::Float64
     [generate_random_starting_config(volume_per_particle, num_particle; particle_type=particle_type) for _ in 1:num_walkers]
 end
 
-write_df(filename::String, df::DataFrame) = CSV.write(filename, df; append=true)
+abstract type DataSavingStrategy end
+
+struct SaveEveryN <: DataSavingStrategy
+    filename::String
+    n::Int
+end
+
+write_df(filename::String, df::DataFrame) = CSV.write(filename, df; append=false)
+
+function write_df_every_n(df::DataFrame, step::Int, d_strategy::SaveEveryN)
+    if step % d_strategy.n == 0
+        write_df(d_strategy.filename, df)
+    end
+end
 
 end # module

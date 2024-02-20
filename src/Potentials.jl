@@ -8,13 +8,14 @@ export LJParameters, lj_energy
 """
     struct LJParameters
 
-A struct representing the parameters for the Lennard-Jones potential.
+The `LJParameters` struct represents the parameters for the Lennard-Jones potential.
 
 # Fields
-- `epsilon::Float64`: The depth of the potential well. In units of eV.
-- `sigma::Float64`: The distance at which the potential is zero. In units of Å.
-- `cutoff::Float64`: The distance at which the potential is truncated. In units of sigma.
-- `shift::Float64`: The energy shift applied to the potential calculated at the cutoff distance.
+- `epsilon::typeof(1.0u"eV")`: The energy scale of the potential.
+- `sigma::typeof(1.0u"Å")`: The length scale of the potential.
+- `cutoff::Float64`: The cutoff distance for the potential, in units of `sigma`.
+- `shift::typeof(0.0u"eV")`: The energy shift applied to the potential, calculated at the cutoff distance.
+
 """
 struct LJParameters
     epsilon::typeof(1.0u"eV")
@@ -28,7 +29,7 @@ end
 A constructor for the LJParameters struct with default values for the 
 Lennard-Jones potential with no cutoff or shift. The `shift` parameter can be 
 specified as a boolean, if `true`, the shift energy is calculated automatically 
-at the cutoff distance; or as a `Float64`, in which case the value is used directly.
+at the cutoff distance; or as a `typeof(0.0u"eV")`, in which case the value is used directly.
 
 # Example
 
@@ -59,17 +60,26 @@ function LJParameters(;epsilon=1.0, sigma=1.0, cutoff=Inf, shift=true)
     return LJParameters(epsilon*u"eV", sigma*u"Å", cutoff, shiftenergy)
 end
 
+
 """
-    lj_energy(epsilon::eV, sigma::Å, r::Å)
+    lj_energy(epsilon::typeof(1.0u"eV"), sigma::typeof(1.0u"Å"), r::typeof(1.0u"Å"))
 
 Compute the Lennard-Jones potential energy between two particles.
 
-Arguments:
-- `epsilon`: the energy scale of the potential (in electron volts)
-- `sigma`: the distance scale of the potential (in angstroms)
-- `r`: the distance between the particles (in angstroms)
+The Lennard-Jones potential energy is given by the equation:
 
-Returns:
+```math
+V(r_{ij}) = 4\\varepsilon_{ij} \\left[\\left(\\frac{\\sigma_{ij}}{r_{ij}}\\right)^{12} - \\left(\\frac{\\sigma_{ij}}{r_{ij}}\\right)^{6}\\right]
+```
+
+where `epsilon` is the energy scale, `sigma` is the distance scale, and `r` is the distance between the particles.
+
+# Arguments
+- `epsilon::typeof(1.0u"eV")`: The energy scale of the potential.
+- `sigma::typeof(1.0u"Å")`: The distance scale of the potential.
+- `r::typeof(1.0u"Å")`: The distance between the particles.
+
+# Returns
 - The Lennard-Jones potential energy between the particles.
 
 """
@@ -79,9 +89,19 @@ function lj_energy(epsilon::typeof(1.0u"eV"), sigma::typeof(1.0u"Å"), r::typeof
     return 4 * epsilon * (r12 - r6)
 end
 
+
 """
-    lj_energy(r::Å, lj::LJParameters)
-Calculate the Lennard-Jones energy for a given distance `r` and LJParameters `lj`.
+    lj_energy(r::typeof(1.0u"Å"), lj::LJParameters)
+
+Compute the Lennard-Jones energy between two particles at a given distance.
+
+# Arguments
+- `r::typeof(1.0u"Å")`: The distance between the particles.
+- `lj::LJParameters`: The Lennard-Jones parameters.
+
+# Returns
+- `0.0u"eV"` if the distance is greater than the cutoff distance.
+- The Lennard-Jones energy minus the shift otherwise.
 """
 function lj_energy(r::typeof(1.0u"Å"), lj::LJParameters)
     if r > lj.cutoff * lj.sigma

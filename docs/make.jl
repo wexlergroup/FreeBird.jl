@@ -1,7 +1,13 @@
 using Documenter
 using FreeBird
 
-makedocs(
+makedocs(;
+    pages=[
+            "FreeBird.jl" => "index.md",
+            "Potentials" => "Potentials.md",
+            "EnergyEval" => "EnergyEval.md",
+            "API" => "API.md",
+        ],
     sitename = "FreeBird.jl",
     format = Documenter.HTML(),
     modules = [FreeBird],

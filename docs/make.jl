@@ -9,6 +9,7 @@ makedocs(;
             "AbstractWalkers" => "AbstractWalkers.md",
             "AtomsMCMoves" => "AtomsMCMoves.md",
             "SamplingSchemes" => "SamplingSchemes.md",
+            "FreeBirdIO" => "FreeBirdIO.md",
             "API" => "API.md",
         ],
     sitename = "FreeBird.jl",

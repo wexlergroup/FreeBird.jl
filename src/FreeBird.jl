@@ -4,6 +4,7 @@ using Reexport
 
 include("Potentials.jl")
 @reexport using .Potentials
+export Potentials
 
 include("EnergyEval.jl")
 @reexport using .EnergyEval

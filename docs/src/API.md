@@ -3,5 +3,5 @@
 
 ## Functions
 ```@autodocs
-Modules = [FreeBird]
+Modules = [Potentials, EnergyEval, AbstractWalkers, AbstractMCMoves, SamplingSchemes, FreeBirdIO]
 ```

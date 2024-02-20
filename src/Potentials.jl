@@ -1,6 +1,8 @@
+"""
+Module for defining and implementing potentials.
+"""
 module Potentials
 
-# using Parameters
 using Unitful
 
 export LJParameters, lj_energy

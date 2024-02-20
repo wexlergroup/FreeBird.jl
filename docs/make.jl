@@ -6,6 +6,7 @@ makedocs(;
             "FreeBird.jl" => "index.md",
             "Potentials" => "Potentials.md",
             "EnergyEval" => "EnergyEval.md",
+            "AbstractWalkers" => "AbstractWalkers.md",
             "API" => "API.md",
         ],
     sitename = "FreeBird.jl",

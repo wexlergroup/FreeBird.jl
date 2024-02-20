@@ -1,3 +1,6 @@
+"""
+Module containing functions for performing Monte Carlo moves on atomic/molecular systems.
+"""
 module AtomsMCMoves
 
 using ExtXYZ
@@ -16,6 +19,19 @@ export periodic_boundary_wrap!
 export MC_random_walk!, MC_nve_walk!
 
 
+"""
+    periodic_boundary_wrap!(pos::SVector{3,T}, system::AbstractSystem) where T
+
+Wrap the position vector `pos` according to the periodic boundary conditions of the `system`.
+
+# Arguments
+- `pos::SVector{3,T}`: The position vector to be wrapped.
+- `system::AbstractSystem`: The system containing the periodic boundary conditions.
+
+# Returns
+The wrapped position vector.
+
+"""
 function periodic_boundary_wrap!(pos::SVector{3,T}, system::AbstractSystem) where T
     pbc = system.boundary_conditions
     box = system.bounding_box
@@ -31,6 +47,19 @@ function periodic_boundary_wrap!(pos::SVector{3,T}, system::AbstractSystem) wher
     return pos
 end
 
+"""
+    mean_sq_displacement(at::AtomWalker, at_orig::AtomWalker)
+
+Calculate the mean squared displacement before and after random walk(s).
+
+# Arguments
+- `at::AtomWalker`: The current `AtomWalker` after the random walk.
+- `at_orig::AtomWalker`: The original `AtomWalker` before the random walk.
+
+# Returns
+- `distsq::typeof(0.0u"Å"^2)`: The mean squared displacement of all free particles.
+
+"""
 function mean_sq_displacement(at::AtomWalker, at_orig::AtomWalker)
     distsq::typeof(0.0u"Å"^2) = 0.0u"Å"^2
     frozen = at.num_frozen_part
@@ -42,6 +71,20 @@ function mean_sq_displacement(at::AtomWalker, at_orig::AtomWalker)
 end
 
 
+"""
+    single_atom_random_walk!(pos::SVector{3,T}, step_size::Float64) where T
+
+Perform a single atom random walk by updating the position `pos` in each direction by a random amount.
+The `step_size` determines the maximum distance the atom can move in any direction.
+
+# Arguments
+- `pos::SVector{3,T}`: The current position of the atom as a 3D vector.
+- `step_size::Float64`: The maximum distance the atom can move in any direction.
+
+# Returns
+- `pos`: The updated position of the atom.
+
+"""
 function single_atom_random_walk!(pos::SVector{3,T}, step_size::Float64) where T
     (dx, dy, dz) = (rand(Uniform(-step_size,step_size)) for _ in 1:3) .* unit(T)
     pos = pos .+ (dx, dy, dz)
@@ -50,8 +93,22 @@ end
 
 
 """
-    random_walk(n_steps::Int, at::Atoms, lj::LJParameters, step_size::Float64, emax::Float64, frozen::Int)
-Perform a random walk of `n_steps` steps on the atoms in `at` using a step size of `step_size`.
+    MC_random_walk!(n_steps::Int, at::AtomWalker, lj::LJParameters, step_size::Float64, emax::typeof(0.0u"eV"))
+
+Perform a Monte Carlo random walk on the atomic/molecular system.
+
+# Arguments
+- `n_steps::Int`: The number of Monte Carlo steps to perform.
+- `at::AtomWalker`: The walker to perform the random walk on.
+- `lj::LJParameters`: The Lennard-Jones potential parameters.
+- `step_size::Float64`: The maximum distance an atom can move in any direction.
+- `emax::typeof(0.0u"eV")`: The maximum energy allowed for accepting a move.
+
+# Returns
+- `accept_this_walker::Bool`: Whether the walker is accepted or not.
+- `accept_rate::Float64`: The acceptance rate of the random walk.
+- `at::AtomWalker`: The updated walker.
+
 """
 function MC_random_walk!(
                     n_steps::Int, 
@@ -87,8 +144,29 @@ function MC_random_walk!(
 end
 
 
+"""
+    single_atom_demon_walk!(at::AtomWalker, lj::LJParameters, step_size::Float64;
+                            e_demon=0.0u"eV",
+                            demon_energy_threshold=Inf*u"eV",
+                            demon_gain_threshold=Inf*u"eV")
 
+Perform a single atom demon walk.
 
+Arguments:
+- `at::AtomWalker`: The walker to perform the demon walk on.
+- `lj::LJParameters`: The LJ parameters.
+- `step_size::Float64`: The step size for the random walk.
+
+Keyword Arguments:
+- `e_demon=0.0u"eV"`: The energy of the demon.
+- `demon_energy_threshold=Inf*u"eV"`: The energy threshold for the demon.
+- `demon_gain_threshold=Inf*u"eV"`: The energy gain threshold for the demon during each move.
+
+Returns:
+- `accept::Bool`: Whether the move is accepted or rejected.
+- `at::AtomWalker`: The updated atom walker object.
+- `e_demon::Float64`: The updated energy of the demon.
+"""
 function single_atom_demon_walk!(
                         at::AtomWalker, 
                         lj::LJParameters, 
@@ -97,36 +175,31 @@ function single_atom_demon_walk!(
                         demon_energy_threshold=Inf*u"eV",
                         demon_gain_threshold=Inf*u"eV",
                         )
-    accept = false
-    orig_energy = at.energy
-    config = at.configuration
-    frozen = at.num_frozen_part
-    e_shift = at.energy_frozen_part
-    i_at = rand((frozen+1):length(config))
-    pos = position(config, i_at)
-    orig_pos = deepcopy(pos)
-    pos = single_atom_random_walk!(pos, step_size)
-    pos = periodic_boundary_wrap!(pos, config)
-    config.position[i_at] = pos
-    new_energy = interaction_energy(config, lj; frozen=frozen) + e_shift
-    ΔE = new_energy - orig_energy
-    if -demon_gain_threshold <= ΔE <= 0.0u"eV" && e_demon-ΔE < demon_energy_threshold
-        e_demon -= ΔE
-        accept = true
-        at.energy = new_energy
-        @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon gains energy, accept"
-    elseif 0.0u"eV" < ΔE <= e_demon
-        e_demon -= ΔE
-        accept = true
-        at.energy = new_energy
-        @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon gives energy, accept"
-    else
-        config.position[i_at] = orig_pos
-        @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon has no enough energy, reject"
-    end
-    return accept, at, e_demon
+    # function implementation
 end
 
+"""
+    additional_demon_walk!(e_demon::typeof(0.0u"eV"), at::AtomWalker, lj::LJParameters, step_size::Float64;
+                          e_demon_tolerance=1e-9u"eV", max_add_steps::Int=1_000_000)
+
+Performs additional demon walk steps until the demon energy `e_demon` is below the tolerance `e_demon_tolerance`
+or the maximum number of additional steps `max_add_steps` is reached.
+
+# Arguments
+- `e_demon::typeof(0.0u"eV")`: The initial demon energy.
+- `at::AtomWalker`: The walker that the demon walk is performed on.
+- `lj::LJParameters`: The LJ parameters.
+- `step_size::Float64`: The step size for the demon walk.
+- `e_demon_tolerance=1e-9u"eV"`: The tolerance for the demon energy.
+- `max_add_steps::Int=1_000_000`: The maximum number of additional steps.
+
+# Returns
+- `accept_this_walker::Bool`: Whether the walker is accepted after the additional demon walk.
+- `accept_rate::Float64`: The acceptance rate of the additional demon walk.
+- `at::AtomWalker`: The updated walker.
+- `e_demon::typeof(0.0u"eV")`: The final demon energy.
+
+"""
 function additional_demon_walk!(
                     e_demon::typeof(0.0u"eV"),
                     at::AtomWalker,
@@ -162,6 +235,42 @@ function additional_demon_walk!(
     return accept_this_walker, new_accept_count/additional_steps, at, e_demon
 end
 
+"""
+    MC_nve_walk!(
+        n_steps::Int, 
+        at::AtomWalker, 
+        lj::LJParameters, 
+        step_size::Float64; 
+        e_demon_tolerance=1e-9u"eV",
+        demon_energy_threshold=Inf*u"eV",
+        demon_gain_threshold=Inf*u"eV",
+        max_add_steps::Int=1_000_000
+    )
+
+Perform a NVE walk using the demon algorithm. The demon algorithm is used to maintain the energy (E) of the system.
+
+
+# Arguments
+- `n_steps::Int`: The number of demon walks to perform.
+- `at::AtomWalker`: The walker to perform the demon walk on.
+- `lj::LJParameters`: The Lennard-Jones parameters for the system.
+- `step_size::Float64`: The step size for the demon walk.
+
+# Optional Arguments
+- `e_demon_tolerance=1e-9u"eV"`: The energy tolerance for the demon, below which the demon walk is considered successful, 
+    i.e., the NVE condition is satisfied.
+- `demon_energy_threshold=Inf*u"eV"`: The maximum energy allowed for the demon to have.
+- `demon_gain_threshold=Inf*u"eV"`: The energy gain threshold for the demon during each move.
+- `max_add_steps::Int=1_000_000`: The maximum number of additional demon walks if the demon energy is above the tolerance.
+
+# Returns
+- `accept_this_walker::Bool`: Whether the walker is accepted or not.
+- `accept_ratio::Float64`: The acceptance ratio of the demon walk (excluding additional demon walks).
+- `at_final::AtomWalker`: The final walker after the demon walks.
+- `demon_energies::Array{Float64}`: The energies of the demon at each step.
+- `temp_estimate::Float64`: The estimated temperature of the system.
+
+"""
 function MC_nve_walk!(
                     n_steps::Int, 
                     at::AtomWalker, 

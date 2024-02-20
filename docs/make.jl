@@ -7,6 +7,7 @@ makedocs(;
             "Potentials" => "Potentials.md",
             "EnergyEval" => "EnergyEval.md",
             "AbstractWalkers" => "AbstractWalkers.md",
+            "AtomsMCMoves" => "AtomsMCMoves.md",
             "API" => "API.md",
         ],
     sitename = "FreeBird.jl",

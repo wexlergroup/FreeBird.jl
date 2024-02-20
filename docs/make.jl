@@ -8,6 +8,7 @@ makedocs(;
             "EnergyEval" => "EnergyEval.md",
             "AbstractWalkers" => "AbstractWalkers.md",
             "AtomsMCMoves" => "AtomsMCMoves.md",
+            "SamplingSchemes" => "SamplingSchemes.md",
             "API" => "API.md",
         ],
     sitename = "FreeBird.jl",

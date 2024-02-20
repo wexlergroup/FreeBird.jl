@@ -18,14 +18,17 @@ export MCRoutine, MCRandomWalk, MCDemonWalk, MixedMCRoutine
 
 abstract type SamplingParameters end
 
-"""
-    struct NestedSamplingParameters <: SamplingParameters
 
-The `NestedSamplingParameters` struct represents the parameters used in nested sampling.
+"""
+    mutable struct NestedSamplingParameters <: SamplingParameters
+
+The `NestedSamplingParameters` struct represents the parameters used in the nested sampling scheme.
 
 # Fields
-- `mc_steps::Int64`: The number of Monte Carlo steps.
-- `step_size::Float64`: The step size for each Monte Carlo step.
+- `mc_steps::Int64`: The number of total Monte Carlo moves to perform.
+- `step_size::Float64`: The step size used in the sampling process.
+- `fail_count::Int64`: The number of failed MC moves in a row. Used to terminate the sampling process if it exceeds a certain threshold.
+
 """
 mutable struct NestedSamplingParameters <: SamplingParameters
     mc_steps::Int64
@@ -35,10 +38,30 @@ end
 
 
 
+"""
+    abstract type MCRoutine
+
+An abstract type representing a Monte Carlo routine.
+"""
 abstract type MCRoutine end
 
+"""
+    struct MCRandomWalk <: MCRoutine
+A type representing a Monte Carlo random walk sampling scheme.
+"""
 struct MCRandomWalk <: MCRoutine end
 
+"""
+    MCDemonWalk <: MCRoutine
+
+A Monte Carlo routine for performing demon walks.
+
+# Fields
+- `e_demon_tolerance::typeof(0.0u"eV")`: The tolerance for the energy difference in the demon walk.
+- `demon_energy_threshold::typeof(0.0u"eV")`: The energy threshold for the demon walk.
+- `demon_gain_threshold::typeof(0.0u"eV")`: The gain threshold for the demon during each walk.
+- `max_add_steps::Int`: The maximum number of steps to add in the demon walk if the demon energy `e_demon` is higher than the `demon_energy_threshold`.
+"""
 @kwdef struct MCDemonWalk <: MCRoutine 
     e_demon_tolerance::typeof(0.0u"eV")=1e-9u"eV"
     demon_energy_threshold::typeof(0.0u"eV")=Inf*u"eV"
@@ -46,6 +69,19 @@ struct MCRandomWalk <: MCRoutine end
     max_add_steps::Int=1_000_000
 end
 
+"""
+    struct MixedMCRoutine <: MCRoutine
+
+A mutable struct representing a mixed Monte Carlo routine, where the main routine is used for the majority of the steps, 
+    and the backup routine is used when the main routine fails to accept a move. Currently, it is intended to use `MCRandomWalk` 
+    as the main routine and `MCDemonWalk` as the backup routine.
+
+# Fields
+- `main_routine::MCRoutine`: The main Monte Carlo routine.
+- `back_up_routine::MCRoutine`: The backup Monte Carlo routine.
+- `ns_params_main::NestedSamplingParameters`: The nested sampling parameters for the main routine.
+- `ns_params_back_up::NestedSamplingParameters`: The nested sampling parameters for the backup routine.
+"""
 @kwdef mutable struct MixedMCRoutine <: MCRoutine
     main_routine::MCRoutine=MCRandomWalk()
     back_up_routine::MCRoutine=MCDemonWalk()
@@ -73,6 +109,15 @@ function sort_by_energy!(liveset::AtomWalkers)
     return liveset
 end
 
+"""
+    update_iter!(liveset::AtomWalkers)
+
+Update the iteration count for each walker in the liveset.
+
+# Arguments
+- `liveset::AtomWalkers`: The set of walkers to update.
+
+"""
 function update_iter!(liveset::AtomWalkers)
     for at in liveset.walkers
         at.iter += 1
@@ -81,17 +126,20 @@ end
 
 
 """
-    nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters)
+    nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRandomWalk)
 
-Performs a single step of the nested sampling algorithm.
+Perform a single step of the nested sampling algorithm using the Monte Carlo random walk routine.
 
-# Arguments
-- `liveset::LJAtomWalkers`: The current set of walkers in the nested sampling algorithm.
-- `ns_params::NestedSamplingParameters`: The parameters for the nested sampling algorithm.
+Arguments
+- `liveset::AtomWalkers`: The set of atom walkers.
+- `ns_params::NestedSamplingParameters`: The parameters for nested sampling.
+- `mc_routine::MCRandomWalk`: The Monte Carlo random walk routine.
 
-# Returns
-- `emax`: The maximum energy among the walkers in the liveset.
-- `liveset`: The updated liveset after performing the nested sampling step.
+Returns
+- `iter`: The iteration number after the step.
+- `emax`: The highest energy recorded during the step.
+- `liveset`: The updated set of atom walkers.
+- `ns_params`: The updated nested sampling parameters.
 """
 function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRandomWalk)
     sort_by_energy!(liveset)
@@ -117,6 +165,22 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     return iter, emax, liveset, ns_params
 end
 
+"""
+    nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCDemonWalk)
+
+Perform a single step of the nested sampling algorithm using the Monte Carlo demon walk routine.
+
+# Arguments
+- `liveset::AtomWalkers`: The set of atom walkers representing the current state of the system.
+- `ns_params::NestedSamplingParameters`: The parameters for the nested sampling algorithm.
+- `mc_routine::MCDemonWalk`: The parameters for the Monte Carlo demon walk.
+
+# Returns
+- `iter`: The iteration number after the step.
+- `emax`: The maximum energy recorded during the step.
+- `liveset`: The updated set of atom walkers after the step.
+- `ns_params`: The updated nested sampling parameters after the step.
+"""
 function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCDemonWalk)
     sort_by_energy!(liveset)
     ats = liveset.walkers
@@ -146,6 +210,20 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     return iter, emax, liveset, ns_params
 end
 
+"""
+    adjust_step_size(ns_params::NestedSamplingParameters, rate::Float64)
+
+Adjusts the step size of the nested sampling algorithm based on the acceptance rate. 
+    If the acceptance rate is greater than 0.75, the step size is increased by 1%. 
+    If the acceptance rate is less than 0.25, the step size is decreased by 1%.
+
+# Arguments
+- `ns_params::NestedSamplingParameters`: The parameters of the nested sampling algorithm.
+- `rate::Float64`: The acceptance rate of the algorithm.
+
+# Returns
+- `ns_params::NestedSamplingParameters`: The updated parameters with adjusted step size.
+"""
 function adjust_step_size(ns_params::NestedSamplingParameters, rate::Float64)
     if rate > 0.75
         ns_params.step_size *= 1.01
@@ -156,25 +234,27 @@ function adjust_step_size(ns_params::NestedSamplingParameters, rate::Float64)
 end
 
 
-"""
-    nested_sampling_loop!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, n_steps::Int64)
 
-Perform nested sampling loop for a given number of steps.
+"""
+    nested_sampling_loop!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, n_steps::Int64, mc_routine::MCRoutine; args...)
+
+Perform a nested sampling loop for a given number of steps.
 
 # Arguments
-- `liveset::LJAtomWalkers`: The initial set of walkers.
+- `liveset::AtomWalkers`: The initial set of walkers.
 - `ns_params::NestedSamplingParameters`: The parameters for nested sampling.
 - `n_steps::Int64`: The number of steps to perform.
+- `mc_routine::MCRoutine`: The Monte Carlo routine to use.
+
+# Keyword Arguments
+- `args...`: Additional arguments.
 
 # Returns
-- `energies`: An array of energies at each step.
-- `liveset`: The final set of walkers.
+- `df`: A DataFrame containing the iteration number and maximum energy for each step.
+- `liveset`: The updated set of walkers.
+- `ns_params`: The updated nested sampling parameters.
 """
-function nested_sampling_loop!(liveset::AtomWalkers, 
-                                ns_params::NestedSamplingParameters, 
-                                n_steps::Int64, 
-                                mc_routine::MCRoutine;
-                                args...)
+function nested_sampling_loop!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, n_steps::Int64, mc_routine::MCRoutine; args...)
     df = DataFrame(iter=Int[], emax=typeof(0.0u"eV")[])
     for i in 1:n_steps
         iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
@@ -191,6 +271,22 @@ function nested_sampling_loop!(liveset::AtomWalkers,
 end
 
 
+"""
+    nested_sampling_loop!(liveset::AtomWalkers, n_steps::Int64, mc_routine::MixedMCRoutine, save_strategy::DataSavingStrategy)
+
+Perform a nested sampling loop for a given number of steps.
+
+# Arguments
+- `liveset::AtomWalkers`: The initial set of walkers.
+- `n_steps::Int64`: The number of steps to perform.
+- `mc_routine::MixedMCRoutine`: The mixed Monte Carlo routine to use.
+- `save_strategy::DataSavingStrategy`: The strategy for saving data.
+
+# Returns
+- `df::DataFrame`: The data frame containing the iteration number and maximum energy for each step.
+- `liveset::AtomWalkers`: The updated set of walkers.
+- `mc_routine.ns_params_main`: The updated nested sampling parameters for the main routine.
+"""
 function nested_sampling_loop!(liveset::AtomWalkers,  
                                 n_steps::Int64, 
                                 mc_routine::MixedMCRoutine,

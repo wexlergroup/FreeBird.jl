@@ -5,7 +5,7 @@
 ```@index
 ```
 
-## Functions
+<!-- ## Functions
 ```@autodocs
 Modules = [Potentials, EnergyEval, AbstractWalkers, AtomsMCMoves, SamplingSchemes, FreeBirdIO]
-```
+``` -->

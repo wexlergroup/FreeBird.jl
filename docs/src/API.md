@@ -1,7 +1,11 @@
 # API
 
+## Index
+
+```@index
+```
 
 ## Functions
 ```@autodocs
-Modules = [Potentials, EnergyEval, AbstractWalkers, AbstractMCMoves, SamplingSchemes, FreeBirdIO]
+Modules = [Potentials, EnergyEval, AbstractWalkers, AtomsMCMoves, SamplingSchemes, FreeBirdIO]
 ```

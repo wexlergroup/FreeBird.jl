@@ -3,4 +3,4 @@ using Test
 
 using Unitful
 
-include("test-potentials.jl")
+include("test-Potentials.jl")

@@ -3,10 +3,13 @@ name: Documentation
 on:
   push:
     branches:
-      - dev # update to match your development branch (master, main, dev, trunk, ...)
-      - 'feature/*'
+      - dev
+      - 'feature/*' # temporary for testing
     tags: '*'
   pull_request:
+    branches:
+      - dev
+      - main
 
 jobs:
   build:

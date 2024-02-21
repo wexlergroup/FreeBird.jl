@@ -4,9 +4,13 @@ on:
     branches:
       - main
       - dev
-      - feature/*
+      - hotfix/*
+      - feature/* # temporary for testing
     tags: ['*']
   pull_request:
+    branches:
+      - main
+      - dev
   workflow_dispatch:
 concurrency:
   # Skip intermediate builds: always.

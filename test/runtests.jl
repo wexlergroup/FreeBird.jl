@@ -1,6 +1,8 @@
 using FreeBird
 using Test
 
+using Unitful
+
 @testset "Lennard-Jones Potential" begin
     @test lj_energy(1.0u"eV", 1.0u"Å", 1.0u"Å") ≈ 0.0u"eV"
     @test lj_energy(1.0u"eV", 1.0u"Å", 2.0u"Å") ≈ -0.0615234375u"eV"

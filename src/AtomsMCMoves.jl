@@ -22,7 +22,9 @@ export MC_random_walk!, MC_nve_walk!
 """
     periodic_boundary_wrap!(pos::SVector{3,T}, system::AbstractSystem) where T
 
-Wrap the position vector `pos` according to the periodic boundary conditions of the `system`.
+Wrap the position vector `pos` according to the periodic boundary conditions of the `system`. If the
+boundary condition is `Periodic()`, the position is wrapped using the modulo operator. If the boundary
+condition is `DirichletZero()`, the position is wrapped by reflecting the position vector across the boundary.
 
 # Arguments
 - `pos::SVector{3,T}`: The position vector to be wrapped.
@@ -37,10 +39,16 @@ function periodic_boundary_wrap!(pos::SVector{3,T}, system::AbstractSystem) wher
     box = system.bounding_box
     new_pos = Vector{typeof(0.0u"Å")}(undef, 3)
     for i in eachindex(pbc)
-        if pbc[i] == Periodic()
+        if pbc[i] == Periodic() # wrap the position
             new_pos[i] = mod(pos[i], box[i][i])
+        elseif pbc[i] == DirichletZero() # reflect the position
+            if pos[i] > box[i][i]
+                new_pos[i] = box[i][i]*2 - pos[i]
+            else
+                new_pos[i] = pos[i]
+            end
         else
-            new_pos[i] = pos[i]
+            error("Unsupported boundary condition: $(pbc[i]).")
         end
     end
     pos = SVector{3,T}(new_pos)

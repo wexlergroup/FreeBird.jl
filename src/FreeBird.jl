@@ -2,6 +2,8 @@ module FreeBird
 
 using Reexport
 
+@reexport using Unitful
+
 include("Potentials.jl")
 @reexport using .Potentials
 

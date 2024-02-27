@@ -183,7 +183,34 @@ function single_atom_demon_walk!(
                         demon_energy_threshold=Inf*u"eV",
                         demon_gain_threshold=Inf*u"eV",
                         )
-    # function implementation
+    accept = false
+    orig_energy = at.energy
+    config = at.configuration
+    frozen = at.num_frozen_part
+    e_shift = at.energy_frozen_part
+    i_at = rand((frozen+1):length(config))
+    pos = position(config, i_at)
+    orig_pos = deepcopy(pos)
+    pos = single_atom_random_walk!(pos, step_size)
+    pos = periodic_boundary_wrap!(pos, config)
+    config.position[i_at] = pos
+    new_energy = interaction_energy(config, lj; frozen=frozen) + e_shift
+    ΔE = new_energy - orig_energy
+    if -demon_gain_threshold <= ΔE <= 0.0u"eV" && e_demon-ΔE < demon_energy_threshold
+        e_demon -= ΔE
+        accept = true
+        at.energy = new_energy
+        @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon gains energy, accept"
+    elseif 0.0u"eV" < ΔE <= e_demon
+        e_demon -= ΔE
+        accept = true
+        at.energy = new_energy
+        @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon gives energy, accept"
+    else
+        config.position[i_at] = orig_pos
+        @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon has no enough energy, reject"
+    end
+    return accept, at, e_demon
 end
 
 """

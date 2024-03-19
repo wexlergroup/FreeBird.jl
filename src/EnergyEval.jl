@@ -15,7 +15,7 @@ export pbc_dist
 """
     pbc_dist(pos1, pos2, at)
 
-Compute the distance between two positions considering periodic boundary conditions.
+Compute the distance between two positions considering periodic boundary conditions. Currently only works for orthorhombic lattices.
 
 # Arguments
 - `pos1::Union{SVector{T},Vector{T}}`: The first position.

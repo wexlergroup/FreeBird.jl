@@ -57,9 +57,9 @@ struct MCRandomWalk <: MCRoutine end
 A Monte Carlo routine for performing demon walks.
 
 # Fields
-- `e_demon_tolerance::typeof(0.0u"eV")`: The tolerance for the energy difference in the demon walk.
-- `demon_energy_threshold::typeof(0.0u"eV")`: The energy threshold for the demon walk.
-- `demon_gain_threshold::typeof(0.0u"eV")`: The gain threshold for the demon during each walk.
+- `e_demon_tolerance::typeof(0.0u"eV")`: The tolerance for the energy difference in the demon walk. Tighter tolerance will lead to lower overall acceptance of the demon walk.
+- `demon_energy_threshold::typeof(0.0u"eV")`: The energy threshold for the demon walk. Lower threshold will limit the exploration of the potential energy landscape but increase the overall acceptance of the demon walk.
+- `demon_gain_threshold::typeof(0.0u"eV")`: The gain threshold for the demon during each walk. Similar to the `demon_energy_threshold`, lower gain threshold will limit the exploration of the potential energy landscape but increase the overall acceptance of the demon walk.
 - `max_add_steps::Int`: The maximum number of steps to add in the demon walk if the demon energy `e_demon` is higher than the `demon_energy_threshold`.
 """
 @kwdef struct MCDemonWalk <: MCRoutine 

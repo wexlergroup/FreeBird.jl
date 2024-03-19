@@ -334,7 +334,7 @@ function MC_nve_walk!(
         end
     end
     temp_estimate = mean(demon_energies)
-    temp_per_K = temp_estimate/(8.61733e-5u"eV/K")
+    temp_per_K = temp_estimate/(8.617333262e-5u"eV/K")
     @info "Estimated temperature: $temp_estimate, or $temp_per_K."
     if accept_count == 0
         @warn "No demon walk was accepted, reverting to original configuration."

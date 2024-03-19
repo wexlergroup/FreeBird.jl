@@ -197,7 +197,7 @@ function single_atom_demon_walk!(
     new_energy = interaction_energy(config, lj; frozen=frozen) + e_shift
     ΔE = new_energy - orig_energy
     if -demon_gain_threshold <= ΔE <= 0.0u"eV" && e_demon-ΔE < demon_energy_threshold
-        e_demon -= ΔE
+        e_demon += -ΔE
         accept = true
         at.energy = new_energy
         @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon gains energy, accept"

@@ -208,7 +208,7 @@ function single_atom_demon_walk!(
         @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon gives energy, accept"
     else
         config.position[i_at] = orig_pos
-        @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon has no enough energy, reject"
+        @debug "ΔE: ", ΔE, " e_demon: ", e_demon, "demon has insufficient energy, reject"
     end
     return accept, at, e_demon
 end

@@ -58,7 +58,7 @@ end
 """
     mean_sq_displacement(at::AtomWalker, at_orig::AtomWalker)
 
-Calculate the mean squared displacement before and after random walk(s).
+Calculate the mean squared displacement before and after random walk(s). Note that due to the current implementation of the periodic boundary wrap, this function is not appropriate to use for calculating mean displacements in a propagation.
 
 # Arguments
 - `at::AtomWalker`: The current `AtomWalker` after the random walk.

@@ -133,7 +133,7 @@ Perform a single step of the nested sampling algorithm using the Monte Carlo ran
 Arguments
 - `liveset::AtomWalkers`: The set of atom walkers.
 - `ns_params::NestedSamplingParameters`: The parameters for nested sampling.
-- `mc_routine::MCRandomWalk`: The Monte Carlo random walk routine.
+- `mc_routine::MCRandomWalk`: The Monte Carlo random walk routine. Currently within this function, the random walk is only applied to the highest-energy walker, i.e., the one being culled.
 
 Returns
 - `iter`: The iteration number after the step.

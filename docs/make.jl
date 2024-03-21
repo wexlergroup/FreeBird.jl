@@ -26,5 +26,6 @@ deploydocs(
     repo = "github.com/wexlergroup/FreeBird.jl.git",
     target = "build",
     branch = "gh-pages",
-    devbranch = "feature/simple-lennard-jones", # just a test
+    devbranch = "dev",
+    push_preview = true,
 )

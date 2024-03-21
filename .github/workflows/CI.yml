@@ -5,7 +5,7 @@ on:
       - main
       - dev
       - hotfix/*
-      - feature/* # temporary for testing
+      # - feature/* # temporary for testing
     tags: ['*']
   pull_request:
     branches:

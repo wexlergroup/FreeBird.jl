@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - dev
-      - 'feature/*' # temporary for testing
+      # - 'feature/*' # temporary for testing
     tags: '*'
   pull_request:
     branches:

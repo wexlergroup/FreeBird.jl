@@ -44,6 +44,8 @@ function periodic_boundary_wrap!(pos::SVector{3,T}, system::AbstractSystem) wher
         elseif pbc[i] == DirichletZero() # reflect the position
             if pos[i] > box[i][i]
                 new_pos[i] = box[i][i]*2 - pos[i]
+            elseif pos[i] < 0.0u"Å"
+                new_pos[i] = -pos[i]
             else
                 new_pos[i] = pos[i]
             end

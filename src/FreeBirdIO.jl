@@ -14,7 +14,7 @@ export read_single_config, read_configs, read_single_walker, read_walkers
 export write_single_walker, write_walkers
 
 export DataSavingStrategy, SaveEveryN
-export write_df, write_df_every_n
+export write_df, write_df_every_n, write_walker_every_n, write_ls_every_n
 
 export generate_initial_configs
 export convert_system_to_walker, convert_walker_to_system
@@ -43,7 +43,6 @@ function set_pbc(at::Atoms, pbc::Vector)
             error("Unsupported boundary condition: $(pbc[i])")
         end
     end
-    pbc_conditions = Vector{BoundaryCondition}(pbc_conditions)
     pbc_conditions = Vector{BoundaryCondition}(pbc_conditions)
     return FlexibleSystem(at;boundary_conditions=pbc_conditions)
 end
@@ -203,6 +202,17 @@ function convert_walker_to_system(at::AtomWalker)
 end
 
 """
+    append_walker(filename::String, at::AtomWalker)
+
+Append an `AtomWalker` object to a file.
+"""
+function append_walker(filename::String, at::AtomWalker)
+    ats = read_walkers(filename)
+    push!(ats, at)
+    write_walkers(filename, ats)
+end
+
+"""
     write_single_walker(filename::String, at::AtomWalker)
 
 Write a single AtomWalker object to a file.
@@ -232,6 +242,24 @@ function write_walkers(filename::String, ats::Vector{AtomWalker})
     save_trajectory(filename::String, flex)
 end
 
+"""
+    write_single_walker(filename::String, at::AtomWalker, append::Bool)
+
+Write a single AtomWalker object to a file. If the file already exists, append the walker to the file.
+
+# Arguments
+- `filename::String`: The name of the file to write to.
+- `at::AtomWalker`: The AtomWalker object to write.
+- `append::Bool`: A boolean indicating whether to append the walker to the file if it already exists.
+
+"""
+function write_single_walker(filename::String, at::AtomWalker, append::Bool)
+    if isfile(filename) && append
+        append_walker(filename, at)
+    else
+        write_walkers(filename, [at])
+    end
+end
 
 """
     generate_random_starting_config(volume_per_particle::Float64, num_particle::Int; particle_type::Symbol=:H)
@@ -252,9 +280,11 @@ function generate_random_starting_config(volume_per_particle::Float64, num_parti
     total_volume = volume_per_particle * num_particle
     box_length = total_volume^(1/3)
     box = [[box_length, 0.0, 0.0], [0.0, box_length, 0.0], [0.0, 0.0, box_length]]u"Å"
+    boundary_conditions = [DirichletZero(), DirichletZero(), DirichletZero()]
     list_of_atoms = [particle_type => [rand(), rand(), rand()] for _ in 1:num_particle]
     system = periodic_system(list_of_atoms, box, fractional=true)
-    return FastSystem(system)
+    flex = FlexibleSystem(system; boundary_conditions=boundary_conditions)
+    return FastSystem(flex)
 end
 
 """
@@ -289,13 +319,17 @@ abstract type DataSavingStrategy end
 SaveEveryN is a concrete subtype of DataSavingStrategy that specifies saving data every N steps.
 
 # Fields
-- `filename::String`: The name of the file to save the data to.
+- `df_filename::String`: The name of the file to save the DataFrame to.
+- `wk_filename::String`: The name of the file to save the atom walker to.
+- `ls_filename::String`: The name of the file to save the liveset to.
 - `n::Int`: The number of steps between each save.
 
 """
-struct SaveEveryN <: DataSavingStrategy
-    filename::String
-    n::Int
+@kwdef struct SaveEveryN <: DataSavingStrategy
+    df_filename::String = "output_df.csv"
+    wk_filename::String = "output.traj.extxyz"
+    ls_filename::String = "output.ls.extxyz"
+    n::Int = 100
 end
 
 """
@@ -323,7 +357,41 @@ Write the DataFrame `df` to a file specified by `d_strategy.filename` every `d_s
 """
 function write_df_every_n(df::DataFrame, step::Int, d_strategy::SaveEveryN)
     if step % d_strategy.n == 0
-        write_df(d_strategy.filename, df)
+        write_df(d_strategy.df_filename, df)
+    end
+end
+
+"""
+    write_walker_every_n(at::AtomWalker, step::Int, d_strategy::SaveEveryN)
+
+Write the atom walker `at` to a file specified by `d_strategy.wk_filename` every `d_strategy.n` steps.
+
+# Arguments
+- `at::AtomWalker`: The atom walker to be written.
+- `step::Int`: The current step number.
+- `d_strategy::SaveEveryN`: The save strategy specifying the file name and the interval.
+
+"""
+function write_walker_every_n(at::AtomWalker, step::Int, d_strategy::SaveEveryN)
+    if step % d_strategy.n == 0
+        write_single_walker(d_strategy.wk_filename, at, true)
+    end
+end
+
+"""
+    write_ls_every_n(ls::AtomWalkers, step::Int, d_strategy::SaveEveryN)
+
+Write the liveset `ls` to file every `n` steps, as specified by the `d_strategy`.
+
+# Arguments
+- `ls::AtomWalkers`: The liveset to be written.
+- `step::Int`: The current step number.
+- `d_strategy::SaveEveryN`: The save strategy specifying the frequency of writing.
+
+"""
+function write_ls_every_n(ls::AtomWalkers, step::Int, d_strategy::SaveEveryN)
+    if step % d_strategy.n == 0
+        write_walkers(d_strategy.ls_filename, ls.walkers)
     end
 end
 

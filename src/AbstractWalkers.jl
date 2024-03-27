@@ -9,6 +9,7 @@ using ..Potentials
 using ..EnergyEval
 
 export AtomWalker, AtomWalkers, LJAtomWalkers
+export LatticeWalkers, Lattice2DWalker, Lattice2DWalkers
 export update_walker!
 
 abstract type AtomWalkers end
@@ -142,6 +143,54 @@ function LJAtomWalkers(ats::Vector{AtomWalker}, lj::LJParameters, num_frozen_par
         at.num_frozen_part = num_frozen_part
     end
     return LJAtomWalkers(ats, lj)
+end
+
+struct Lattice2DSystem
+    lattice_type::Symbol  # Type of lattice (e.g., :square, :hexagonal)
+    dimensions::Tuple{Int64, Int64}  # Dimensions of the lattice (rows x columns for 2D)
+    site_occupancy::Matrix{Bool}  # Matrix to track whether a lattice site is occupied
+    site_energy::Matrix{Float64}  # Matrix of energy values associated with each site
+    external_field::Matrix{Float64}  # Matrix representing an external field affecting site energies
+
+    # Constructor for Lattice2DSystem
+    function Lattice2DSystem(lattice_type::Symbol, dims::Tuple{Int64, Int64}; external_field_strength::Float64=0.0)
+        site_occupancy = falses(dims)  # Initialize all sites as unoccupied
+        site_energy = zeros(dims)  # Initialize site energies to zero
+        external_field = fill(external_field_strength, dims)  # Apply uniform external field
+        
+        # Custom initialization logic can go here, for example, setting up initial site energies based on lattice type
+        
+        return new(lattice_type, dims, site_occupancy, site_energy, external_field)
+    end
+end
+
+abstract type LatticeWalkers end
+
+mutable struct Lattice2DWalker
+    configuration::Lattice2DSystem
+    energy::typeof(0.0u"eV")
+    iter::Int64
+    num_frozen_part::Int64
+    energy_frozen_part::typeof(0.0u"eV")
+    function Lattice2DWalker(configuration::Lattice2DSystem; energy=0.0u"eV", iter=0, num_frozen_part=0, energy_frozen_part=0.0u"eV")
+        return new(configuration, energy, iter, num_frozen_part, energy_frozen_part)
+    end
+end
+
+struct Lattice2DWalkers <: LatticeWalkers
+    walkers::Vector{Lattice2DWalker}
+    lj_potential::LJParameters
+    function Lattice2DWalkers(walkers::Vector{Lattice2DWalker}, lj_potential::LJParameters)
+        assign_lj_energies!(walkers, lj_potential)
+        return new(walkers, lj_potential)
+    end
+end
+
+function Lattice2DWalkers(ats::Vector{Lattice2DWalker}, lj::LJParameters, num_frozen_part::Int64)
+    for at in ats
+        at.num_frozen_part = num_frozen_part
+    end
+    return Lattice2DWalkers(ats, lj)
 end
 
 end # module AbstractWalkers

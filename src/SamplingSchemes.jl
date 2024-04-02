@@ -34,10 +34,12 @@ The `NestedSamplingParameters` struct represents the parameters used in the nest
 """
 mutable struct NestedSamplingParameters <: SamplingParameters
     mc_steps::Int64
+    initial_step_size::Float64
     step_size::Float64
     step_size_lo::Float64
     step_size_up::Float64
     fail_count::Int64
+    allowed_fail_count::Int64
 end
 
 
@@ -95,8 +97,8 @@ A mutable struct representing a mixed Monte Carlo routine, where the main routin
 @kwdef mutable struct MixedMCRoutine <: MCRoutine
     main_routine::MCRoutine=MCRandomWalk()
     back_up_routine::MCRoutine=MCDemonWalk()
-    ns_params_main::NestedSamplingParameters=NestedSamplingParameters(1000, 0.1, 1e-6, 0.1, 0)
-    ns_params_back_up::NestedSamplingParameters=NestedSamplingParameters(10000, 0.01, 1e-6, .01, 0)
+    ns_params_main::NestedSamplingParameters=NestedSamplingParameters(1000, 0.1, 0.1, 1e-6, 0.1, 0, 10)
+    ns_params_back_up::NestedSamplingParameters=NestedSamplingParameters(10000, 0.01, 0.01, 1e-6, .01, 0, 10)
 end
 
 
@@ -280,11 +282,11 @@ function nested_sampling_loop!(liveset::AtomWalkers,
     for i in 1:n_steps
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
         iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
-        @info "n_step $i, iter: $iter, emax: $emax"
-        if ns_params.fail_count >= 10
+        @debug "n_step $i, iter: $iter, emax: $emax"
+        if ns_params.fail_count >= ns_params.allowed_fail_count
             @warn "Failed to accept MC move 10 times in a row. Reset step size!"
             ns_params.fail_count = 0
-            ns_params.step_size = ns_params.step_size_up / 10.0
+            ns_params.step_size = ns_params.initial_step_size
         end
         if !(iter isa typeof(missing))
             push!(df, (iter, emax.val))
@@ -320,7 +322,7 @@ function nested_sampling_loop!(liveset::AtomWalkers,
     for i in 1:n_steps
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
         iter, emax, liveset, mc_routine.ns_params_main = nested_sampling_step!(liveset, mc_routine.ns_params_main, mc_routine.main_routine)
-        if mc_routine.ns_params_main.fail_count >= 10
+        if mc_routine.ns_params_main.fail_count >= mc_routine.ns_params_main.allowed_fail_count
             @warn "Failed to accept $(mc_routine.main_routine) move 10 times in a row. Switching to back up routine $(mc_routine.back_up_routine)!"
             mc_routine.ns_params_main.fail_count = 0
             iter, emax, liveset, mc_routine.ns_params_back_up = nested_sampling_step!(liveset, mc_routine.ns_params_back_up, mc_routine.back_up_routine)

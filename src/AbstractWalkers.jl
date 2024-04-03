@@ -177,6 +177,25 @@ mutable struct Lattice2DWalker
     end
 end
 
+function interaction_energy(at::Lattice2DSystem, lg::LGHamiltonian; frozen::Int64=0)
+    e_free_frozen = frozen == 0 ? 0.0u"eV" : free_frozen_energy(at, lg, frozen)
+    return free_free_energy(at, lg; frozen=frozen) + e_free_frozen
+end
+
+function assign_lg_energies!(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
+    for walker in walkers
+        if walker.num_frozen_part > 0
+            e_frozen = frozen_energy(walker.configuration, lg, walker.num_frozen_part)
+            walker.energy_frozen_part = e_frozen
+        else
+            e_frozen = 0.0u"eV"
+        end
+        e_total = interaction_energy(walker.configuration, lg; frozen=walker.num_frozen_part) + e_frozen
+        walker.energy = e_total
+    end
+    return walkers
+end
+
 struct Lattice2DWalkers <: LatticeWalkers
     walkers::Vector{Lattice2DWalker}
     lj_potential::LJParameters

@@ -5,6 +5,7 @@ module AbstractWalkers
 
 using AtomsBase
 using Unitful
+using Random
 using ..Potentials
 using ..EnergyEval
 
@@ -145,22 +146,24 @@ function LJAtomWalkers(ats::Vector{AtomWalker}, lj::LJParameters, num_frozen_par
     return LJAtomWalkers(ats, lj)
 end
 
+# Lattice gas
+
 struct Lattice2DSystem
     lattice_type::Symbol  # Type of lattice (e.g., :square, :hexagonal)
     dimensions::Tuple{Int64, Int64}  # Dimensions of the lattice (rows x columns for 2D)
+    num_occ_sites::Int64  # Number of occupied sites
     site_occupancy::Matrix{Bool}  # Matrix to track whether a lattice site is occupied
-    site_energy::Matrix{Float64}  # Matrix of energy values associated with each site
-    external_field::Matrix{Float64}  # Matrix representing an external field affecting site energies
 
     # Constructor for Lattice2DSystem
-    function Lattice2DSystem(lattice_type::Symbol, dims::Tuple{Int64, Int64}; external_field_strength::Float64=0.0)
-        site_occupancy = falses(dims)  # Initialize all sites as unoccupied
-        site_energy = zeros(dims)  # Initialize site energies to zero
-        external_field = fill(external_field_strength, dims)  # Apply uniform external field
+    function Lattice2DSystem(lattice_type::Symbol, dims::Tuple{Int64, Int64}, num_occ_sites::Int64)
+        total_sites = prod(dims)  # Total number of sites
+        occupancy = vcat(fill(true, num_occ_sites), fill(false, total_sites - num_occ_sites))  # Initialize occupancy array
+        shuffle!(occupancy)  # Shuffle to randomize occupied sites
+        site_occupancy = reshape(occupancy, dims)  # Reshape back to matrix form
         
         # Custom initialization logic can go here, for example, setting up initial site energies based on lattice type
         
-        return new(lattice_type, dims, site_occupancy, site_energy, external_field)
+        return new(lattice_type, dims, num_occ_sites, site_occupancy)
     end
 end
 
@@ -170,27 +173,43 @@ mutable struct Lattice2DWalker
     configuration::Lattice2DSystem
     energy::typeof(0.0u"eV")
     iter::Int64
-    num_frozen_part::Int64
-    energy_frozen_part::typeof(0.0u"eV")
-    function Lattice2DWalker(configuration::Lattice2DSystem; energy=0.0u"eV", iter=0, num_frozen_part=0, energy_frozen_part=0.0u"eV")
-        return new(configuration, energy, iter, num_frozen_part, energy_frozen_part)
+    function Lattice2DWalker(configuration::Lattice2DSystem; energy=0.0u"eV")
+        return new(configuration, energy, iter)
     end
 end
 
-function interaction_energy(at::Lattice2DSystem, lg::LGHamiltonian; frozen::Int64=0)
-    e_free_frozen = frozen == 0 ? 0.0u"eV" : free_frozen_energy(at, lg, frozen)
-    return free_free_energy(at, lg; frozen=frozen) + e_free_frozen
+struct LGHamiltonian
+    adsorption_energy::typeof(1.0u"eV")
+    interaction_constant::typeof(1.0u"eV")
 end
 
-function assign_lg_energies!(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
-    for walker in walkers
-        if walker.num_frozen_part > 0
-            e_frozen = frozen_energy(walker.configuration, lg, walker.num_frozen_part)
-            walker.energy_frozen_part = e_frozen
-        else
-            e_frozen = 0.0u"eV"
+function interaction_energy(at::Lattice2DSystem, lg::LGHamiltonian)  # TODO: Generalize to arbitrary lattice
+    # loop over all pairs of occupied sites
+    e_interaction = 0.0u"eV"
+    for i in 1:at.dimensions[1]
+        for j in 1:at.dimensions[2]
+            if at.site_occupancy[i, j]
+                # loop over nearest neighbors
+                for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)]
+                    i2 = i + dx
+                    j2 = j + dy
+                    if 1 <= i2 <= at.dimensions[1] && 1 <= j2 <= at.dimensions[2]
+                        if at.site_occupancy[i2, j2]
+                            e_interaction -= lg.interaction_constant / 2  # double counting
+                        end
+                    end
+                end
+            end
         end
-        e_total = interaction_energy(walker.configuration, lg; frozen=walker.num_frozen_part) + e_frozen
+    end
+    return e_interaction
+end
+
+function assign_energies!(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
+    for walker in walkers
+        e_adsorption = walker.num_occ_sites * lg.adsorption_energy
+        e_interaction = interaction_energy(walker.configuration, lg)
+        e_total = e_adsorption + e_interaction
         walker.energy = e_total
     end
     return walkers
@@ -198,18 +217,11 @@ end
 
 struct Lattice2DWalkers <: LatticeWalkers
     walkers::Vector{Lattice2DWalker}
-    lj_potential::LJParameters
-    function Lattice2DWalkers(walkers::Vector{Lattice2DWalker}, lj_potential::LJParameters)
-        assign_lj_energies!(walkers, lj_potential)
-        return new(walkers, lj_potential)
+    lg::LGHamiltonian
+    function Lattice2DWalkers(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
+        assign_energies!(walkers, lg)
+        return new(walkers, lg)
     end
-end
-
-function Lattice2DWalkers(ats::Vector{Lattice2DWalker}, lj::LJParameters, num_frozen_part::Int64)
-    for at in ats
-        at.num_frozen_part = num_frozen_part
-    end
-    return Lattice2DWalkers(ats, lj)
 end
 
 end # module AbstractWalkers

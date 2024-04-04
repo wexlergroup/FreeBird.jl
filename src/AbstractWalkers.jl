@@ -173,7 +173,7 @@ mutable struct Lattice2DWalker
     configuration::Lattice2DSystem
     energy::typeof(0.0u"eV")
     iter::Int64
-    function Lattice2DWalker(configuration::Lattice2DSystem; energy=0.0u"eV")
+    function Lattice2DWalker(configuration::Lattice2DSystem; energy=0.0u"eV", iter=0)
         return new(configuration, energy, iter)
     end
 end
@@ -195,7 +195,7 @@ function interaction_energy(at::Lattice2DSystem, lg::LGHamiltonian)  # TODO: Gen
                     j2 = j + dy
                     if 1 <= i2 <= at.dimensions[1] && 1 <= j2 <= at.dimensions[2]
                         if at.site_occupancy[i2, j2]
-                            e_interaction -= lg.interaction_constant / 2  # double counting
+                            e_interaction += lg.interaction_constant / 2  # double counting
                         end
                     end
                 end
@@ -207,10 +207,10 @@ end
 
 function assign_energies!(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
     for walker in walkers
-        e_adsorption = walker.num_occ_sites * lg.adsorption_energy
+        e_adsorption = walker.configuration.num_occ_sites * lg.adsorption_energy
         e_interaction = interaction_energy(walker.configuration, lg)
         e_total = e_adsorption + e_interaction
-        walker.energy = e_total
+        walker.energy = -e_total
     end
     return walkers
 end
@@ -222,6 +222,19 @@ struct Lattice2DWalkers <: LatticeWalkers
         assign_energies!(walkers, lg)
         return new(walkers, lg)
     end
+end
+
+# Lattice gas tests
+
+function test_lattice2d_system()
+    # Create four 4x4 square lattices with 10 occupied sites
+    lattices = [Lattice2DSystem(:square, (4, 4), 10) for i in 1:4]
+
+    # Create a Lattice2DWalkers object with the lattices and a Hamiltonian
+    lg = LGHamiltonian(1.0u"eV", 1.0u"eV")
+    walkers = [Lattice2DWalker(lattice) for lattice in lattices]
+    lg_walkers = Lattice2DWalkers(walkers, lg)
+    return lg_walkers
 end
 
 end # module AbstractWalkers

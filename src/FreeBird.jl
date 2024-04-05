@@ -22,5 +22,7 @@ include("FreeBirdIO.jl")
 include("SamplingSchemes.jl")
 @reexport using .SamplingSchemes
 
+include("AnalysisTools.jl")
+@reexport using .AnalysisTools
 
-end
+end # module FreeBird

@@ -6,6 +6,7 @@ module AbstractWalkers
 using AtomsBase
 using Unitful
 using Random
+using Combinatorics
 using ..Potentials
 using ..EnergyEval
 
@@ -154,7 +155,14 @@ struct Lattice2DSystem
     num_occ_sites::Int64  # Number of occupied sites
     site_occupancy::Matrix{Bool}  # Matrix to track whether a lattice site is occupied
 
-    # Constructor for Lattice2DSystem
+    # Constructor to initialize with specified site occupancy
+    function Lattice2DSystem(lattice_type::Symbol, site_occupancy::Matrix{Bool})
+        dims = size(site_occupancy)
+        num_occ_sites = sum(site_occupancy)
+        return new(lattice_type, dims, num_occ_sites, site_occupancy)
+    end
+
+    # Constructor to initialize with dimensions and random site occupancy
     function Lattice2DSystem(lattice_type::Symbol, dims::Tuple{Int64, Int64}, num_occ_sites::Int64)
         total_sites = prod(dims)  # Total number of sites
         occupancy = vcat(fill(true, num_occ_sites), fill(false, total_sites - num_occ_sites))  # Initialize occupancy array
@@ -235,6 +243,56 @@ function test_lattice2d_system()
     walkers = [Lattice2DWalker(lattice) for lattice in lattices]
     lg_walkers = Lattice2DWalkers(walkers, lg)
     return lg_walkers
+end
+
+# Enumerate all possible configurations of an LxL square lattice with N occupied sites
+
+function enumerate_lattice_configs(L::Int64, N::Int64)
+    # Generate a list of all grid points
+    grid_points = [(i, j) for i in 1:L for j in 1:L]
+
+    # Generate all combinations of N points from the grid
+    all_configs = collect(combinations(grid_points, N))
+
+    # Convert each configuration to a site occupancy matrix
+    all_configs = [reshape([in((i, j), config) for i in 1:L, j in 1:L], L, L) for config in all_configs]
+    
+    # Generate Lattice2DSystem objects for each configuration
+    lattices = [Lattice2DSystem(:square, config) for config in all_configs]
+
+    # Compute the energy of each configuration
+    lg = LGHamiltonian(0.04136319965u"eV", 0.01034079991u"eV")
+    walkers = [Lattice2DWalker(lattice) for lattice in lattices]
+    lg_walkers = Lattice2DWalkers(walkers, lg)
+
+    # Generate a list of energies
+    energies = [walker.energy for walker in lg_walkers.walkers]
+
+    return energies
+end
+
+function compute_internal_energy_versus_temperature(L::Int64, N::Int64, T_min::typeof(1.0u"K"), T_max::typeof(100.0u"K"), num_points::Int64)
+    # Generate all possible configurations with 8 occupied sites
+    energies = enumerate_lattice_configs(L, N)
+
+    # Compute energy relative to the lowest energy
+    minimum_energy = minimum(energies)
+    energies = energies .- minimum_energy
+
+    # Compute the partition function
+    BoltzmannConstant = 8.617_333_262e-5u"eV/K"
+    temperatures = range(T_min, T_max, length=num_points)
+    internal_energies = [sum(energy * exp(-energy / (BoltzmannConstant * T)) for energy in energies) / sum(exp(-energy / (BoltzmannConstant * T)) for energy in energies) for T in temperatures]
+    heat_capacity = [sum((energy - U)^2 * exp(-energy / (BoltzmannConstant * T)) for energy in energies) / (BoltzmannConstant * T^2 * sum(exp(-energy / (BoltzmannConstant * T)) for energy in energies)) for (T, U) in zip(temperatures, internal_energies)]
+
+    # Add the lowest energy to the internal energy
+    internal_energies = internal_energies .+ minimum_energy
+
+    # Print the temperatures and internal energies in a table
+    println("Temperature (K) | Internal Energy (eV) | Heat Capacity (eV/K)")
+    for (T, U, C) in zip(temperatures, internal_energies, heat_capacity)
+        println("$T $U $C")
+    end
 end
 
 end # module AbstractWalkers

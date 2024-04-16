@@ -10,7 +10,7 @@ include("Potentials.jl")
 include("EnergyEval.jl")
 @reexport using .EnergyEval
 
-include("AbstractWalkers.jl")
+include("AbstractWalkers/AbstractWalkers.jl")
 @reexport using .AbstractWalkers
 
 include("AtomsMCMoves.jl")

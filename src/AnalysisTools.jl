@@ -24,7 +24,7 @@ end
     ωᵢ(iters::Vector{Int}, n_walkers::Int)
 
 Calculates the \$\\omega\$ factors for the given number of iterations and walkers.
-The \$\\omega\$ factors account for the fractions of phase-space volume sampled during
+The \$\\omega\$ factors account for the fractions of parameter-space volume sampled during
 each nested sampling iteration, defined as:
 ```math
 \\omega_i = \\frac{1}{N+1} \\left(\\frac{N}{N+1}\\right)^i
@@ -39,8 +39,8 @@ where \$N\$ is the number of walkers and \$i\$ is the iteration number.
 - A vector of \$\\omega\$ factors.
 """
 function ωᵢ(iters::Vector{Int}, n_walkers::Int)
-    omega_i = (1/(n_walkers+1))*(n_walkers/(n_walkers+1)).^iters
-    return omega_i
+    ω_i = (1/(n_walkers+1))*(n_walkers/(n_walkers+1)).^iters
+    return ω_i
 end
 
 """
@@ -55,16 +55,16 @@ where \$\\omega_i\$ is the \$i\$-th \$\\omega\$ factor, \$E_i\$ is the \$i\$-th 
 
 # Arguments
 - `β::Float64`: The inverse temperature.
-- `omega_i::Vector{Float64}`: The \$\\omega\$ factors.
-- `ei::Vector{Float64}`: The energies.
+- `ωi::Vector{Float64}`: The \$\\omega\$ factors.
+- `Ei::Vector{Float64}`: The energies.
 
 # Returns
 - The partition function.
 """
 function partition_function(β::Float64, 
-                            omega_i::Vector{Float64}, 
-                            ei::Vector{Float64})
-    z = sum(omega_i.*exp.(-ei.*β))
+                            ωi::Vector{Float64}, 
+                            Ei::Vector{Float64})
+    z = sum(ωi.*exp.(-Ei.*β))
     return z
 end
 
@@ -80,16 +80,16 @@ where \$\\omega_i\$ is the \$i\$-th \$\\omega\$ factor, \$E_i\$ is the \$i\$-th 
 
 # Arguments
 - `β::Float64`: The inverse temperature.
-- `omega_i::Vector{Float64}`: The \$\\omega\$ factors.
-- `ei::Vector{Float64}`: The energies.
+- `ωi::Vector{Float64}`: The \$\\omega\$ factors.
+- `Ei::Vector{Float64}`: The energies in eV.
 
 # Returns
 - The internal energy.
 """
 function internal_energy(β::Float64, 
-                         omega_i::Vector{Float64}, 
-                         ei::Vector{Float64})
-    u = sum(omega_i.*ei.*exp.(-ei.*β))/sum(omega_i.*exp.(-ei.*β))
+                         ωi::Vector{Float64}, 
+                         Ei::Vector{Float64})
+    u = sum(ωi.*Ei.*exp.(-Ei.*β))/sum(ωi.*exp.(-Ei.*β))
     return u
 end
 
@@ -106,21 +106,21 @@ where \$dof\$ is the degrees of freedom, \$k_B\$ is the Boltzmann constant (in u
 
 # Arguments
 - `β::Float64`: The inverse temperature.
-- `omega_i::Vector{Float64}`: The \$\\omega\$ factors.
-- `ei::Vector{Float64}`: The energies.
+- `ωi::Vector{Float64}`: The \$\\omega\$ factors.
+- `Ei::Vector{Float64}`: The energies in eV.
 - `dof::Int`: The degrees of freedom.
 
 # Returns
 - The constant-volume heat capacity.
 """
 function cv(β::Float64, 
-            omega_i::Vector{Float64}, 
-            ei::Vector{Float64},
+            ωi::Vector{Float64}, 
+            Ei::Vector{Float64},
             dof::Int)
-    z = partition_function(β, omega_i, ei)
-    u = internal_energy(β, omega_i, ei)
+    z = partition_function(β, ωi, Ei)
+    u = internal_energy(β, ωi, Ei)
     kb = 8.617333262e-5 # eV/K
-    cv = dof*kb/2.0 + kb*β^2 * (sum(omega_i.*ei.^2 .*exp.(-ei.*β))/z - u^2)
+    cv = dof*kb/2.0 + kb*β^2 * (sum(ωi.*Ei.^2 .*exp.(-Ei.*β))/z - u^2)
     return cv
 end
 
@@ -145,9 +145,9 @@ where \$dof\$ is the degrees of freedom, \$k_B\$ is the Boltzmann constant (in u
 - A vector of constant-volume heat capacities.
 """
 function cv(df::DataFrame, βs::Vector{Float64}, dof::Int, n_walkers::Int)
-    gi = ωᵢ(df.iter, n_walkers)
-    ei = df.emax .- minimum(df.emax)
-    cvs = [cv(b, gi, ei, dof) for b in βs]
+    ωi = ωᵢ(df.iter, n_walkers)
+    Ei = df.emax .- minimum(df.emax)
+    cvs = [cv(b, ωi, Ei, dof) for b in βs]
     return cvs
 end
 

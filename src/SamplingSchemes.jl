@@ -284,7 +284,7 @@ function nested_sampling_loop!(liveset::AtomWalkers,
         iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
         @debug "n_step $i, iter: $iter, emax: $emax"
         if ns_params.fail_count >= ns_params.allowed_fail_count
-            @warn "Failed to accept MC move 10 times in a row. Reset step size!"
+            @warn "Failed to accept MC move $(ns_params.allowed_fail_count) times in a row. Reset step size!"
             ns_params.fail_count = 0
             ns_params.step_size = ns_params.initial_step_size
         end
@@ -323,7 +323,7 @@ function nested_sampling_loop!(liveset::AtomWalkers,
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
         iter, emax, liveset, mc_routine.ns_params_main = nested_sampling_step!(liveset, mc_routine.ns_params_main, mc_routine.main_routine)
         if mc_routine.ns_params_main.fail_count >= mc_routine.ns_params_main.allowed_fail_count
-            @warn "Failed to accept $(mc_routine.main_routine) move 10 times in a row. Switching to back up routine $(mc_routine.back_up_routine)!"
+            @warn "Failed to accept $(mc_routine.main_routine) move $(mc_routine.ns_params_main.allowed_fail_count) times in a row. Switching to back up routine $(mc_routine.back_up_routine)!"
             mc_routine.ns_params_main.fail_count = 0
             iter, emax, liveset, mc_routine.ns_params_back_up = nested_sampling_step!(liveset, mc_routine.ns_params_back_up, mc_routine.back_up_routine)
         end

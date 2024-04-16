@@ -19,4 +19,4 @@ cvs = cv(df, beta, dof, 640)
 
 using Plots
 
-plot(ts, cvs, label="Cv-FreeBird", xlabel="T(K)", ylabel="Heat Capacity", title="LJ(111) 4x4 θ=8/16")
+plot(ts, cvs, label="\$C_V\$", xlabel="\$T(K)\$", ylabel="Heat Capacity", title="LJ(111) 4x4 θ=8/16")

@@ -44,7 +44,7 @@ function ωᵢ(iters::Vector{Int}, n_walkers::Int)
 end
 
 """
-    partition_function(β::Float64, omega_i::Vector{Float64}, ei::Vector{Float64})
+    partition_function(β::Float64, ωi::Vector{Float64}, Ei::Vector{Float64})
 
 Calculates the partition function for the given \$\\beta\$, \$\\omega\$ factors, and energies.
 The partition function is defined as:
@@ -69,7 +69,7 @@ function partition_function(β::Float64,
 end
 
 """
-    internal_energy(β::Float64, omega_i::Vector{Float64}, ei::Vector{Float64})
+    internal_energy(β::Float64, ωi::Vector{Float64}, ei::Vector{Float64})
 
 Calculates the internal energy from the partition function for the given \$\\beta\$, \$\\omega\$ factors, and energies.
 The internal energy is defined as:
@@ -94,7 +94,7 @@ function internal_energy(β::Float64,
 end
 
 """
-    cv(β::Float64, omega_i::Vector{Float64}, ei::Vector{Float64}, dof::Int)
+    cv(β::Float64, omega_i::Vector{Float64}, Ei::Vector{Float64}, dof::Int)
 
 Calculates the constant-volume heat capacity at constant volume for the given \$\\beta\$, \$\\omega\$ factors, energies, and degrees of freedom.
 The heat capacity is defined as:

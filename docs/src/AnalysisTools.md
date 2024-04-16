@@ -1,4 +1,4 @@
-# Sampling Schemes
+# Analysis Tools
 
 ## Functions
 ```@autodocs

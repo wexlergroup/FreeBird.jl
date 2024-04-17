@@ -1,6 +1,30 @@
-# Lattice gas
+abstract type LatticeWalkers end
 
-struct Lattice2DSystem
+"""
+    mutable struct Lattice2DSystem
+
+The `Lattice2DSystem` struct represents a 2D lattice system.
+
+# Fields
+- `lattice_type::Symbol`: The type of lattice (e.g., :square, :hexagonal).
+- `dimensions::Tuple{Int64, Int64}`: The dimensions of the lattice (rows x columns for 2D).
+- `num_occ_sites::Int64`: The number of occupied sites.
+- `site_occupancy::Matrix{Bool}`: A matrix to track whether a lattice site is occupied.
+
+# Constructors
+```julia
+Lattice2DSystem(lattice_type::Symbol, site_occupancy::Matrix{Bool})
+```
+Create a new `Lattice2DSystem` with the given lattice type and site occupancy matrix.
+
+```julia
+Lattice2DSystem(lattice_type::Symbol, dims::Tuple{Int64, Int64}, num_occ_sites::Int64)
+```
+Create a new `Lattice2DSystem` with the given lattice type, dimensions, and number of occupied sites.
+
+"""
+
+mutable struct Lattice2DSystem
     lattice_type::Symbol  # Type of lattice (e.g., :square, :hexagonal)
     dimensions::Tuple{Int64, Int64}  # Dimensions of the lattice (rows x columns for 2D)
     num_occ_sites::Int64  # Number of occupied sites
@@ -23,7 +47,23 @@ struct Lattice2DSystem
     end
 end
 
-abstract type LatticeWalkers end
+"""
+    mutable struct Lattice2DWalker
+
+The `Lattice2DWalker` struct represents a walker on a 2D lattice.
+
+# Fields
+- `configuration::Lattice2DSystem`: The configuration of the walker.
+- `energy::typeof(0.0u"eV")`: The energy of the walker.
+- `iter::Int64`: The current iteration number of the walker.
+
+# Constructor
+```julia
+Lattice2DWalker(configuration::Lattice2DSystem; energy=0.0u"eV", iter=0)
+```
+Create a new `Lattice2DWalker` with the given configuration and optional energy and iteration number.
+
+"""
 
 mutable struct Lattice2DWalker
     configuration::Lattice2DSystem
@@ -105,6 +145,20 @@ function interaction_energy(at::Lattice2DSystem, lg::LGHamiltonian)  # TODO: Gen
     return e_nn + e_nnn_interaction
 end
 
+"""
+    assign_energies!(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
+
+Assigns energies to a list of `Lattice2DWalker` objects based on the Hamiltonian parameters.
+
+# Arguments
+- `walkers::Vector{Lattice2DWalker}`: A list of `Lattice2DWalker` objects to assign energies to.
+- `lg::LGHamiltonian`: The Hamiltonian parameters used for energy calculation.
+
+# Returns
+- `walkers::Vector{Lattice2DWalker}`: The updated list of `Lattice2DWalker` objects with assigned energies.
+
+"""
+
 function assign_energies!(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
     for walker in walkers
         e_adsorption = walker.configuration.num_occ_sites * lg.adsorption_energy
@@ -114,6 +168,23 @@ function assign_energies!(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
     end
     return walkers
 end
+
+"""
+    struct Lattice2DWalkers <: LatticeWalkers
+
+The `Lattice2DWalkers` struct contains a list of `Lattice2DWalker` objects and the Hamiltonian parameters
+    that defines the interactions between the particles in the walkers.
+
+# Fields
+- `walkers::Vector{Lattice2DWalker}`: The list of `Lattice2DWalker` objects.
+- `lg::LGHamiltonian`: The Hamiltonian parameters.
+
+# Constructors
+- `Lattice2DWalkers(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)`: Constructs a new `Lattice2DWalkers`
+    object with the given walkers and Hamiltonian parameters. The energies of the walkers are automatically
+    assigned using the Hamiltonian parameters.
+
+"""
 
 struct Lattice2DWalkers <: LatticeWalkers
     walkers::Vector{Lattice2DWalker}
@@ -189,43 +260,4 @@ function compute_internal_energy_versus_temperature(L::Int64, N::Int64, T_min::t
     for (T, U, C) in zip(temperatures, internal_energies, heat_capacity)
         println("$T $U $C")
     end
-end
-
-# Neighbors tests
-
-function test_neighbors()
-    # Test square lattice
-    dims = (4, 4)
-    println("test square lattice")
-    println(sort(neighbors(:square, dims, 1, 1)) == [(1, 2), (1, 4), (2, 1), (4, 1)])  # Test neighbors of corner site
-    println(sort(neighbors(:square, dims, 1, 2)) == [(1, 1), (1, 3), (2, 2), (4, 2)])  # Test neighbors of edge site
-    println(sort(neighbors(:square, dims, 2, 2)) == [(1, 2), (2, 1), (2, 3), (3, 2)])  # Test neighbors of central site
-    println()
-
-    # Test hexagonal lattice
-    dims = (4, 4)
-    println("test hexagonal lattice")
-    println("test corner sites")
-    println(sort(neighbors(:hexagonal, dims, 1, 1)) == [(1, 2), (1, 4), (2, 1), (2, 2), (4, 1), (4, 2)])
-    println(sort(neighbors(:hexagonal, dims, 1, 4)) == [(1, 1), (1, 3), (2, 1), (2, 4), (4, 1), (4, 4)])
-    println(sort(neighbors(:hexagonal, dims, 4, 1)) == [(1, 1), (1, 4), (3, 1), (3, 4), (4, 2), (4, 4)])
-    println(sort(neighbors(:hexagonal, dims, 4, 4)) == [(1, 3), (1, 4), (3, 3), (3, 4), (4, 1), (4, 3)])
-    println()
-
-    println("test edge sites")
-    println(sort(neighbors(:hexagonal, dims, 1, 2)) == [(1, 1), (1, 3), (2, 2), (2, 3), (4, 2), (4, 3)])
-    println(sort(neighbors(:hexagonal, dims, 2, 1)) == [(1, 1), (1, 4), (2, 2), (2, 4), (3, 1), (3, 4)])
-    println(sort(neighbors(:hexagonal, dims, 1, 3)) == [(1, 2), (1, 4), (2, 3), (2, 4), (4, 3), (4, 4)])
-    println(sort(neighbors(:hexagonal, dims, 3, 1)) == [(2, 1), (2, 2), (3, 2), (3, 4), (4, 1), (4, 2)])
-    println(sort(neighbors(:hexagonal, dims, 2, 4)) == [(1, 3), (1, 4), (2, 1), (2, 3), (3, 3), (3, 4)])
-    println(sort(neighbors(:hexagonal, dims, 4, 2)) == [(1, 1), (1, 2), (3, 1), (3, 2), (4, 1), (4, 3)])
-    println(sort(neighbors(:hexagonal, dims, 3, 4)) == [(2, 1), (2, 4), (3, 1), (3, 3), (4, 1), (4, 4)])
-    println(sort(neighbors(:hexagonal, dims, 4, 3)) == [(1, 2), (1, 3), (3, 2), (3, 3), (4, 2), (4, 4)])
-    println()
-
-    println("test central sites")
-    println(sort(neighbors(:hexagonal, dims, 2, 2)) == [(1, 1), (1, 2), (2, 1), (2, 3), (3, 1), (3, 2)])
-    println(sort(neighbors(:hexagonal, dims, 3, 3)) == [(2, 3), (2, 4), (3, 2), (3, 4), (4, 3), (4, 4)])
-    println(sort(neighbors(:hexagonal, dims, 2, 3)) == [(1, 2), (1, 3), (2, 2), (2, 4), (3, 2), (3, 3)])
-    println(sort(neighbors(:hexagonal, dims, 3, 2)) == [(2, 2), (2, 3), (3, 1), (3, 3), (4, 2), (4, 3)])
 end

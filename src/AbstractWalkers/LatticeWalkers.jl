@@ -74,12 +74,6 @@ mutable struct Lattice2DWalker
     end
 end
 
-struct LGHamiltonian
-    adsorption_energy::typeof(1.0u"eV")
-    nn_interaction_energy::typeof(1.0u"eV")
-    nnn_interaction_energy::typeof(1.0u"eV")
-end
-
 function neighbors(lattice_type::Symbol, dims::Tuple{Int64, Int64}, i::Int64, j::Int64)
     if lattice_type == :square
         return [(mod(i + dx - 1, dims[1]) + 1, mod(j + dy - 1, dims[2]) + 1) 

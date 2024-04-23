@@ -9,6 +9,7 @@ using Random
 using Combinatorics
 using ..Potentials
 using ..EnergyEval
+using ..Hamiltonians
 
 export AtomWalker, AtomWalkers, LJAtomWalkers
 export LatticeWalkers, Lattice2DWalker, Lattice2DWalkers

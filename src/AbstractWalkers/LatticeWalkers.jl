@@ -189,39 +189,22 @@ struct Lattice2DWalkers <: LatticeWalkers
     end
 end
 
-# Lattice gas tests
+function exact_enumeration(L::Int64, M::Int64, N::Int64, lattice_type::Symbol, lg::LGHamiltonian)
+    # Generate a list of all sites
+    sites = [(i, j) for i in 1:L for j in 1:M]
 
-function test_lattice2d_system()
-    # Create four 4x4 square lattices with 10 occupied sites
-    lattices = [Lattice2DSystem(:square, (4, 4), 10) for i in 1:4] 
-
-    # Create a Lattice2DWalkers object with the lattices and a Hamiltonian
-    lg = LGHamiltonian(1.0u"eV", 1.0u"eV", 1.0u"eV")
-    walkers = [Lattice2DWalker(lattice) for lattice in lattices]
-    lg_walkers = Lattice2DWalkers(walkers, lg)
-    return lg_walkers
-end
-
-# Enumerate all possible configurations of an LxL square lattice with N occupied sites
-
-function enumerate_lattice_configs(L::Int64, N::Int64, lattice_type::Symbol=:square)  # TODO: Throw error if N is odd for hexagonal lattice
-    # Generate a list of all grid points
-    grid_points = [(i, j) for i in 1:L for j in 1:L]
-
-    # Generate all combinations of N points from the grid
-    all_configs = collect(combinations(grid_points, N))
+    # Generate all combinations of N sites
+    all_configs = collect(combinations(sites, N))
 
     # Convert each configuration to a site occupancy matrix
-    all_configs = [reshape([in((i, j), config) for i in 1:L, j in 1:L], L, L) for config in all_configs]
-    
+    all_configs = [reshape([in((i, j), config) for i in 1:L, j in 1:M], L, M) for config in all_configs]
+
     # Generate Lattice2DSystem objects for each configuration
     lattices = [Lattice2DSystem(lattice_type, config) for config in all_configs]
 
     # Compute the energy of each configuration
-    if lattice_type == :square
-        lg = LGHamiltonian(-0.04136319965u"eV", -0.01034079991u"eV", -(15 / 64) * 0.01034079991u"eV")
-    else  # Hexagonal lattice
-        lg = LGHamiltonian(-0.03102239974u"eV", -0.01034079991u"eV", 0.0u"eV")
+    if lattice_type == :hexagonal && lg.nnn_interaction_energy != 0.0u"eV"
+        error("Next-nearest-neighbor interaction energy not implemented for hexagonal lattice")
     end
     walkers = [Lattice2DWalker(lattice) for lattice in lattices]
     lg_walkers = Lattice2DWalkers(walkers, lg)
@@ -234,7 +217,7 @@ end
 
 function compute_internal_energy_versus_temperature(L::Int64, N::Int64, T_min::typeof(1.0u"K"), T_max::typeof(100.0u"K"), num_points::Int64, lattice_type::Symbol=:square)
     # Generate all possible configurations with 8 occupied sites
-    energies = enumerate_lattice_configs(L, N, lattice_type)
+    energies = exact_enumeration(L, L, N, lattice_type, LGHamiltonian(-0.04136319965u"eV", -0.01034079991u"eV", -(15 / 64) * 0.01034079991u"eV"))
 
     # Compute energy relative to the lowest energy
     minimum_energy = minimum(energies)
@@ -254,4 +237,17 @@ function compute_internal_energy_versus_temperature(L::Int64, N::Int64, T_min::t
     for (T, U, C) in zip(temperatures, internal_energies, heat_capacity)
         println("$T $U $C")
     end
+end
+
+# Lattice gas tests
+
+function test_lattice2d_system()
+    # Create four 4x4 square lattices with 10 occupied sites
+    lattices = [Lattice2DSystem(:square, (4, 4), 10) for i in 1:4] 
+
+    # Create a Lattice2DWalkers object with the lattices and a Hamiltonian
+    lg = LGHamiltonian(1.0u"eV", 1.0u"eV", 1.0u"eV")
+    walkers = [Lattice2DWalker(lattice) for lattice in lattices]
+    lg_walkers = Lattice2DWalkers(walkers, lg)
+    return lg_walkers
 end

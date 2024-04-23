@@ -4,6 +4,9 @@ using Reexport
 
 @reexport using Unitful
 
+include("Hamiltonians.jl")
+@reexport using .Hamiltonians
+
 include("Potentials.jl")
 @reexport using .Potentials
 

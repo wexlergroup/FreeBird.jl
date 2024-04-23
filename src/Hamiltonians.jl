@@ -24,3 +24,5 @@ struct LGHamiltonian
     nn_interaction_energy::typeof(1.0u"eV")
     nnn_interaction_energy::typeof(1.0u"eV")
 end
+
+end # module Hamiltonians

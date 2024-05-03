@@ -24,7 +24,7 @@ end
     ωᵢ(iters::Vector{Int}, n_walkers::Int)
 
 Calculates the \$\\omega\$ factors for the given number of iterations and walkers.
-The \$\\omega\$ factors account for the fractions of parameter-space volume sampled during
+The \$\\omega\$ factors account for the fractions of phase-space volume sampled during
 each nested sampling iteration, defined as:
 ```math
 \\omega_i = \\frac{1}{N+1} \\left(\\frac{N}{N+1}\\right)^i
@@ -96,19 +96,19 @@ end
 """
     cv(β::Float64, omega_i::Vector{Float64}, Ei::Vector{Float64}, dof::Int)
 
-Calculates the constant-volume heat capacity at constant volume for the given \$\\beta\$, \$\\omega\$ factors, energies, and degrees of freedom.
+Calculates the constant-volume heat capacity for the given \$\\beta\$, \$\\omega\$ factors, energies, and degrees of freedom.
 The heat capacity is defined as:
 ```math
-C_V(\\beta) = \\frac{dof \\cdot k_B}{2} + k_B \\beta^2 \\left(\\frac{\\sum_i \\omega_i E_i^2 \\exp(-E_i \\beta)}{Z(\\beta)} - U(\\beta)^2\\right)
+C_V(\\beta) = \\frac{\\mathrm{dof} \\cdot k_B}{2} + k_B \\beta^2 \\left(\\frac{\\sum_i \\omega_i E_i^2 \\exp(-E_i \\beta)}{Z(\\beta)} - U(\\beta)^2\\right)
 ```
-where \$dof\$ is the degrees of freedom, \$k_B\$ is the Boltzmann constant (in units of eV/K), \$\\beta\$ is the inverse temperature, 
+where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann constant (in units of eV/K), \$\\beta\$ is the inverse temperature, 
 \$\\omega_i\$ is the \$i\$-th \$\\omega\$ factor, \$E_i\$ is the \$i\$-th energy, \$Z(\\beta)\$ is the partition function, and \$U(\\beta)\$ is the internal energy.
 
 # Arguments
 - `β::Float64`: The inverse temperature.
 - `ωi::Vector{Float64}`: The \$\\omega\$ factors.
 - `Ei::Vector{Float64}`: The energies in eV.
-- `dof::Int`: The degrees of freedom.
+- `dof::Int`: The degrees of freedom, equals to the number of dimensions times the number of particles.
 
 # Returns
 - The constant-volume heat capacity.
@@ -130,15 +130,15 @@ end
 Calculates the constant-volume heat capacity at constant volume for the given DataFrame, inverse temperatures, degrees of freedom, and number of walkers.
 The heat capacity is defined as:
 ```math
-C_V(\\beta) = \\frac{dof \\cdot k_B}{2} + k_B \\beta^2 \\left(\\frac{\\sum_i \\omega_i E_i^2 \\exp(-E_i \\beta)}{Z(\\beta)} - U(\\beta)^2\\right)
+C_V(\\beta) = \\frac{\\mathrm{dof} \\cdot k_B}{2} + k_B \\beta^2 \\left(\\frac{\\sum_i \\omega_i E_i^2 \\exp(-E_i \\beta)}{Z(\\beta)} - U(\\beta)^2\\right)
 ```
-where \$dof\$ is the degrees of freedom, \$k_B\$ is the Boltzmann constant (in units of eV/K), \$\\beta\$ is the inverse temperature,
+where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann constant (in units of eV/K), \$\\beta\$ is the inverse temperature,
 \$\\omega_i\$ is the \$i\$-th \$\\omega\$ factor, \$E_i\$ is the \$i\$-th energy, \$Z(\\beta)\$ is the partition function, and \$U(\\beta)\$ is the internal energy.
 
 # Arguments
 - `df::DataFrame`: The DataFrame containing the output data.
 - `βs::Vector{Float64}`: The inverse temperatures.
-- `dof::Int`: The degrees of freedom.
+- `dof::Int`: The degrees of freedom, equals to the number of dimensions times the number of particles.
 - `n_walkers::Int`: The number of walkers.
 
 # Returns

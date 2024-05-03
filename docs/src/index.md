@@ -9,7 +9,7 @@ FreeBird.jl is a [Julia](http://julialang.org) package. Install `Julia` first fo
 Once Julia is installed, you can install the `FreeBird` package from the Julia REPL with:
 
 ```julia-repl
-julia> ] # press the "]" key on your keyboard to enter the Pkg manger
+julia> ] # press the "]" key on your keyboard to enter the Pkg manager
 
 pkg> add https://github.com/wexlergroup/FreeBird.jl#branch_name
 ```

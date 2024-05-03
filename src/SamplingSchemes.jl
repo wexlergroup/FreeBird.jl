@@ -14,7 +14,7 @@ using ..FreeBirdIO
 export NestedSamplingParameters
 export sort_by_energy!, nested_sampling_step!
 export nested_sampling_loop!
-export MCRoutine, MCRandomWalk, MCDemonWalk, MixedMCRoutine
+export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCDemonWalk, MixedMCRoutine
 
 abstract type SamplingParameters end
 
@@ -27,13 +27,19 @@ The `NestedSamplingParameters` struct represents the parameters used in the nest
 # Fields
 - `mc_steps::Int64`: The number of total Monte Carlo moves to perform.
 - `step_size::Float64`: The step size used in the sampling process.
+- `step_size_lo::Float64`: The lower bound of the step size.
+- `step_size_up::Float64`: The upper bound of the step size.
 - `fail_count::Int64`: The number of failed MC moves in a row. Used to terminate the sampling process if it exceeds a certain threshold.
 
 """
 mutable struct NestedSamplingParameters <: SamplingParameters
     mc_steps::Int64
+    initial_step_size::Float64
     step_size::Float64
+    step_size_lo::Float64
+    step_size_up::Float64
     fail_count::Int64
+    allowed_fail_count::Int64
 end
 
 
@@ -46,10 +52,16 @@ An abstract type representing a Monte Carlo routine.
 abstract type MCRoutine end
 
 """
-    struct MCRandomWalk <: MCRoutine
-A type representing a Monte Carlo random walk sampling scheme.
+    struct MCRandomWalkMaxE <: MCRoutine
+A type representing a Monte Carlo random walk sampling scheme where the highest-energy walker is used for the walk.
 """
-struct MCRandomWalk <: MCRoutine end
+struct MCRandomWalkMaxE <: MCRoutine end
+
+"""
+    struct MCRandomWalkClone <: MCRoutine
+A type representing a Monte Carlo random walk sampling scheme where a random walker is used for the walk.
+"""
+struct MCRandomWalkClone <: MCRoutine end
 
 """
     MCDemonWalk <: MCRoutine
@@ -85,8 +97,8 @@ A mutable struct representing a mixed Monte Carlo routine, where the main routin
 @kwdef mutable struct MixedMCRoutine <: MCRoutine
     main_routine::MCRoutine=MCRandomWalk()
     back_up_routine::MCRoutine=MCDemonWalk()
-    ns_params_main::NestedSamplingParameters=NestedSamplingParameters(1000, 0.1, 0)
-    ns_params_back_up::NestedSamplingParameters=NestedSamplingParameters(10000, 0.01, 0)
+    ns_params_main::NestedSamplingParameters=NestedSamplingParameters(1000, 0.1, 0.1, 1e-6, 0.1, 0, 10)
+    ns_params_back_up::NestedSamplingParameters=NestedSamplingParameters(10000, 0.01, 0.01, 1e-6, .01, 0, 10)
 end
 
 
@@ -141,15 +153,21 @@ Returns
 - `liveset`: The updated set of atom walkers.
 - `ns_params`: The updated nested sampling parameters.
 """
-function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRandomWalk)
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.lj_potential
     iter::Union{Missing,Int} = missing
     emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
-    to_walk = ats[1]
+    if mc_routine isa MCRandomWalkMaxE
+        to_walk = deepcopy(ats[1])
+    elseif mc_routine isa MCRandomWalkClone
+        to_walk = deepcopy(rand(ats[2:end]))
+    else
+        error("Unsupported MCRoutine type: $mc_routine")
+    end
     accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
-    @info "acceptance rate: $rate, emax: $emax, is_accepted: $accept, step_size: $(ns_params.step_size)"
+    @info "iter: $(liveset.walkers[1].iter), acceptance rate: $rate, emax: $emax, is_accepted: $accept, step_size: $(ns_params.step_size)"
     if accept
         push!(ats, at)
         popfirst!(ats)
@@ -220,15 +238,16 @@ Adjusts the step size of the nested sampling algorithm based on the acceptance r
 # Arguments
 - `ns_params::NestedSamplingParameters`: The parameters of the nested sampling algorithm.
 - `rate::Float64`: The acceptance rate of the algorithm.
+- `range::Tuple{Float64, Float64}`: The range of acceptance rates for adjusting the step size. Default is (0.25, 0.75).
 
 # Returns
 - `ns_params::NestedSamplingParameters`: The updated parameters with adjusted step size.
 """
-function adjust_step_size(ns_params::NestedSamplingParameters, rate::Float64)
-    if rate > 0.75
-        ns_params.step_size *= 1.01
-    elseif rate < 0.25
-        ns_params.step_size *= 0.99
+function adjust_step_size(ns_params::NestedSamplingParameters, rate::Float64; range::Tuple{Float64, Float64}=(0.25, 0.75))
+    if rate > range[2] && ns_params.step_size < ns_params.step_size_up
+        ns_params.step_size *= 1.05
+    elseif rate < range[1] && ns_params.step_size > ns_params.step_size_lo
+        ns_params.step_size *= 0.95
     end
     return ns_params
 end
@@ -254,18 +273,26 @@ Perform a nested sampling loop for a given number of steps.
 - `liveset`: The updated set of walkers.
 - `ns_params`: The updated nested sampling parameters.
 """
-function nested_sampling_loop!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, n_steps::Int64, mc_routine::MCRoutine; args...)
-    df = DataFrame(iter=Int[], emax=typeof(0.0u"eV")[])
+function nested_sampling_loop!(liveset::AtomWalkers, 
+                                ns_params::NestedSamplingParameters, 
+                                n_steps::Int64, 
+                                mc_routine::MCRoutine,
+                                save_strategy::DataSavingStrategy)
+    df = DataFrame(iter=Int[], emax=Float64[])
     for i in 1:n_steps
+        write_walker_every_n(liveset.walkers[1], i, save_strategy)
         iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
-        if ns_params.fail_count >= 10
-            @warn "Failed to accept MC move 10 times in a row. Break!"
+        @debug "n_step $i, iter: $iter, emax: $emax"
+        if ns_params.fail_count >= ns_params.allowed_fail_count
+            @warn "Failed to accept MC move $(ns_params.allowed_fail_count) times in a row. Reset step size!"
             ns_params.fail_count = 0
-            break
+            ns_params.step_size = ns_params.initial_step_size
         end
         if !(iter isa typeof(missing))
-            push!(df, (iter, emax))
+            push!(df, (iter, emax.val))
         end
+        write_df_every_n(df, i, save_strategy)
+        write_ls_every_n(liveset, i, save_strategy)
     end
     return df, liveset, ns_params
 end
@@ -291,18 +318,20 @@ function nested_sampling_loop!(liveset::AtomWalkers,
                                 n_steps::Int64, 
                                 mc_routine::MixedMCRoutine,
                                 save_strategy::DataSavingStrategy)
-    df = DataFrame(iter=Int[], emax=typeof(0.0u"eV")[])
+    df = DataFrame(iter=Int[], emax=Float64[])
     for i in 1:n_steps
+        write_walker_every_n(liveset.walkers[1], i, save_strategy)
         iter, emax, liveset, mc_routine.ns_params_main = nested_sampling_step!(liveset, mc_routine.ns_params_main, mc_routine.main_routine)
-        if mc_routine.ns_params_main.fail_count >= 10
-            @warn "Failed to accept $(mc_routine.main_routine) move 10 times in a row. Switching to back up routine $(mc_routine.back_up_routine)!"
+        if mc_routine.ns_params_main.fail_count >= mc_routine.ns_params_main.allowed_fail_count
+            @warn "Failed to accept $(mc_routine.main_routine) move $(mc_routine.ns_params_main.allowed_fail_count) times in a row. Switching to back up routine $(mc_routine.back_up_routine)!"
             mc_routine.ns_params_main.fail_count = 0
             iter, emax, liveset, mc_routine.ns_params_back_up = nested_sampling_step!(liveset, mc_routine.ns_params_back_up, mc_routine.back_up_routine)
         end
         if !(iter isa typeof(missing))
-            push!(df, (iter, emax))
+            push!(df, (iter, emax.val))
         end
         write_df_every_n(df, i, save_strategy)
+        write_ls_every_n(liveset, i, save_strategy)
     end
     return df, liveset, mc_routine.ns_params_main
 end

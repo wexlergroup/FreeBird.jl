@@ -113,10 +113,10 @@ where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann cons
 # Returns
 - The constant-volume heat capacity.
 """
-function cv(β::Float64, 
+function cv(β::Float64,
             ωi::Vector{Float64}, 
             Ei::Vector{Float64},
-            dof::Int)
+            dof::Int64)
     z = partition_function(β, ωi, Ei)
     u = internal_energy(β, ωi, Ei)
     kb = 8.617333262e-5 # eV/K

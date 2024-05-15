@@ -37,10 +37,11 @@ mutable struct Lattice2DSystem
         return new(lattice_type, dims, num_occ_sites, site_occupancy)
     end
 
-    # Constructor to initialize with dimensions and random site occupancy
-    function Lattice2DSystem(lattice_type::Symbol, dims::Tuple{Int64, Int64}, num_occ_sites::Int64)
+    # Constructor to initialize with dimensions, number of occupied sites, and random seed
+    function Lattice2DSystem(lattice_type::Symbol, dims::Tuple{Int64, Int64}, num_occ_sites::Int64, seed::Int64)
         total_sites = prod(dims)  # Total number of sites
         occupancy = vcat(fill(true, num_occ_sites), fill(false, total_sites - num_occ_sites))  # Initialize occupancy array
+        Random.seed!(seed)  # Set the random seed
         shuffle!(occupancy)  # Shuffle to randomize occupied sites
         site_occupancy = reshape(occupancy, dims)  # Reshape back to matrix form
         return new(lattice_type, dims, num_occ_sites, site_occupancy)
@@ -209,10 +210,11 @@ function exact_enumeration(L::Int64, M::Int64, N::Int64, lattice_type::Symbol, l
     walkers = [Lattice2DWalker(lattice) for lattice in lattices]
     lg_walkers = Lattice2DWalkers(walkers, lg)
 
-    # Generate a list of energies
+    # Generate a list of energies and configurations
     energies = [walker.energy for walker in lg_walkers.walkers]
+    configurations = [walker.configuration for walker in lg_walkers.walkers]
 
-    return energies
+    return energies, configurations
 end
 
 function compute_internal_energy_versus_temperature(L::Int64, N::Int64, T_min::typeof(1.0u"K"), T_max::typeof(100.0u"K"), num_points::Int64, lattice_type::Symbol=:square)

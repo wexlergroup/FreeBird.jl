@@ -75,7 +75,7 @@ mutable struct Lattice2DWalker
     end
 end
 
-function neighbors(lattice_type::Symbol, dims::Tuple{Int64, Int64}, i::Int64, j::Int64)
+function nearest_neighbors(lattice_type::Symbol, dims::Tuple{Int64, Int64}, i::Int64, j::Int64)
     if lattice_type == :square
         return [(mod(i + dx - 1, dims[1]) + 1, mod(j + dy - 1, dims[2]) + 1) 
                 for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)]]
@@ -85,8 +85,19 @@ function neighbors(lattice_type::Symbol, dims::Tuple{Int64, Int64}, i::Int64, j:
         offsets = iseven(i) ? even_row_neighbors : odd_row_neighbors
         return [(mod(i + dx - 1, dims[1]) + 1, mod(j + dy - 1, dims[2]) + 1) for (dx, dy) in offsets]
     else
-        # TODO: Implement other lattice types
-        error("Invalid lattice type")
+        error("Lattice type not implemented")
+    end
+end
+
+function next_nearest_neighbors(lattice_type::Symbol, dims::Tuple{Int64, Int64}, i::Int64, j::Int64)
+    if lattice_type == :square
+        return [(mod(i + dx - 1, dims[1]) + 1, mod(j + dy - 1, dims[2]) + 1)
+                for (dx, dy) in [(1, 1), (1, -1), (-1, 1), (-1, -1)]]
+    elseif lattice_type == :hexagonal
+        # TODO: Implement hexagonal lattice next-nearest-neighbor interaction
+        error("Hexagonal lattice next-nearest-neighbor interaction not implemented yet")
+    else
+        error("Lattice type not implemented")
     end
 end
 
@@ -103,7 +114,7 @@ function interaction_energy(at::Lattice2DSystem, lg::LGHamiltonian)  # TODO: Gen
     for i in 1:at.dimensions[1]
         for j in 1:at.dimensions[2]
             if at.site_occupancy[i, j]
-                for (i2, j2) in neighbors(at.lattice_type, at.dimensions, i, j)
+                for (i2, j2) in nearest_neighbors(at.lattice_type, at.dimensions, i, j)
                     e_nn += at.site_occupancy[i2, j2] ? lg.nn_interaction_energy / 2 : 0.0u"eV"
                 end
             end
@@ -125,14 +136,8 @@ function interaction_energy(at::Lattice2DSystem, lg::LGHamiltonian)  # TODO: Gen
     for i in 1:at.dimensions[1]
         for j in 1:at.dimensions[2]
             if at.site_occupancy[i, j]
-                for (dx, dy) in [(1, 1), (1, -1), (-1, 1), (-1, -1)]
-                    i2 = i + dx
-                    j2 = j + dy
-                    if 1 <= i2 <= at.dimensions[1] && 1 <= j2 <= at.dimensions[2]
-                        if at.site_occupancy[i2, j2]
-                            e_nnn_interaction += lg.nnn_interaction_energy / 2
-                        end
-                    end
+                for (i2, j2) in next_nearest_neighbors(at.lattice_type, at.dimensions, i, j)
+                    e_nnn_interaction += at.site_occupancy[i2, j2] ? lg.nnn_interaction_energy / 2 : 0.0u"eV"
                 end
             end
         end

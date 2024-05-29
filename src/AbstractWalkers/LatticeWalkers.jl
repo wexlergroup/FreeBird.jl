@@ -188,29 +188,29 @@ function interaction_energy(at::LatticeSystem, adsorption_energy::Float64, nn_en
     return e_interaction
 end
 
-"""
-    assign_energies!(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
+# """
+#     assign_energies!(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
 
-Assigns energies to a list of `Lattice2DWalker` objects based on the Hamiltonian parameters.
+# Assigns energies to a list of `Lattice2DWalker` objects based on the Hamiltonian parameters.
 
-# Arguments
-- `walkers::Vector{Lattice2DWalker}`: A list of `Lattice2DWalker` objects to assign energies to.
-- `lg::LGHamiltonian`: The Hamiltonian parameters used for energy calculation.
+# # Arguments
+# - `walkers::Vector{Lattice2DWalker}`: A list of `Lattice2DWalker` objects to assign energies to.
+# - `lg::LGHamiltonian`: The Hamiltonian parameters used for energy calculation.
 
-# Returns
-- `walkers::Vector{Lattice2DWalker}`: The updated list of `Lattice2DWalker` objects with assigned energies.
+# # Returns
+# - `walkers::Vector{Lattice2DWalker}`: The updated list of `Lattice2DWalker` objects with assigned energies.
 
-"""
+# """
 
-function assign_energies!(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
-    for walker in walkers
-        e_adsorption = walker.configuration.num_occ_sites * lg.adsorption_energy
-        e_interaction = interaction_energy(walker.configuration, lg)  # nearest-neighbor and next-nearest-neighbor interactions
-        e_total = e_adsorption + e_interaction
-        walker.energy = e_total
-    end
-    return walkers
-end
+# function assign_energies!(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
+#     for walker in walkers
+#         e_adsorption = walker.configuration.num_occ_sites * lg.adsorption_energy
+#         e_interaction = interaction_energy(walker.configuration, lg)  # nearest-neighbor and next-nearest-neighbor interactions
+#         e_total = e_adsorption + e_interaction
+#         walker.energy = e_total
+#     end
+#     return walkers
+# end
 
 """
     struct Lattice2DWalkers <: LatticeWalkers

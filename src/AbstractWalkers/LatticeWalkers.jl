@@ -1,6 +1,66 @@
 abstract type LatticeWalkers end
 
 """
+    compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, positions::Matrix{Float64}, cutoff_radii::Tuple{Float64, Float64})
+
+Compute the nearest and next-nearest neighbors for each atom in a 2D lattice.
+
+# Arguments
+- `supercell_lattice_vectors::Matrix{Float64}`: The lattice vectors of the supercell.
+- `positions::Matrix{Float64}`: The positions of the atoms in the supercell.
+- `cutoff_radii::Tuple{Float64, Float64}`: The cutoff radii for the first and second nearest neighbors.
+
+# Returns
+- `neighbors::Vector{Tuple{Vector{Int}, Vector{Int}}}`: A vector of tuples containing the indices of the first and second nearest neighbors for each atom.
+
+"""
+
+function compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, positions::Matrix{Float64}, cutoff_radii::Tuple{Float64, Float64})
+    neighbors = Vector{Tuple{Vector{Int}, Vector{Int}}}(undef, size(positions, 1))
+    num_atoms = size(positions, 1)
+    
+    # Compute reciprocal lattice vectors for minimum image convention
+    a1 = supercell_lattice_vectors[:, 1]
+    a2 = supercell_lattice_vectors[:, 2]
+    reciprocal_lattice_vectors = inv([a1 a2])
+
+    first_nearest_distance = cutoff_radii[1]
+    second_nearest_distance = cutoff_radii[2]
+
+    for i in 1:num_atoms
+        first_neighbors = Int[]
+        second_neighbors = Int[]
+        pos_i = positions[i, :]
+        
+        for j in 1:num_atoms
+            if i != j
+                pos_j = positions[j, :]
+                dx = pos_j[1] - pos_i[1]
+                dy = pos_j[2] - pos_i[2]
+
+                # Apply minimum image convention using reciprocal lattice vectors
+                dr = [dx, dy]
+                fractional_dr = reciprocal_lattice_vectors * dr
+                fractional_dr .= fractional_dr .- round.(fractional_dr)
+                dr = supercell_lattice_vectors * fractional_dr
+
+                distance = norm(dr)
+                
+                if distance <= first_nearest_distance
+                    push!(first_neighbors, j)
+                elseif distance <= second_nearest_distance
+                    push!(second_neighbors, j)
+                end
+            end
+        end
+        
+        neighbors[i] = (first_neighbors, second_neighbors)
+    end
+    
+    return neighbors
+end
+
+"""
     mutable struct Lattice2DSystem
 
 The `Lattice2DSystem` struct represents a 2D lattice system.

@@ -145,32 +145,6 @@ mutable struct LatticeWalker
     end
 end
 
-function nearest_neighbors(lattice_type::Symbol, dims::Tuple{Int64, Int64}, i::Int64, j::Int64)
-    if lattice_type == :square
-        return [(mod(i + dx - 1, dims[1]) + 1, mod(j + dy - 1, dims[2]) + 1) 
-                for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)]]
-    elseif lattice_type == :hexagonal
-        even_row_neighbors = [(0, -1), (0, 1), (-1, -1), (-1, 0), (1, -1), (1, 0)]
-        odd_row_neighbors = [(0, -1), (0, 1), (-1, 0), (-1, 1), (1, 0), (1, 1)]
-        offsets = iseven(i) ? even_row_neighbors : odd_row_neighbors
-        return [(mod(i + dx - 1, dims[1]) + 1, mod(j + dy - 1, dims[2]) + 1) for (dx, dy) in offsets]
-    else
-        error("Lattice type not implemented")
-    end
-end
-
-function next_nearest_neighbors(lattice_type::Symbol, dims::Tuple{Int64, Int64}, i::Int64, j::Int64)
-    if lattice_type == :square
-        return [(mod(i + dx - 1, dims[1]) + 1, mod(j + dy - 1, dims[2]) + 1)
-                for (dx, dy) in [(1, 1), (1, -1), (-1, 1), (-1, -1)]]
-    elseif lattice_type == :hexagonal
-        # TODO: Implement hexagonal lattice next-nearest-neighbor interaction
-        error("Hexagonal lattice next-nearest-neighbor interaction not implemented yet")
-    else
-        error("Lattice type not implemented")
-    end
-end
-
 function interaction_energy(at::Lattice2DSystem, lg::LGHamiltonian)  # TODO: Generalize to arbitrary lattice
     # Nearest-neighbor interaction energy
     e_nn = 0.0u"eV"

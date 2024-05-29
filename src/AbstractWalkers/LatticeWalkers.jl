@@ -275,10 +275,10 @@ function exact_enumeration(primitive_lattice_vectors::Matrix{Float64}, basis::Ve
         push!(all_occupation_vectors, Vector{Bool}(occupations))  # Convert BitVector to Vector{Bool}
     end
 
-    # Generate Lattice2DSystem objects for each configuration
+    # Generate LatticeSystem objects for each configuration
     lattices = [LatticeSystem(primitive_lattice_vectors, basis, supercell_dimensions, occupations, cutoff_radii) for occupations in all_occupation_vectors]
 
-    # Generate Lattice2DWalker objects for each lattice system
+    # Generate LatticeWalker objects for each lattice system
     walkers = [LatticeWalker(lattice) for lattice in lattices]
 
     # Compute energies for each walker

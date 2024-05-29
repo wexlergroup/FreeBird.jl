@@ -238,29 +238,58 @@ end
 #     end
 # end
 
-function exact_enumeration(L::Int64, M::Int64, N::Int64, lattice_type::Symbol, lg::LGHamiltonian)
-    # Generate a list of all sites
-    sites = [(i, j) for i in 1:L for j in 1:M]
+"""
+    exact_enumeration(primitive_lattice_vectors::Matrix{Float64}, basis::Vector{Tuple{Float64, Float64}}, supercell_dimensions::Tuple{Int64, Int64}, number_occupied_sites::Int64, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, cutoff_radii::Tuple{Float64, Float64})
 
-    # Generate all combinations of N sites
-    all_configs = collect(combinations(sites, N))
+Enumerate all possible configurations of a lattice system and compute the energy of each configuration.
 
-    # Convert each configuration to a site occupancy matrix
-    all_configs = [reshape([in((i, j), config) for i in 1:L, j in 1:M], L, M) for config in all_configs]
+# Arguments
+- `primitive_lattice_vectors::Matrix{Float64}`: The primitive lattice vectors of the system.
+- `basis::Vector{Tuple{Float64, Float64}}`: The basis of the system.
+- `supercell_dimensions::Tuple{Int64, Int64}`: The dimensions of the supercell.
+- `number_occupied_sites::Int64`: The number of occupied sites in each configuration.
+- `adsorption_energy::Float64`: The adsorption energy of the particles.
+- `nn_energy::Float64`: The nearest-neighbor interaction energy.
+- `nnn_energy::Float64`: The next-nearest-neighbor interaction energy.
+- `cutoff_radii::Tuple{Float64, Float64}`: The cutoff radii for the first and second nearest neighbors.
+
+# Returns
+- `energies::Vector{Float64}`: A vector of the energies of each configuration.
+- `configurations::Vector{Vector{Bool}}`: A vector of the configurations of the lattice system.
+
+"""
+
+function exact_enumeration(primitive_lattice_vectors::Matrix{Float64}, basis::Vector{Tuple{Float64, Float64}}, supercell_dimensions::Tuple{Int64, Int64}, number_occupied_sites::Int64, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, cutoff_radii::Tuple{Float64, Float64})
+    L, M = supercell_dimensions
+    num_basis_sites = length(basis)
+    N = L * M * num_basis_sites
+
+    # Generate all possible occupation configurations
+    all_configs = collect(combinations(1:N, number_occupied_sites))
+
+    # Generate occupation vectors from configurations
+    all_occupation_vectors = Vector{Vector{Bool}}()
+    for config in all_configs
+        occupations = falses(N)
+        occupations[config] .= true
+        push!(all_occupation_vectors, Vector{Bool}(occupations))  # Convert BitVector to Vector{Bool}
+    end
 
     # Generate Lattice2DSystem objects for each configuration
-    lattices = [Lattice2DSystem(lattice_type, config) for config in all_configs]
+    lattices = [LatticeSystem(primitive_lattice_vectors, basis, supercell_dimensions, occupations, cutoff_radii) for occupations in all_occupation_vectors]
 
-    # Compute the energy of each configuration
-    if lattice_type == :hexagonal && lg.nnn_interaction_energy != 0.0u"eV"
-        error("Next-nearest-neighbor interaction energy not implemented for hexagonal lattice")
+    # Generate Lattice2DWalker objects for each lattice system
+    walkers = [LatticeWalker(lattice) for lattice in lattices]
+
+    # Compute energies for each walker
+    for walker in walkers
+        e_interaction = interaction_energy(walker.configuration, adsorption_energy, nn_energy, nnn_energy)
+        walker.energy = e_interaction
     end
-    walkers = [Lattice2DWalker(lattice) for lattice in lattices]
-    lg_walkers = Lattice2DWalkers(walkers, lg)
 
-    # Generate a list of energies and configurations
-    energies = [walker.energy for walker in lg_walkers.walkers]
-    configurations = [walker.configuration for walker in lg_walkers.walkers]
+    # Extract energies and configurations
+    energies = [walker.energy for walker in walkers]
+    configurations = [walker.configuration for walker in walkers]
 
     return energies, configurations
 end

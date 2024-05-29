@@ -119,28 +119,28 @@ mutable struct LatticeSystem
 end
 
 """
-    mutable struct Lattice2DWalker
+    mutable struct LatticeWalker
 
-The `Lattice2DWalker` struct represents a walker on a 2D lattice.
+The `LatticeWalker` struct represents a walker on a 3D lattice.
 
 # Fields
-- `configuration::Lattice2DSystem`: The configuration of the walker.
-- `energy::typeof(0.0u"eV")`: The energy of the walker.
+- `configuration::LatticeSystem`: The configuration of the walker.
+- `energy::Float64`: The energy of the walker.
 - `iter::Int64`: The current iteration number of the walker.
 
 # Constructor
 ```julia
-Lattice2DWalker(configuration::Lattice2DSystem; energy=0.0u"eV", iter=0)
+LatticeWalker(configuration::LatticeSystem; energy=0.0, iter=0)
 ```
-Create a new `Lattice2DWalker` with the given configuration and optional energy and iteration number.
+Create a new `LatticeWalker` with the given configuration and optional energy and iteration number.
 
 """
 
-mutable struct Lattice2DWalker
-    configuration::Lattice2DSystem
-    energy::typeof(0.0u"eV")
+mutable struct LatticeWalker
+    configuration::LatticeSystem
+    energy::Float64
     iter::Int64
-    function Lattice2DWalker(configuration::Lattice2DSystem; energy=0.0u"eV", iter=0)
+    function LatticeWalker(configuration::LatticeSystem; energy=0.0, iter=0)
         return new(configuration, energy, iter)
     end
 end

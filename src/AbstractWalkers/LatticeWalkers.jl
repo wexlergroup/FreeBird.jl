@@ -294,29 +294,29 @@ function exact_enumeration(primitive_lattice_vectors::Matrix{Float64}, basis::Ve
     return energies, configurations
 end
 
-function compute_internal_energy_versus_temperature(L::Int64, N::Int64, T_min::typeof(1.0u"K"), T_max::typeof(100.0u"K"), num_points::Int64, lattice_type::Symbol=:square)
-    # Generate all possible configurations with 8 occupied sites
-    energies = exact_enumeration(L, L, N, lattice_type, LGHamiltonian(-0.04136319965u"eV", -0.01034079991u"eV", -(15 / 64) * 0.01034079991u"eV"))
+# function compute_internal_energy_versus_temperature(L::Int64, N::Int64, T_min::typeof(1.0u"K"), T_max::typeof(100.0u"K"), num_points::Int64, lattice_type::Symbol=:square)
+#     # Generate all possible configurations with 8 occupied sites
+#     energies = exact_enumeration(L, L, N, lattice_type, LGHamiltonian(-0.04136319965u"eV", -0.01034079991u"eV", -(15 / 64) * 0.01034079991u"eV"))
 
-    # Compute energy relative to the lowest energy
-    minimum_energy = minimum(energies)
-    energies = energies .- minimum_energy
+#     # Compute energy relative to the lowest energy
+#     minimum_energy = minimum(energies)
+#     energies = energies .- minimum_energy
 
-    # Compute the partition function
-    BoltzmannConstant = 8.617_333_262e-5u"eV/K"
-    temperatures = range(T_min, T_max, length=num_points)
-    internal_energies = [sum(energy * exp(-energy / (BoltzmannConstant * T)) for energy in energies) / sum(exp(-energy / (BoltzmannConstant * T)) for energy in energies) for T in temperatures]
-    heat_capacity = [sum((energy - U)^2 * exp(-energy / (BoltzmannConstant * T)) for energy in energies) / (BoltzmannConstant * T^2 * sum(exp(-energy / (BoltzmannConstant * T)) for energy in energies)) for (T, U) in zip(temperatures, internal_energies)]
+#     # Compute the partition function
+#     BoltzmannConstant = 8.617_333_262e-5u"eV/K"
+#     temperatures = range(T_min, T_max, length=num_points)
+#     internal_energies = [sum(energy * exp(-energy / (BoltzmannConstant * T)) for energy in energies) / sum(exp(-energy / (BoltzmannConstant * T)) for energy in energies) for T in temperatures]
+#     heat_capacity = [sum((energy - U)^2 * exp(-energy / (BoltzmannConstant * T)) for energy in energies) / (BoltzmannConstant * T^2 * sum(exp(-energy / (BoltzmannConstant * T)) for energy in energies)) for (T, U) in zip(temperatures, internal_energies)]
 
-    # Add the lowest energy to the internal energy
-    internal_energies = internal_energies .+ minimum_energy
+#     # Add the lowest energy to the internal energy
+#     internal_energies = internal_energies .+ minimum_energy
 
-    # Print the temperatures and internal energies in a table
-    println("Temperature (K) | Internal Energy (eV) | Heat Capacity (eV/K)")
-    for (T, U, C) in zip(temperatures, internal_energies, heat_capacity)
-        println("$T $U $C")
-    end
-end
+#     # Print the temperatures and internal energies in a table
+#     println("Temperature (K) | Internal Energy (eV) | Heat Capacity (eV/K)")
+#     for (T, U, C) in zip(temperatures, internal_energies, heat_capacity)
+#         println("$T $U $C")
+#     end
+# end
 
 # Lattice gas tests
 

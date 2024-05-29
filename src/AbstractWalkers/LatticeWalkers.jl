@@ -212,31 +212,31 @@ end
 #     return walkers
 # end
 
-"""
-    struct Lattice2DWalkers <: LatticeWalkers
+# """
+#     struct Lattice2DWalkers <: LatticeWalkers
 
-The `Lattice2DWalkers` struct contains a list of `Lattice2DWalker` objects and the Hamiltonian parameters
-    that defines the interactions between the particles in the walkers.
+# The `Lattice2DWalkers` struct contains a list of `Lattice2DWalker` objects and the Hamiltonian parameters
+#     that defines the interactions between the particles in the walkers.
 
-# Fields
-- `walkers::Vector{Lattice2DWalker}`: The list of `Lattice2DWalker` objects.
-- `lg::LGHamiltonian`: The Hamiltonian parameters.
+# # Fields
+# - `walkers::Vector{Lattice2DWalker}`: The list of `Lattice2DWalker` objects.
+# - `lg::LGHamiltonian`: The Hamiltonian parameters.
 
-# Constructors
-- `Lattice2DWalkers(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)`: Constructs a new `Lattice2DWalkers`
-    object with the given walkers and Hamiltonian parameters. The energies of the walkers are automatically
-    assigned using the Hamiltonian parameters.
+# # Constructors
+# - `Lattice2DWalkers(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)`: Constructs a new `Lattice2DWalkers`
+#     object with the given walkers and Hamiltonian parameters. The energies of the walkers are automatically
+#     assigned using the Hamiltonian parameters.
 
-"""
+# """
 
-struct Lattice2DWalkers <: LatticeWalkers
-    walkers::Vector{Lattice2DWalker}
-    lg::LGHamiltonian
-    function Lattice2DWalkers(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
-        assign_energies!(walkers, lg)
-        return new(walkers, lg)
-    end
-end
+# struct Lattice2DWalkers <: LatticeWalkers
+#     walkers::Vector{Lattice2DWalker}
+#     lg::LGHamiltonian
+#     function Lattice2DWalkers(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
+#         assign_energies!(walkers, lg)
+#         return new(walkers, lg)
+#     end
+# end
 
 function exact_enumeration(L::Int64, M::Int64, N::Int64, lattice_type::Symbol, lg::LGHamiltonian)
     # Generate a list of all sites

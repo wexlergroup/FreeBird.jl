@@ -61,50 +61,60 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, positions
 end
 
 """
-    mutable struct Lattice2DSystem
+    mutable struct LatticeSystem
 
-The `Lattice2DSystem` struct represents a 2D lattice system.
+The `LatticeSystem` struct represents a 3D lattice system.
 
 # Fields
-- `lattice_type::Symbol`: The type of lattice (e.g., :square, :hexagonal).
-- `dimensions::Tuple{Int64, Int64}`: The dimensions of the lattice (rows x columns for 2D).
-- `num_occ_sites::Int64`: The number of occupied sites.
-- `site_occupancy::Matrix{Bool}`: A matrix to track whether a lattice site is occupied.
+- `lattice_vectors::Matrix{Float64}`: The lattice vectors of the system.
+- `positions::Matrix{Float64}`: The positions of the atoms in the system.
+- `supercell_dimensions::Tuple{Int64, Int64, Int64}`: The dimensions of the supercell.
+- `occupations::Vector{Bool}`: A vector of booleans indicating whether each site is occupied.
+- `neighbors::Vector{Tuple{Vector{Int}, Vector{Int}}}`: A vector of tuples containing the indices of the first and second nearest neighbors for each atom.
 
 # Constructors
 ```julia
-Lattice2DSystem(lattice_type::Symbol, site_occupancy::Matrix{Bool})
+LatticeSystem(lattice_vectors::Matrix{Float64}, basis::Vector{Tuple{Float64, Float64}}, supercell_dimensions::Tuple{Int64, Int64}, occupations::Vector{Bool}, cutoff_radii::Tuple{Float64, Float64})
 ```
-Create a new `Lattice2DSystem` with the given lattice type and site occupancy matrix.
-
-```julia
-Lattice2DSystem(lattice_type::Symbol, dims::Tuple{Int64, Int64}, num_occ_sites::Int64)
-```
-Create a new `Lattice2DSystem` with the given lattice type, dimensions, and number of occupied sites.
+Create a new `LatticeSystem` with the given lattice vectors, basis, supercell dimensions, occupations, and cutoff radii.
 
 """
 
-mutable struct Lattice2DSystem
-    lattice_type::Symbol  # Type of lattice (e.g., :square, :hexagonal)
-    dimensions::Tuple{Int64, Int64}  # Dimensions of the lattice (rows x columns for 2D)
-    num_occ_sites::Int64  # Number of occupied sites
-    site_occupancy::Matrix{Bool}  # Matrix to track whether a lattice site is occupied
+mutable struct LatticeSystem
+    lattice_vectors::Matrix{Float64}
+    positions::Matrix{Float64}
+    supercell_dimensions::Tuple{Int64, Int64}
+    occupations::Vector{Bool}
+    neighbors::Vector{Tuple{Vector{Int}, Vector{Int}}}
 
-    # Constructor to initialize with specified site occupancy
-    function Lattice2DSystem(lattice_type::Symbol, site_occupancy::Matrix{Bool})
-        dims = size(site_occupancy)
-        num_occ_sites = sum(site_occupancy)
-        return new(lattice_type, dims, num_occ_sites, site_occupancy)
-    end
+    function LatticeSystem(lattice_vectors::Matrix{Float64}, basis::Vector{Tuple{Float64, Float64}}, supercell_dimensions::Tuple{Int64, Int64}, occupations::Vector{Bool}, cutoff_radii::Tuple{Float64, Float64})
+        num_basis_sites = length(basis)
+        num_supercell_sites = supercell_dimensions[1] * supercell_dimensions[2] * num_basis_sites
+        
+        positions = zeros(Float64, num_supercell_sites, 2)
+        index = 1
 
-    # Constructor to initialize with dimensions, number of occupied sites, and random seed
-    function Lattice2DSystem(lattice_type::Symbol, dims::Tuple{Int64, Int64}, num_occ_sites::Int64, seed::Int64)
-        total_sites = prod(dims)  # Total number of sites
-        occupancy = vcat(fill(true, num_occ_sites), fill(false, total_sites - num_occ_sites))  # Initialize occupancy array
-        Random.seed!(seed)  # Set the random seed
-        shuffle!(occupancy)  # Shuffle to randomize occupied sites
-        site_occupancy = reshape(occupancy, dims)  # Reshape back to matrix form
-        return new(lattice_type, dims, num_occ_sites, site_occupancy)
+        a1 = lattice_vectors[:, 1]
+        a2 = lattice_vectors[:, 2]
+
+        for j in 1:supercell_dimensions[2]
+            for i in 1:supercell_dimensions[1]
+                for (bx, by) in basis
+                    x = (i - 1) * a1[1] + (j - 1) * a2[1] + bx
+                    y = (i - 1) * a1[2] + (j - 1) * a2[2] + by
+                    positions[index, :] = [x, y]
+                    index += 1
+                end
+            end
+        end
+
+        if length(occupations) != size(positions, 1)
+            throw(ArgumentError("Length of occupations vector must match the number of lattice sites"))
+        end
+
+        neighbors = compute_neighbors(lattice_vectors * Diagonal([supercell_dimensions[1], supercell_dimensions[2]]), positions, cutoff_radii)
+        
+        return new(lattice_vectors, positions, supercell_dimensions, occupations, neighbors)
     end
 end
 

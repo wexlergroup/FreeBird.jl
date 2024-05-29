@@ -7,6 +7,7 @@ using AtomsBase
 using Unitful
 using Random
 using Combinatorics
+using LinearAlgebra
 using ..Potentials
 using ..EnergyEval
 using ..Hamiltonians

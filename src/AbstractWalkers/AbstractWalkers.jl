@@ -12,7 +12,7 @@ using ..EnergyEval
 using ..Hamiltonians
 
 export AtomWalker, AtomWalkers, LJAtomWalkers
-export LatticeWalkers, LatticeWalker, LatticeWalkers
+export LatticeWalkers, LatticeSystem, LatticeWalker  # , LatticeWalkers
 export update_walker!
 
 include("AtomWalkers.jl")

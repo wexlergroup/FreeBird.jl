@@ -145,48 +145,47 @@ mutable struct LatticeWalker
     end
 end
 
-function interaction_energy(at::Lattice2DSystem, lg::LGHamiltonian)  # TODO: Generalize to arbitrary lattice
-    # Nearest-neighbor interaction energy
-    e_nn = 0.0u"eV"
+"""
+    interaction_energy(at::LatticeSystem, lg::LGHamiltonian)
 
-    # If nearest-neighbor interaction energy is zero, return immediately
-    if lg.nn_interaction_energy == 0.0u"eV"
-        return e_nn
-    end
+Compute the interaction energy of a lattice configuration using the Hamiltonian parameters.
 
-    # Compute nearest-neighbor interaction energy
-    for i in 1:at.dimensions[1]
-        for j in 1:at.dimensions[2]
-            if at.site_occupancy[i, j]
-                for (i2, j2) in nearest_neighbors(at.lattice_type, at.dimensions, i, j)
-                    e_nn += at.site_occupancy[i2, j2] ? lg.nn_interaction_energy / 2 : 0.0u"eV"
+# Arguments
+- `at::LatticeSystem`: The lattice configuration.
+- `adsorption_energy::Float64`: The adsorption energy of the particles.
+- `nn_energy::Float64`: The nearest-neighbor interaction energy.
+- `nnn_energy::Float64`: The next-nearest-neighbor interaction energy.
+
+# Returns
+- `e_interaction::Float64`: The interaction energy of the lattice configuration.
+
+"""
+
+function interaction_energy(at::LatticeSystem, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64)
+    e_adsorption = sum(at.occupations) * adsorption_energy
+    e_nn = 0.0
+    e_nnn = 0.0
+
+    for index in 1:length(at.occupations)
+        if at.occupations[index]
+            # Compute nearest-neighbor interaction energy
+            for nn in at.neighbors[index][1]
+                if at.occupations[nn]
+                    e_nn += nn_energy / 2
+                end
+            end
+
+            # Compute next-nearest-neighbor interaction energy
+            for nnn in at.neighbors[index][2]
+                if at.occupations[nnn]
+                    e_nnn += nnn_energy / 2
                 end
             end
         end
     end
 
-    # Next-nearest-neighbor interaction energy
-    e_nnn_interaction = 0.0u"eV"
-
-    # If next-nearest-neighbor interaction energy is zero, return immediately
-    if lg.nnn_interaction_energy == 0.0u"eV"
-        return e_nn
-    elseif at.lattice_type == :hexagonal
-        # TODO: Implement hexagonal lattice next-nearest-neighbor interaction
-        error("Hexagonal lattice next-nearest-neighbor interaction not implemented yet")
-    end
-
-    # Compute next-nearest-neighbor interaction energy
-    for i in 1:at.dimensions[1]
-        for j in 1:at.dimensions[2]
-            if at.site_occupancy[i, j]
-                for (i2, j2) in next_nearest_neighbors(at.lattice_type, at.dimensions, i, j)
-                    e_nnn_interaction += at.site_occupancy[i2, j2] ? lg.nnn_interaction_energy / 2 : 0.0u"eV"
-                end
-            end
-        end
-    end
-    return e_nn + e_nnn_interaction
+    e_interaction = e_adsorption + e_nn + e_nnn
+    return e_interaction
 end
 
 """

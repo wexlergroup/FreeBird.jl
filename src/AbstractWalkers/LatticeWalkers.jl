@@ -317,16 +317,3 @@ end
 #         println("$T $U $C")
 #     end
 # end
-
-# Lattice gas tests
-
-function test_lattice2d_system()
-    # Create four 4x4 square lattices with 10 occupied sites
-    lattices = [Lattice2DSystem(:square, (4, 4), 10) for i in 1:4] 
-
-    # Create a Lattice2DWalkers object with the lattices and a Hamiltonian
-    lg = LGHamiltonian(1.0u"eV", 1.0u"eV", 1.0u"eV")
-    walkers = [Lattice2DWalker(lattice) for lattice in lattices]
-    lg_walkers = Lattice2DWalkers(walkers, lg)
-    return lg_walkers
-end

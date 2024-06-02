@@ -216,56 +216,6 @@ function interaction_energy(at::LatticeSystem, adsorption_energy::Float64, nn_en
     return e_interaction
 end
 
-# """
-#     assign_energies!(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
-
-# Assigns energies to a list of `Lattice2DWalker` objects based on the Hamiltonian parameters.
-
-# # Arguments
-# - `walkers::Vector{Lattice2DWalker}`: A list of `Lattice2DWalker` objects to assign energies to.
-# - `lg::LGHamiltonian`: The Hamiltonian parameters used for energy calculation.
-
-# # Returns
-# - `walkers::Vector{Lattice2DWalker}`: The updated list of `Lattice2DWalker` objects with assigned energies.
-
-# """
-
-# function assign_energies!(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
-#     for walker in walkers
-#         e_adsorption = walker.configuration.num_occ_sites * lg.adsorption_energy
-#         e_interaction = interaction_energy(walker.configuration, lg)  # nearest-neighbor and next-nearest-neighbor interactions
-#         e_total = e_adsorption + e_interaction
-#         walker.energy = e_total
-#     end
-#     return walkers
-# end
-
-# """
-#     struct Lattice2DWalkers <: LatticeWalkers
-
-# The `Lattice2DWalkers` struct contains a list of `Lattice2DWalker` objects and the Hamiltonian parameters
-#     that defines the interactions between the particles in the walkers.
-
-# # Fields
-# - `walkers::Vector{Lattice2DWalker}`: The list of `Lattice2DWalker` objects.
-# - `lg::LGHamiltonian`: The Hamiltonian parameters.
-
-# # Constructors
-# - `Lattice2DWalkers(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)`: Constructs a new `Lattice2DWalkers`
-#     object with the given walkers and Hamiltonian parameters. The energies of the walkers are automatically
-#     assigned using the Hamiltonian parameters.
-
-# """
-
-# struct Lattice2DWalkers <: LatticeWalkers
-#     walkers::Vector{Lattice2DWalker}
-#     lg::LGHamiltonian
-#     function Lattice2DWalkers(walkers::Vector{Lattice2DWalker}, lg::LGHamiltonian)
-#         assign_energies!(walkers, lg)
-#         return new(walkers, lg)
-#     end
-# end
-
 """
     exact_enumeration(primitive_lattice_vectors::Matrix{Float64}, basis::Vector{Tuple{Float64, Float64}}, supercell_dimensions::Tuple{Int64, Int64}, number_occupied_sites::Int64, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, cutoff_radii::Tuple{Float64, Float64})
 

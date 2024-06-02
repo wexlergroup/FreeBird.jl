@@ -15,7 +15,7 @@ using ..Hamiltonians
 export AtomWalker, AtomWalkers, LJAtomWalkers
 export LatticeWalkers, LatticeSystem, LatticeWalker  # , LatticeWalkers
 export update_walker!
-export exact_enumeration
+export exact_enumeration, metropolis_hastings
 
 include("AtomWalkers.jl")
 

@@ -282,3 +282,63 @@ function exact_enumeration(
 
     return energies, configurations
 end
+
+"""
+    metropolis_hastings(lattice::LatticeSystem, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, temperature::Float64, num_steps::Int64)
+
+Perform a Markov chain Monte Carlo simulation of a LatticeSystem in the NVT ensemble using the Metropolis-Hastings algorithm.
+
+# Arguments
+- `lattice::LatticeSystem`: The initial lattice configuration.
+- `adsorption_energy::Float64`: The adsorption energy of the particles.
+- `nn_energy::Float64`: The nearest-neighbor interaction energy.
+- `nnn_energy::Float64`: The next-nearest-neighbor interaction energy.
+- `temperature::Float64`: The temperature of the system.
+- `num_steps::Int64`: The number of Monte Carlo steps.
+
+# Returns
+- `energies::Vector{Float64}`: A vector of the energies of the system at each step.
+- `configurations::Vector{LatticeSystem}`: A vector of the configurations of the system at each step.
+"""
+
+function metropolis_hastings(
+    lattice::LatticeSystem,
+    adsorption_energy::Float64,
+    nn_energy::Float64,
+    nnn_energy::Float64,
+    temperature::Float64,
+    num_steps::Int64
+)
+    energies = Float64[]
+    configurations = Vector{LatticeSystem}()
+
+    current_lattice = deepcopy(lattice)
+    current_energy = interaction_energy(current_lattice, adsorption_energy, nn_energy, nnn_energy)
+    
+    push!(energies, current_energy)
+    push!(configurations, deepcopy(current_lattice))
+
+    for _ in 1:num_steps
+        # Select a random site
+        site_index = rand(1:length(current_lattice.occupations))
+        
+        # Propose a flip in occupation state (occupation <-> vacancy)
+        proposed_lattice = deepcopy(current_lattice)
+        proposed_lattice.occupations[site_index] = !proposed_lattice.occupations[site_index]
+
+        # Calculate the proposed energy
+        proposed_energy = interaction_energy(proposed_lattice, adsorption_energy, nn_energy, nnn_energy)
+
+        # Metropolis-Hastings acceptance criterion
+        ΔE = proposed_energy - current_energy
+        if ΔE < 0 || rand() < exp(-ΔE / temperature)
+            current_lattice = deepcopy(proposed_lattice)
+            current_energy = proposed_energy
+        end
+
+        push!(energies, current_energy)
+        push!(configurations, deepcopy(current_lattice))
+    end
+
+    return energies, configurations
+end

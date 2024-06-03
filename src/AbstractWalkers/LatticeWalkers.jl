@@ -370,3 +370,124 @@ function nvt_monte_carlo(
 
     return energies, configurations, accepted_steps
 end
+
+"""
+    wang_landau(lattice::LatticeSystem, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, 
+                num_steps::Int64, flatness_criterion::Float64, f_initial::Float64, 
+                f_min::Float64, energy_bins::Int64, random_seed::Int64)
+
+Perform the Wang-Landau algorithm to compute the density of states for a LatticeSystem.
+
+# Arguments
+- `lattice::LatticeSystem`: The initial lattice configuration.
+- `adsorption_energy::Float64`: The adsorption energy of the particles.
+- `nn_energy::Float64`: The nearest-neighbor interaction energy.
+- `nnn_energy::Float64`: The next-nearest-neighbor interaction energy.
+- `num_steps::Int64`: The number of Monte Carlo steps.
+- `flatness_criterion::Float64`: The criterion for flatness of the histogram.
+- `f_initial::Float64`: The initial modification factor.
+- `f_min::Float64`: The minimum modification factor.
+- `energy_bins::Int64`: The number of bins for the energy histogram.
+- `random_seed::Int64`: The seed for the random number generator.
+
+# Returns
+- `density_of_states::Vector{Float64}`: The estimated density of states.
+- `histogram::Vector{Int64}`: The histogram of visited energy states.
+- `energies::Vector{Float64}`: The energies of the system at each step.
+- `configurations::Vector{LatticeSystem}`: The configurations of the system at each step.
+"""
+
+function wang_landau(
+    lattice::LatticeSystem,
+    adsorption_energy::Float64,
+    nn_energy::Float64,
+    nnn_energy::Float64,
+    num_steps::Int64,
+    flatness_criterion::Float64,
+    f_initial::Float64,
+    f_min::Float64,
+    energy_bins::Int64,
+    random_seed::Int64
+)
+    # Set the random seed
+    Random.seed!(random_seed)
+    
+    # Initialize density of states and histogram
+    density_of_states = zeros(Float64, energy_bins)
+    histogram = zeros(Int64, energy_bins)
+    energies = Float64[]
+    configurations = Vector{LatticeSystem}()
+    
+    f = f_initial
+    current_lattice = deepcopy(lattice)
+    current_energy = interaction_energy(current_lattice, adsorption_energy, nn_energy, nnn_energy)
+    energy_min, energy_max = current_energy, current_energy
+
+    push!(energies, current_energy)
+    push!(configurations, deepcopy(current_lattice))
+
+    bin_width = (energy_max - energy_min) / energy_bins
+    get_bin = energy -> Int(floor((energy - energy_min) / bin_width)) + 1
+
+    while f > f_min
+        for _ in 1:num_steps
+            # Select a random site
+            site_index = rand(1:length(current_lattice.occupations))
+            
+            # Propose a swap in occupation state (only if it maintains constant N)
+            proposed_lattice = deepcopy(current_lattice)
+            
+            if proposed_lattice.occupations[site_index] == 1
+                vacant_sites = findall(x -> x == 0, proposed_lattice.occupations)
+                if length(vacant_sites) > 0
+                    swap_site = rand(vacant_sites)
+                    proposed_lattice.occupations[site_index] = 0
+                    proposed_lattice.occupations[swap_site] = 1
+                else
+                    continue
+                end
+            else
+                occupied_sites = findall(x -> x == 1, proposed_lattice.occupations)
+                if length(occupied_sites) > 0
+                    swap_site = rand(occupied_sites)
+                    proposed_lattice.occupations[site_index] = 1
+                    proposed_lattice.occupations[swap_site] = 0
+                else
+                    continue
+                end
+            end
+
+            # Calculate the proposed energy
+            proposed_energy = interaction_energy(proposed_lattice, adsorption_energy, nn_energy, nnn_energy)
+            
+            # Ensure the energy is within bounds
+            energy_min = min(energy_min, proposed_energy)
+            energy_max = max(energy_max, proposed_energy)
+            bin_width = (energy_max - energy_min) / energy_bins
+
+            current_bin = get_bin(current_energy)
+            proposed_bin = get_bin(proposed_energy)
+
+            # Wang-Landau acceptance criterion
+            if density_of_states[proposed_bin] == 0 || rand() < exp(density_of_states[current_bin] - density_of_states[proposed_bin])
+                current_lattice = deepcopy(proposed_lattice)
+                current_energy = proposed_energy
+            end
+
+            current_bin = get_bin(current_energy)
+            density_of_states[current_bin] += log(f)
+            histogram[current_bin] += 1
+
+            push!(energies, current_energy)
+            push!(configurations, deepcopy(current_lattice))
+        end
+
+        # Check for flatness of the histogram
+        if minimum(histogram) > flatness_criterion * mean(histogram)
+            f = sqrt(f)
+            histogram .= 0
+        end
+    end
+
+    return density_of_states, histogram, energies, configurations
+end

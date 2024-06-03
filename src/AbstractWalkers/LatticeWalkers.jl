@@ -335,8 +335,9 @@ function metropolis_hastings(
         proposed_energy = interaction_energy(proposed_lattice, adsorption_energy, nn_energy, nnn_energy)
 
         # Metropolis-Hastings acceptance criterion
+        k_B = 8.617_333_262e-5  # eV K-1
         ΔE = proposed_energy - current_energy
-        if ΔE < 0 || rand() < exp(-ΔE / temperature)
+        if ΔE < 0 || rand() < exp(-ΔE / (k_B * temperature))
             current_lattice = deepcopy(proposed_lattice)
             current_energy = proposed_energy
         end

@@ -327,9 +327,28 @@ function metropolis_hastings(
         # Select a random site
         site_index = rand(1:length(current_lattice.occupations))
         
-        # Propose a flip in occupation state (occupation <-> vacancy)
+        # Propose a swap in occupation state (only if it maintains constant N)
         proposed_lattice = deepcopy(current_lattice)
-        proposed_lattice.occupations[site_index] = !proposed_lattice.occupations[site_index]
+        
+        if proposed_lattice.occupations[site_index] == 1
+            vacant_sites = findall(x -> x == 0, proposed_lattice.occupations)
+            if length(vacant_sites) > 0
+                swap_site = rand(vacant_sites)
+                proposed_lattice.occupations[site_index] = 0
+                proposed_lattice.occupations[swap_site] = 1
+            else
+                continue
+            end
+        else
+            occupied_sites = findall(x -> x == 1, proposed_lattice.occupations)
+            if length(occupied_sites) > 0
+                swap_site = rand(occupied_sites)
+                proposed_lattice.occupations[site_index] = 1
+                proposed_lattice.occupations[swap_site] = 0
+            else
+                continue
+            end
+        end
 
         # Calculate the proposed energy
         proposed_energy = interaction_energy(proposed_lattice, adsorption_energy, nn_energy, nnn_energy)

@@ -300,6 +300,7 @@ Perform a Markov chain Monte Carlo simulation of a LatticeSystem in the NVT ense
 # Returns
 - `energies::Vector{Float64}`: A vector of the energies of the system at each step.
 - `configurations::Vector{LatticeSystem}`: A vector of the configurations of the system at each step.
+- `accepted_steps::Int64`: The number of accepted steps.
 """
 
 function metropolis_hastings(
@@ -316,6 +317,7 @@ function metropolis_hastings(
     
     energies = Float64[]
     configurations = Vector{LatticeSystem}()
+    accepted_steps = 0
 
     current_lattice = deepcopy(lattice)
     current_energy = interaction_energy(current_lattice, adsorption_energy, nn_energy, nnn_energy)
@@ -359,11 +361,12 @@ function metropolis_hastings(
         if ΔE < 0 || rand() < exp(-ΔE / (k_B * temperature))
             current_lattice = deepcopy(proposed_lattice)
             current_energy = proposed_energy
+            accepted_steps += 1
         end
 
         push!(energies, current_energy)
         push!(configurations, deepcopy(current_lattice))
     end
 
-    return energies, configurations
+    return energies, configurations, accepted_steps
 end

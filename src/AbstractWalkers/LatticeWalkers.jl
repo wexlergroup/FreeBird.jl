@@ -426,6 +426,7 @@ function wang_landau(
     push!(energies, current_energy)
     push!(configurations, deepcopy(current_lattice))
 
+    # Define the binning function for energy
     bin_width = (energy_max - energy_min) / energy_bins
     get_bin = energy -> Int(floor((energy - energy_min) / bin_width)) + 1
 

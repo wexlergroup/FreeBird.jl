@@ -427,11 +427,11 @@ function wang_landau(
     push!(configurations, deepcopy(current_lattice))
 
     # Define the binning function for energy
-    bin_width = (energy_max - energy_min) / energy_bins
-    get_bin = energy -> Int(floor((energy - energy_min) / bin_width)) + 1
+    bin_width = 1.0  # Initialize with a non-zero value to avoid division by zero
+    get_bin = energy -> clamp(Int(floor((energy - energy_min) / bin_width)) + 1, 1, energy_bins)
 
     while f > f_min
-        for _ in 1:num_steps
+        for i in 1:num_steps
             # Select a random site
             site_index = rand(1:length(current_lattice.occupations))
             

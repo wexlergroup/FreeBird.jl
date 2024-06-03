@@ -284,7 +284,7 @@ function exact_enumeration(
 end
 
 """
-    metropolis_hastings(lattice::LatticeSystem, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, temperature::Float64, num_steps::Int64, random_seed::Int64)
+    nvt_monte_carlo(lattice::LatticeSystem, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, temperature::Float64, num_steps::Int64, random_seed::Int64)
 
 Perform a Markov chain Monte Carlo simulation of a LatticeSystem in the NVT ensemble using the Metropolis-Hastings algorithm.
 
@@ -303,7 +303,7 @@ Perform a Markov chain Monte Carlo simulation of a LatticeSystem in the NVT ense
 - `accepted_steps::Int64`: The number of accepted steps.
 """
 
-function metropolis_hastings(
+function nvt_monte_carlo(
     lattice::LatticeSystem,
     adsorption_energy::Float64,
     nn_energy::Float64,

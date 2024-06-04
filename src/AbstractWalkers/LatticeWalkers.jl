@@ -513,3 +513,75 @@ function wang_landau(
 
     return S, H, energy_bins, energies, configurations
 end
+
+function rejection_sampling(
+    walker::LatticeSystem, 
+    energy_limit::Float64, 
+    adsorption_energy::Float64, 
+    nn_energy::Float64, 
+    nnn_energy::Float64
+)
+    current_energy = interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy)
+    
+    while current_energy >= energy_limit
+        # Save the current lattice state
+        current_occupations = deepcopy(walker.occupations)
+
+        # Generate a new walker with a random configuration
+        walker.occupations = [false for i in 1:length(walker.occupations)]
+        for i in sample(1:length(walker.occupations), 4, replace=false)
+            walker.occupations[i] = true
+        end
+        
+        # Calculate the new energy
+        current_energy = interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy)
+        
+        # If the new energy is below the energy limit, we keep this configuration
+        if current_energy < energy_limit
+            break
+        else
+            # Otherwise, revert the change and try again
+            walker.occupations = deepcopy(current_occupations)
+        end
+    end
+    return walker, current_energy
+end
+
+function nested_sampling(
+    walkers::Vector{LatticeSystem},  # User supplies an array of initialized walkers
+    num_steps::Int,
+    adsorption_energy::Float64,
+    nn_energy::Float64,
+    nnn_energy::Float64
+)
+    # Calculate initial energies of the supplied walkers
+    energies = [interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy) for walker in walkers]
+    num_walkers = length(walkers)  # Determine the number of walkers dynamically
+
+    # Array to store all sampled energies
+    all_energies = Float64[]
+    
+    # Main nested sampling loop
+    for i in 1:num_steps
+        # Find the index of the walker with the highest energy
+        high_energy_index = argmax(energies)
+        high_energy_walker = deepcopy(walkers[high_energy_index])
+
+        # Set the energy limit as the current highest energy
+        energy_limit = energies[high_energy_index]
+
+        # Save the highest energy
+        push!(all_energies, energy_limit)
+
+        # Generate a new walker using rejection sampling
+        new_walker, new_energy = rejection_sampling(high_energy_walker, energy_limit, adsorption_energy, nn_energy, nnn_energy)
+        
+        # Replace the highest energy walker if the new energy is less than the highest energy
+        if new_energy < energies[high_energy_index]
+            walkers[high_energy_index] = new_walker
+            energies[high_energy_index] = new_energy
+        end
+    end
+    
+    return walkers, energies, all_energies
+end

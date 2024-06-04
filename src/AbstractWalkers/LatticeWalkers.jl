@@ -413,7 +413,7 @@ function wang_landau(
     Random.seed!(random_seed)
     
     # Initialize density of states and histogram
-    density_of_states = zeros(Float64, energy_bins)
+    density_of_states = ones(Float64, energy_bins)
     histogram = zeros(Int64, energy_bins)
     energies = Float64[]
     configurations = Vector{LatticeSystem}()
@@ -426,13 +426,23 @@ function wang_landau(
     push!(energies, current_energy)
     push!(configurations, deepcopy(current_lattice))
 
-    # Define the binning function for energy
-    bin_width = 1.0  # Initialize with a non-zero value to avoid division by zero
+    # Initial energy range estimation
+    for _ in 1:100
+        # Propose random moves to estimate energy range
+        proposed_lattice = deepcopy(current_lattice)
+        site_index = rand(1:length(current_lattice.occupations))
+        proposed_lattice.occupations[site_index] = 1 - proposed_lattice.occupations[site_index]
+        proposed_energy = interaction_energy(proposed_lattice, adsorption_energy, nn_energy, nnn_energy)
+        energy_min = min(energy_min, proposed_energy)
+        energy_max = max(energy_max, proposed_energy)
+    end
+    
+    bin_width = (energy_max - energy_min) / energy_bins
     get_bin = energy -> clamp(Int(floor((energy - energy_min) / bin_width)) + 1, 1, energy_bins)
 
     while f > f_min
-        for i in 1:num_steps
-            # Select a random site
+        for _ in 1:num_steps
+            # Choose a site
             site_index = rand(1:length(current_lattice.occupations))
             
             # Propose a swap in occupation state (only if it maintains constant N)
@@ -461,11 +471,6 @@ function wang_landau(
             # Calculate the proposed energy
             proposed_energy = interaction_energy(proposed_lattice, adsorption_energy, nn_energy, nnn_energy)
             
-            # Ensure the energy is within bounds
-            energy_min = min(energy_min, proposed_energy)
-            energy_max = max(energy_max, proposed_energy)
-            bin_width = (energy_max - energy_min) / energy_bins
-
             current_bin = get_bin(current_energy)
             proposed_bin = get_bin(proposed_energy)
 
@@ -476,19 +481,25 @@ function wang_landau(
             end
 
             current_bin = get_bin(current_energy)
-            density_of_states[current_bin] += log(f)
+            density_of_states[current_bin] += f
             histogram[current_bin] += 1
 
             push!(energies, current_energy)
             push!(configurations, deepcopy(current_lattice))
         end
 
-        # Check for flatness of the histogram
-        if minimum(histogram) > flatness_criterion * mean(histogram)
-            f = sqrt(f)
+        # Check for flatness of the non-zero elements of the histogram
+        non_zero_histogram = histogram[histogram .> 0]
+        if length(non_zero_histogram) > 0 && minimum(non_zero_histogram) > flatness_criterion * mean(non_zero_histogram)
+            f /= 2
             histogram .= 0
         end
+
+        # Print progress
+        println("f = $f")
     end
 
-    return density_of_states, histogram, energies, configurations
+    # Calculate the energy for each bin
+    bin_energies = [energy_min + (i - 0.5) * bin_width for i in 1:energy_bins]
+    return density_of_states, histogram, bin_energies, energies, configurations
 end

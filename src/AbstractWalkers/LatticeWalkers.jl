@@ -1,5 +1,7 @@
 abstract type LatticeWalkers end
 
+k_B = 8.617_333_262e-5  # eV K-1, https://physics.nist.gov/cgi-bin/cuu/Value?kev
+
 """
 compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, positions::Matrix{Float64}, cutoff_radii::Tuple{Float64, Float64}, periodicity::Vector{Bool})
 
@@ -356,7 +358,6 @@ function nvt_monte_carlo(
         proposed_energy = interaction_energy(proposed_lattice, adsorption_energy, nn_energy, nnn_energy)
 
         # Metropolis-Hastings acceptance criterion
-        k_B = 8.617_333_262e-5  # eV K-1
         ΔE = proposed_energy - current_energy
         if ΔE < 0 || rand() < exp(-ΔE / (k_B * temperature))
             current_lattice = deepcopy(proposed_lattice)

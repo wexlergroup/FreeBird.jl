@@ -17,6 +17,7 @@ export AtomWalker, AtomWalkers, LJAtomWalkers
 export LatticeWalkers, LatticeSystem, LatticeWalker  # , LatticeWalkers
 export update_walker!
 export exact_enumeration, nvt_monte_carlo, wang_landau
+export k_B
 
 include("AtomWalkers.jl")
 

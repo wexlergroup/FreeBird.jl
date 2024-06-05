@@ -71,6 +71,53 @@ function free_free_energy(at::AbstractSystem, lj::LJParameters; frozen::Int64=0)
 end
 
 """
+    free_free_energy(at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int})
+
+Calculate the energy from interactions between free particles using the Lennard-Jones potential.
+The energy is calculated by summing the pairwise interactions between the free particles.
+
+# Arguments
+- `at::AbstractSystem`: The system for which the energy is calculated.
+- `ljs::CompositeLJParameters{C}`: The composite Lennard-Jones parameters.
+- `list_num_par::Vector{Int}`: The number of particles in each component.
+
+# Returns
+- `free_free_energy`: The energy from interactions between free particles.
+
+"""
+function free_free_energy(at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int}) where {C}
+    free_free_energy = 0.0u"eV"
+    components = Array{Vector}(undef, C)
+    comp_cut = vcat([0],cumsum(list_num_par))
+    comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:C]
+    @info "Components split: $comp_split"
+    for i in 1:C
+        components[i] = at.position[comp_split[i]]
+    end
+    # intra-component interactions
+    for i in 1:C
+        for j in 1:length(components[i])
+            for k in (j+1):length(components[i])
+                r = pbc_dist(components[i][j], components[i][k], at)
+                free_free_energy += lj_energy(r,ljs.lj_param_sets[i,i])
+            end
+        end
+    end
+    # inter-component interactions
+    for i in 1:C
+        for j in (i+1):C
+            for k in 1:length(components[i])
+                for l in 1:length(components[j])
+                    r = pbc_dist(components[i][k], components[j][l], at)
+                    free_free_energy += lj_energy(r,ljs.lj_param_sets[i,j])
+                end
+            end
+        end
+    end
+    return free_free_energy
+end
+
+"""
     frozen_energy(at::AbstractSystem, lj::LJParameters, frozen::Int64)
 
 Compute the energy of the frozen particles in the system using the Lennard-Jones potential.

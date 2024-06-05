@@ -288,6 +288,38 @@ function generate_random_starting_config(volume_per_particle::Float64, num_parti
 end
 
 """
+    generate_multi_type_random_starting_config(volume_per_particle::Float64, num_particle::Vector{Int}; particle_types::Vector{Symbol}=[Symbol(:H), Symbol(:O)])
+
+Generate a random starting configuration for a system of particles with multiple types.
+
+# Arguments
+- `volume_per_particle::Float64`: The volume per particle.
+- `num_particle::Vector{Int}`: The number of particles of each type.
+- `particle_types::Vector{Symbol}=[Symbol(:H), Symbol(:O)]`: The types of particles.
+
+# Returns
+- `FastSystem`: A FastSystem object representing the generated system.
+
+"""
+function generate_multi_type_random_starting_config(volume_per_particle::Float64, num_particle::Vector{Int}; particle_types::Vector{Symbol}=[Symbol(:H), Symbol(:O)])
+    num_types = length(num_particle)
+    total_num_particle = sum(num_particle)
+    total_volume = volume_per_particle * total_num_particle
+    box_length = total_volume^(1/3)
+    box = [[box_length, 0.0, 0.0], [0.0, box_length, 0.0], [0.0, 0.0, box_length]]u"Å"
+    boundary_conditions = [DirichletZero(), DirichletZero(), DirichletZero()]
+    list_of_atoms = []
+    for i in 1:num_types
+        for _ in 1:num_particle[i]
+            push!(list_of_atoms, particle_types[i] => [rand(), rand(), rand()])
+        end
+    end
+    system = periodic_system(list_of_atoms, box, fractional=true)
+    flex = FlexibleSystem(system; boundary_conditions=boundary_conditions)
+    return FastSystem(flex)
+end
+
+"""
     generate_initial_configs(num_walkers::Int, volume_per_particle::Float64, num_particle::Int; particle_type::Symbol=:H)
 
 Generate initial configurations for a given number of walkers.

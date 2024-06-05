@@ -86,36 +86,41 @@ The energy is calculated by summing the pairwise interactions between the free p
 
 """
 function free_free_energy(at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int}) where {C}
-    free_free_energy = 0.0u"eV"
-    components = Array{Vector}(undef, C)
+    freeFreeEnergy = 0.0u"eV"
+    components = Array{FastSystem}(undef, C)
     comp_cut = vcat([0],cumsum(list_num_par))
     comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:C]
-    @info "Components split: $comp_split"
+    # @info "Components split: $comp_split" # DEBUG
     for i in 1:C
-        components[i] = at.position[comp_split[i]]
+        components[i] = FastSystem(at[comp_split[i]],at.bounding_box,at.boundary_conditions)
+        # @show components[i].position # DEBUG
     end
     # intra-component interactions
     for i in 1:C
-        for j in 1:length(components[i])
-            for k in (j+1):length(components[i])
-                r = pbc_dist(components[i][j], components[i][k], at)
-                free_free_energy += lj_energy(r,ljs.lj_param_sets[i,i])
-            end
+        if length(components[i]) > 1
+            freeFreeEnergy += free_free_energy(components[i], ljs.lj_param_sets[i,i])
         end
     end
     # inter-component interactions
     for i in 1:C
         for j in (i+1):C
-            for k in 1:length(components[i])
-                for l in 1:length(components[j])
-                    r = pbc_dist(components[i][k], components[j][l], at)
-                    free_free_energy += lj_energy(r,ljs.lj_param_sets[i,j])
-                end
-            end
+            freeFreeEnergy += intercomponent_energy(components[i], components[j], ljs.lj_param_sets[i,j])
         end
     end
-    return free_free_energy
+    return freeFreeEnergy
 end
+
+function intercomponent_energy(at1::AbstractSystem, at2::AbstractSystem, lj::LJParameters)
+    intercomponent_energy = 0.0u"eV"
+    for i in 1:length(at1)
+        for j in 1:length(at2)
+            r = pbc_dist(position(at1, i), position(at2, j), at1)
+            intercomponent_energy += lj_energy(r,lj)
+        end
+    end
+    return intercomponent_energy
+end
+
 
 """
     frozen_energy(at::AbstractSystem, lj::LJParameters, frozen::Int64)

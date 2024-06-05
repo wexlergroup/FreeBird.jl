@@ -519,11 +519,12 @@ function rejection_sampling(
     energy_limit::Float64, 
     adsorption_energy::Float64, 
     nn_energy::Float64, 
-    nnn_energy::Float64
+    nnn_energy::Float64,
+    perturbation::Float64
 )
-    current_energy = interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy)
-    
-    while current_energy >= energy_limit
+    current_energy = interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy) + 1 / perturbation
+
+    while current_energy > energy_limit
         # Save the current lattice state
         current_occupations = deepcopy(walker.occupations)
 
@@ -535,6 +536,7 @@ function rejection_sampling(
         
         # Calculate the new energy
         current_energy = interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy)
+        current_energy += perturbation * (rand() - 0.5)
         
         # If the new energy is below the energy limit, we keep this configuration
         if current_energy < energy_limit
@@ -552,10 +554,11 @@ function nested_sampling(
     num_steps::Int,
     adsorption_energy::Float64,
     nn_energy::Float64,
-    nnn_energy::Float64
+    nnn_energy::Float64,
+    perturbation::Float64
 )
     # Calculate initial energies of the supplied walkers
-    energies = [interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy) for walker in walkers]
+    energies = [interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy) + perturbation * (rand() - 0.5) for walker in walkers]
 
     # Array to store all sampled energies
     all_energies = Float64[]
@@ -573,7 +576,7 @@ function nested_sampling(
         push!(all_energies, energy_limit)
 
         # Generate a new walker using rejection sampling
-        new_walker, new_energy = rejection_sampling(high_energy_walker, energy_limit, adsorption_energy, nn_energy, nnn_energy)
+        new_walker, new_energy = rejection_sampling(high_energy_walker, energy_limit, adsorption_energy, nn_energy, nnn_energy, perturbation)
         
         # Replace the highest energy walker if the new energy is less than the highest energy
         if new_energy < energies[high_energy_index]

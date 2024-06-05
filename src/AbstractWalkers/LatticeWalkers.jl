@@ -556,7 +556,6 @@ function nested_sampling(
 )
     # Calculate initial energies of the supplied walkers
     energies = [interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy) for walker in walkers]
-    num_walkers = length(walkers)  # Determine the number of walkers dynamically
 
     # Array to store all sampled energies
     all_energies = Float64[]

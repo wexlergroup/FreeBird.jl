@@ -643,17 +643,30 @@ end
 function nvt_replica_exchange(replicas::Vector{LatticeSystem}, temperatures::Vector{Float64}, steps::Int, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, swap_fraction::Float64)
     num_replicas = length(replicas)
     energies = [interaction_energy(replica, adsorption_energy, nn_energy, nnn_energy) for replica in replicas]
-
+    
+    # Initialize array to track which replica is at each temperature
+    temperature_indices = collect(1:num_replicas)
+    
+    # Array to store temperature history for each replica
+    temperature_history = zeros(Int, steps, num_replicas)
+    
     for step in 1:steps
         for i in 1:num_replicas
+            temperature_history[step, temperature_indices[i]] = temperatures[i]
+            
             if rand() < swap_fraction && i < num_replicas
                 # Attempt swap with next replica with a probability of swap_fraction
-                attempt_swap!(replicas, energies, temperatures, i, i+1)
+                success = attempt_swap!(replicas, energies, temperatures, temperature_indices[i], temperature_indices[i+1])
+                if success
+                    # Swap temperature indices if the swap was successful
+                    temperature_indices[i], temperature_indices[i+1] = temperature_indices[i+1], temperature_indices[i]
+                end
             else
                 # Perform a Monte Carlo displacement step
-                energies[i] = monte_carlo_displacement_step_constant_N!(replicas[i], adsorption_energy, nn_energy, nnn_energy, temperatures[i])
+                energies[temperature_indices[i]] = monte_carlo_displacement_step_constant_N!(replicas[temperature_indices[i]], adsorption_energy, nn_energy, nnn_energy, temperatures[i])
             end
         end
     end
-    return replicas, energies
+    
+    return replicas, energies, temperature_history
 end

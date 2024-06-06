@@ -17,7 +17,7 @@ using ..Hamiltonians
 export AtomWalker, AtomWalkers, LJAtomWalkers
 export LatticeWalkers, LatticeSystem, LatticeWalker  # , LatticeWalkers
 export update_walker!
-export exact_enumeration, nvt_monte_carlo, wang_landau, nested_sampling
+export exact_enumeration, nvt_monte_carlo, wang_landau, nested_sampling, nvt_replica_exchange
 export k_B
 
 include("AtomWalkers.jl")

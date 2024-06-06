@@ -588,8 +588,7 @@ function nested_sampling(
     return walkers, energies, all_energies
 end
 
-# Function to perform one NVT Monte Carlo step for a given lattice
-function monte_carlo_step!(lattice::LatticeSystem, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, temperature::Float64)
+function monte_carlo_displacement_step!(lattice::LatticeSystem, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, temperature::Float64)
     # Select a random site
     site_index = rand(1:length(lattice.occupations))
 
@@ -607,7 +606,7 @@ function monte_carlo_step!(lattice::LatticeSystem, adsorption_energy::Float64, n
         lattice.occupations[site_index] = proposed_lattice.occupations[site_index]
         return proposed_energy
     end
-    return current.nergy
+    return current_energy
 end
 
 # Function to attempt swapping configurations between two replicas
@@ -621,20 +620,21 @@ function attempt_swap!(replicas::Vector{LatticeSystem}, energies::Vector{Float64
     return false
 end
 
-# Main function for NVT replica exchange
-function nvt_replica_exchange(replicas::Vector{LatticeSystem}, temperatures::Vector{Float64}, steps::Int, adsorption_energy::Float64, nn_energy::Float65, nnn_energy::Float64)
+function nvt_replica_exchange(replicas::Vector{LatticeSystem}, temperatures::Vector{Float64}, steps::Int, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, swap_fraction::Float64)
     num_replicas = length(replicas)
     energies = [interaction_energy(replica, adsorption_energy, nn_energy, nnn_energy) for replica in replicas]
 
     for step in 1:steps
-        # Perform Monte Carlo steps on each replica
         for i in 1:num_replicas
-            energies[i] = monte_carlo_step!(replicas[i], adsorption_energy, nn_energy, nnn_energy, temperatures[i])
-        end
-        
-        # Attempt swaps between adjacent replicas
-        for i in 1:num_replicas-1
-            attempt_swap!(replicas, energies, temperatures, i, i+1)
+            if rand() < swap_fraction && i < num_replicas
+                # Attempt swap with next replica with a probability of swap_fraction
+                # attempt_swap!(replicas, energies, temperatures, i, i+1)
+                println("swap")
+            else
+                # Perform a Monte Carlo displacement step
+                println("displacement")
+                energies[i] = monte_carlo_displacement_step!(replicas[i], adsorption_energy, nn_energy, nnn_energy, temperatures[i])
+            end
         end
     end
     return replicas, energies

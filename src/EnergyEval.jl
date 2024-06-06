@@ -8,9 +8,8 @@ using Unitful
 using StaticArrays
 using ..Potentials
 
-export free_free_energy, frozen_energy, free_frozen_energy
-export interaction_energy, total_energy
 export pbc_dist
+export interacting_energy, frozen_energy
 
 """
     pbc_dist(pos1, pos2, at)
@@ -45,159 +44,286 @@ function pbc_dist(pos1::Union{SVector{T},Vector{T}},
 end
 
 """
-    free_free_energy(at::AbstractSystem, lj::LJParameters; frozen::Int64=0)
+    inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, lj::LJParameters)
 
-Calculate the energy from interactions between free particles using the Lennard-Jones potential.
-The energy is calculated by summing the pairwise interactions between the free particles.
+Compute the energy between two components of a system using the Lennard-Jones potential.
+
+# Arguments
+- `at1::AbstractSystem`: The first component of the system.
+- `at2::AbstractSystem`: The second component of the system.
+- `lj::LJParameters`: The Lennard-Jones parameters.
+
+# Returns
+- `energy`: The energy between the two components.
+
+"""
+function inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, lj::LJParameters)
+    energy = 0.0u"eV"
+    # build pairs of particles
+    pairs = [(i, j) for i in 1:length(at1), j in 1:length(at2) if i <= j]
+    for (i, j) in pairs
+        # @show i,j # DEBUG
+        r = pbc_dist(position(at1, i), position(at2, j), at1)
+        energy += lj_energy(r,lj)
+    end
+    return energy
+end
+
+"""
+    intra_component_energy(at::AbstractSystem, lj::LJParameters)
+
+Compute the energy within a component of a system using the Lennard-Jones potential.
+
+# Arguments
+- `at::AbstractSystem`: The component of the system.
+- `lj::LJParameters`: The Lennard-Jones parameters.
+
+# Returns
+- `energy`: The energy within the component.
+
+"""
+function intra_component_energy(at::AbstractSystem, lj::LJParameters)
+    energy = 0.0u"eV"
+    for i in 1:length(at)
+        for j in (i+1):length(at)
+            r = pbc_dist(position(at, i), position(at, j), at)
+            energy += lj_energy(r,lj)
+        end
+    end
+    return energy
+end
+
+"""
+    split_components(at::AbstractSystem, list_num_par::Vector{Int})
+
+Split the system into components based on the number of particles in each component.
+
+# Arguments
+- `at::AbstractSystem`: The system to split.
+- `list_num_par::Vector{Int}`: The number of particles in each component.
+
+# Returns
+- `components`: An array of `FastSystem` objects representing the components of the system.
+
+"""
+function split_components(at::AbstractSystem, list_num_par::Vector{Int})
+    components = Array{FastSystem}(undef, length(list_num_par))
+    comp_cut = vcat([0],cumsum(list_num_par))
+    comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:length(list_num_par)]
+    for i in 1:length(list_num_par)
+        components[i] = FastSystem(at[comp_split[i]],at.bounding_box,at.boundary_conditions)
+    end
+    return components
+end
+
+"""
+    check_num_components(C::Int, list_num_par::Vector{Int}, frozen::Vector{Bool})
+
+Check that the number of components matches the length of the list of number of particles and frozen particles.
+
+# Arguments
+- `C::Int`: The number of components.
+- `list_num_par::Vector{Int}`: The number of particles in each component.
+- `frozen::Vector{Bool}`: A vector indicating whether each component is frozen.
+
+"""
+function check_num_components(C::Int, list_num_par::Vector{Int}, frozen::Vector{Bool})
+    if length(list_num_par) != C
+        throw(ArgumentError("The number of components does not match the length of the list of number of particles."))
+    elseif length(frozen) != C
+        throw(ArgumentError("The number of components does not match the length of the list of frozen particles."))
+    end
+end
+
+"""
+    frozen_energy(at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int}, frozen::Vector{Bool})
+
+Calculate the energy of the frozen particles in the system using a composite Lennard-Jones potential.
+The energy is calculated by summing the pairwise interactions between the frozen particles.
+Since the frozen particles do not move, the energy is typically only calculated once for a given system.
+
+# Arguments
+- `at::AbstractSystem`: The system for which the energy is calculated.
+- `ljs::CompositeLJParameters{C}`: The composite Lennard-Jones parameters.
+- `list_num_par::Vector{Int}`: The number of particles in each component.
+- `frozen::Vector{Bool}`: A vector indicating whether each component is frozen.
+
+# Returns
+- `energy`: The energy of the frozen particles in the system.
+
+"""
+function frozen_energy(at::AbstractSystem, 
+                       ljs::CompositeLJParameters{C}, 
+                       list_num_par::Vector{Int},
+                       frozen::Vector{Bool}
+                       ) where {C}
+    check_num_components(C, list_num_par, frozen)
+    energy = 0.0u"eV"
+    components = split_components(at, list_num_par)
+    # intra-component interactions
+    for i in findall(frozen) # find frozen components
+        if length(components[i]) > 1
+            energy += intra_component_energy(components[i], ljs.lj_param_sets[i,i])
+        end
+    end
+    # inter-component interactions
+    for i in 1:C
+        for j in (i+1):C
+            if frozen[i] && frozen[j] # both frozen
+                # @info "component $i and $j"
+                energy += inter_component_energy(components[i], components[j], ljs.lj_param_sets[i,j])
+            end
+        end
+    end
+    return energy
+end
+
+"""
+    frozen_energy(at::AbstractSystem, lj::LJParameters, list_num_par::Vector{Int}, frozen::Vector{Bool})
+
+Calculate the energy of the frozen particles in the system using a single Lennard-Jones potential.
+The energy is calculated by summing the pairwise interactions between the frozen particles.
+Since the frozen particles do not move, the energy is typically only calculated once for a given system.
 
 # Arguments
 - `at::AbstractSystem`: The system for which the energy is calculated.
 - `lj::LJParameters`: The Lennard-Jones parameters.
-- `frozen::Int64`: The number of frozen particles in the system.
+- `list_num_par::Vector{Int}`: The number of particles in each component.
+- `frozen::Vector{Bool}`: A vector indicating whether each component is frozen.
 
 # Returns
-- `free_free_energy`: The energy from interactions between free particles.
+- `energy`: The energy of the frozen particles in the system.
 
 """
-function free_free_energy(at::AbstractSystem, lj::LJParameters; frozen::Int64=0)
-    free_free_energy = 0.0u"eV"
-    for i in (frozen+1):length(at)
-        for j in (i+1):length(at)
-            r = pbc_dist(position(at, i), position(at, j), at)
-            free_free_energy += lj_energy(r,lj)
+function frozen_energy(at::AbstractSystem, 
+                       lj::LJParameters,
+                       list_num_par::Vector{Int},
+                       frozen::Vector{Bool}
+                       )
+    if length(list_num_par) != length(frozen)
+        throw(ArgumentError("The number of frozen and free parts does not match the length of the number of components."))
+    end
+    energy = 0.0u"eV"
+    components = split_components(at, list_num_par)
+    # intra-component interactions
+    for i in findall(frozen) # find frozen components
+        if length(components[i]) > 1
+            energy += intra_component_energy(components[i], lj)
         end
     end
-    return free_free_energy
+    # inter-component interactions
+    for i in 1:length(list_num_par)
+        for j in (i+1):length(list_num_par)
+            if frozen[i] && frozen[j] # both frozen
+                # @info "component $i and $j"
+                energy += inter_component_energy(components[i], components[j], lj)
+            end
+        end
+    end
+    return energy
 end
 
-"""
-    free_free_energy(at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int})
 
-Calculate the energy from interactions between free particles using the Lennard-Jones potential.
+"""
+    interacting_energy(at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int}, frozen::Vector{Bool})
+
+Calculate the energy from interactions between free-free and free-frozen particles using the Lennard-Jones potential.
 The energy is calculated by summing the pairwise interactions between the free particles.
 
 # Arguments
 - `at::AbstractSystem`: The system for which the energy is calculated.
 - `ljs::CompositeLJParameters{C}`: The composite Lennard-Jones parameters.
 - `list_num_par::Vector{Int}`: The number of particles in each component.
+- `frozen::Vector{Bool}`: A vector indicating whether each component is frozen.
 
 # Returns
-- `free_free_energy`: The energy from interactions between free particles.
+- `energy`: The energy from interactions between particles.
 
 """
-function free_free_energy(at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int}) where {C}
-    freeFreeEnergy = 0.0u"eV"
-    components = Array{FastSystem}(undef, C)
-    comp_cut = vcat([0],cumsum(list_num_par))
-    comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:C]
-    # @info "Components split: $comp_split" # DEBUG
-    for i in 1:C
-        components[i] = FastSystem(at[comp_split[i]],at.bounding_box,at.boundary_conditions)
-        # @show components[i].position # DEBUG
-    end
+function interacting_energy(at::AbstractSystem, 
+                          ljs::CompositeLJParameters{C}, 
+                          list_num_par::Vector{Int},
+                          frozen::Vector{Bool}
+                          ) where {C}
+    check_num_components(C, list_num_par, frozen)
+    energy = 0.0u"eV"
+    components = split_components(at, list_num_par)
     # intra-component interactions
-    for i in 1:C
+    for i in findall(.!frozen) # find non-frozen components
         if length(components[i]) > 1
-            freeFreeEnergy += free_free_energy(components[i], ljs.lj_param_sets[i,i])
+            energy += intra_component_energy(components[i], ljs.lj_param_sets[i,i])
         end
     end
     # inter-component interactions
     for i in 1:C
         for j in (i+1):C
-            freeFreeEnergy += intercomponent_energy(components[i], components[j], ljs.lj_param_sets[i,j])
+            if !frozen[i] || !frozen[j] # not both frozen
+                # @info "component $i and $j"
+                energy += inter_component_energy(components[i], components[j], ljs.lj_param_sets[i,j])
+            end
         end
     end
-    return freeFreeEnergy
+    return energy
 end
-
-function intercomponent_energy(at1::AbstractSystem, at2::AbstractSystem, lj::LJParameters)
-    intercomponent_energy = 0.0u"eV"
-    for i in 1:length(at1)
-        for j in 1:length(at2)
-            r = pbc_dist(position(at1, i), position(at2, j), at1)
-            intercomponent_energy += lj_energy(r,lj)
-        end
-    end
-    return intercomponent_energy
-end
-
 
 """
-    frozen_energy(at::AbstractSystem, lj::LJParameters, frozen::Int64)
+    interacting_energy(at::AbstractSystem, lj::LJParameters, list_num_par::Vector{Int}, frozen::Vector{Bool})
 
-Compute the energy of the frozen particles in the system using the Lennard-Jones potential.
-The energy is calculated by summing the pairwise interactions between the frozen particles.
-Since the frozen particles do not move, the energy is typically only calculated once for a given system.
+Calculate the energy from interactions between free-free and free-frozen particles using the Lennard-Jones potential.
+The energy is calculated by summing the pairwise interactions between the free particles.
 
 # Arguments
-- `at::AbstractSystem`: The system containing the particles.
+- `at::AbstractSystem`: The system for which the energy is calculated.
 - `lj::LJParameters`: The Lennard-Jones parameters.
-- `frozen::Int64`: The number of frozen particles.
+- `list_num_par::Vector{Int}`: The number of particles in each component.
+- `frozen::Vector{Bool}`: A vector indicating whether each component is frozen.
 
 # Returns
-- `frozen_energy`: The energy of the frozen particles in the system.
+- `energy`: The energy from interactions between particles.
 
 """
-function frozen_energy(at::AbstractSystem, lj::LJParameters, frozen::Int64)
-    frozen_energy = 0.0u"eV"
-    for i in 1:frozen
-        for j in (i+1):frozen
-            r = pbc_dist(position(at, i), position(at, j), at)
-            frozen_energy += lj_energy(r,lj)
+function interacting_energy(at::AbstractSystem, 
+                          lj::LJParameters,
+                          list_num_par::Vector{Int},
+                          frozen::Vector{Bool}
+                          )
+    if length(list_num_par) != length(frozen)
+        throw(ArgumentError("The number of frozen and free parts does not match the length of the number of components."))
+    end
+    energy = 0.0u"eV"
+    components = split_components(at, list_num_par)
+    # intra-component interactions
+    for i in findall(.!frozen) # find non-frozen components
+        if length(components[i]) > 1
+            energy += intra_component_energy(components[i], lj)
         end
     end
-    return frozen_energy
-end
-
-"""
-    free_frozen_energy(at::AbstractSystem, lj::LJParameters, frozen::Int64)
-
-Compute the energy from interactions between free and frozen particles using the Lennard-Jones potential.
-The energy is calculated by summing the pairwise interactions between the free and frozen particles.
-
-# Arguments
-- `at::AbstractSystem`: The system containing the particles.
-- `lj::LJParameters`: The Lennard-Jones parameters.
-- `frozen::Int64`: The number of frozen particles.
-
-# Returns
-- `free_frozen_energy`: The energy from interactions between free and frozen particles.
-
-"""
-function free_frozen_energy(at::AbstractSystem, lj::LJParameters, frozen::Int64)
-    free_frozen_energy = 0.0u"eV"
-    for i in 1:frozen
-        for j in (frozen+1):length(at)
-            r = pbc_dist(position(at, i), position(at, j), at)
-            free_frozen_energy += lj_energy(r,lj)
+    # inter-component interactions
+    for i in 1:length(list_num_par)
+        for j in (i+1):length(list_num_par)
+            if !frozen[i] || !frozen[j] # not both frozen
+                # @info "component $i and $j"
+                energy += inter_component_energy(components[i], components[j], lj)
+            end
         end
     end
-    return free_frozen_energy
+    return energy
 end
 
 """
-    interaction_energy(at::AbstractSystem, lj::LJParameters; frozen::Int64=0)
+    interacting_energy(at::AbstractSystem, lj::LJParameters)
 
-Compute the energy from interactions between particles using the Lennard-Jones potential.
-The energy is calculated by combining the energies from interactions between free particles 
-and between free and frozen particles. The energy from interactions between frozen particles
-is not included, as it is typically treated as a constant energy offset. If the number of frozen
-particles is zero, the energy calculated is equivalent to the total energy of the system.
+Calculate the energy from interactions between particles using the Lennard-Jones potential.
+The energy is calculated by summing the pairwise interactions between the free particles.
 
 # Arguments
-- `at::AbstractSystem`: The system containing the particles.
+- `at::AbstractSystem`: The system for which the energy is calculated.
 - `lj::LJParameters`: The Lennard-Jones parameters.
-- `frozen::Int64`: The number of frozen particles.
 
 # Returns
-- `interaction_energy`: The energy from interactions between particles.
+- `energy`: The energy from interactions between particles.
 
 """
-function interaction_energy(at::AbstractSystem, lj::LJParameters; frozen::Int64=0)
-    e_free_frozen = frozen == 0 ? 0.0u"eV" : free_frozen_energy(at, lj, frozen)
-    return free_free_energy(at, lj; frozen=frozen) + e_free_frozen
-end
+interacting_energy(at::AbstractSystem, lj::LJParameters) = intra_component_energy(at, lj)
 
-
-    
 end # module EnergyEval

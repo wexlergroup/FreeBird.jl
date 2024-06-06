@@ -588,13 +588,32 @@ function nested_sampling(
     return walkers, energies, all_energies
 end
 
-function monte_carlo_displacement_step!(lattice::LatticeSystem, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, temperature::Float64)
-    # Select a random site
+function monte_carlo_displacement_step_constant_N!(lattice::LatticeSystem, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, temperature::Float64)
+    # Randomly select any site
     site_index = rand(1:length(lattice.occupations))
-
-    # Propose flipping the occupation state
+    
+    # Propose a swap in occupation state while maintaining constant N
     proposed_lattice = deepcopy(lattice)
-    proposed_lattice.occupations[site_index] = !proposed_lattice.occupations[site_index]
+    
+    if proposed_lattice.occupations[site_index]
+        # Current site is occupied, find a vacant site to swap with
+        vacant_sites = findall(x -> x == false, proposed_lattice.occupations)
+        if isempty(vacant_sites)
+            return interaction_energy(lattice, adsorption_energy, nn_energy, nnn_energy)  # No change possible
+        end
+        swap_site = rand(vacant_sites)
+        proposed_lattice.occupations[site_index] = false
+        proposed_lattice.occupations[swap_site] = true
+    else
+        # Current site is vacant, find an occupied site to swap with
+        occupied_sites = findall(x -> x == true, proposed_lattice.occupations)
+        if isempty(occupied_sites)
+            return interaction_energy(lattice, adsorption_energy, nn_energy, nnn_energy)  # No change possible
+        end
+        swap_site = rand(occupied_sites)
+        proposed_lattice.occupations[site_index] = true
+        proposed_lattice.occupations[swap_site] = false
+    end
 
     # Calculate energy difference
     current_energy = interaction_energy(lattice, adsorption_energy, nn_energy, nnn_energy)
@@ -603,7 +622,8 @@ function monte_carlo_displacement_step!(lattice::LatticeSystem, adsorption_energ
 
     # Metropolis criterion
     if ΔE < 0 || exp(-ΔE / (k_B * temperature)) > rand()
-        lattice.occupations[site_index] = proposed_lattice.occupations[site_index]
+        # Accept the swap
+        lattice.occupations[site_index], lattice.occupations[swap_site] = proposed_lattice.occupations[site_index], proposed_lattice.occupations[swap_site]
         return proposed_energy
     end
     return current_energy
@@ -628,12 +648,10 @@ function nvt_replica_exchange(replicas::Vector{LatticeSystem}, temperatures::Vec
         for i in 1:num_replicas
             if rand() < swap_fraction && i < num_replicas
                 # Attempt swap with next replica with a probability of swap_fraction
-                # attempt_swap!(replicas, energies, temperatures, i, i+1)
-                println("swap")
+                attempt_swap!(replicas, energies, temperatures, i, i+1)
             else
                 # Perform a Monte Carlo displacement step
-                println("displacement")
-                energies[i] = monte_carlo_displacement_step!(replicas[i], adsorption_energy, nn_energy, nnn_energy, temperatures[i])
+                energies[i] = monte_carlo_displacement_step_constant_N!(replicas[i], adsorption_energy, nn_energy, nnn_energy, temperatures[i])
             end
         end
     end

@@ -587,3 +587,55 @@ function nested_sampling(
     
     return walkers, energies, all_energies
 end
+
+# Function to perform one NVT Monte Carlo step for a given lattice
+function monte_carlo_step!(lattice::LatticeSystem, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, temperature::Float64)
+    # Select a random site
+    site_index = rand(1:length(lattice.occupations))
+
+    # Propose flipping the occupation state
+    proposed_lattice = deepcopy(lattice)
+    proposed_lattice.occupations[site_index] = !proposed_lattice.occupations[site_index]
+
+    # Calculate energy difference
+    current_energy = interaction_energy(lattice, adsorption_energy, nn_energy, nnn_energy)
+    proposed_energy = interaction_energy(proposed_lattice, adsorption_energy, nn_energy, nnn_energy)
+    ΔE = proposed_energy - current_energy
+
+    # Metropolis criterion
+    if ΔE < 0 || exp(-ΔE / (k_B * temperature)) > rand()
+        lattice.occupations[site_index] = proposed_lattice.occupations[site_index]
+        return proposed_energy
+    end
+    return current.nergy
+end
+
+# Function to attempt swapping configurations between two replicas
+function attempt_swap!(replicas::Vector{LatticeSystem}, energies::Vector{Float64}, temperatures::Vector{Float64}, index1::Int, index2::Int)
+    Δ = (1/(k_B * temperatures[index1]) - 1/(k_B * temperatures[index2])) * (energies[index2] - energies[index1])
+    if Δ < 0 || exp(-Δ) > rand()
+        replicas[index1], replicas[index2] = replicas[index2], replicas[index1]
+        energies[index1], energies[index2] = energies[index2], energies[index1]
+        return true
+    end
+    return false
+end
+
+# Main function for NVT replica exchange
+function nvt_replica_exchange(replicas::Vector{LatticeSystem}, temperatures::Vector{Float64}, steps::Int, adsorption_energy::Float64, nn_energy::Float65, nnn_energy::Float64)
+    num_replicas = length(replicas)
+    energies = [interaction_energy(replica, adsorption_energy, nn_energy, nnn_energy) for replica in replicas]
+
+    for step in 1:steps
+        # Perform Monte Carlo steps on each replica
+        for i in 1:num_replicas
+            energies[i] = monte_carlo_step!(replicas[i], adsorption_energy, nn_energy, nnn_energy, temperatures[i])
+        end
+        
+        # Attempt swaps between adjacent replicas
+        for i in 1:num_replicas-1
+            attempt_swap!(replicas, energies, temperatures, i, i+1)
+        end
+    end
+    return replicas, energies
+end

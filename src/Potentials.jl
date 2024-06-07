@@ -7,6 +7,7 @@ using Unitful
 
 export LJParameters, lj_energy
 export CompositeLJParameters
+export LennardJonesParametersSets
 
 abstract type LennardJonesParametersSets end
 

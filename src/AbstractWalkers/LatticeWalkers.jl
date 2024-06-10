@@ -514,6 +514,24 @@ function wang_landau(
     return S, H, energy_bins, energies, configurations
 end
 
+"""
+    rejection_sampling(walker::LatticeSystem, energy_limit::Float64, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64)
+
+Perform rejection sampling to generate a new configuration with energy below a specified limit.
+
+# Arguments
+- `walker::LatticeSystem`: The walker to sample from.
+- `energy_limit::Float64`: The energy limit.
+- `adsorption_energy::Float64`: The adsorption energy of the particles.
+- `nn_energy::Float64`: The nearest-neighbor interaction energy.
+- `nnn_energy::Float64`: The next-nearest-neighbor interaction energy.
+
+# Returns
+- `walker::LatticeSystem`: The updated walker.
+- `current_energy::Float64`: The energy of the updated walker.
+
+"""
+
 function rejection_sampling(
     walker::LatticeSystem, 
     energy_limit::Float64, 
@@ -546,6 +564,25 @@ function rejection_sampling(
     end
     return walker, current_energy
 end
+
+"""
+    nested_sampling(walkers::Vector{LatticeSystem}, num_steps::Int, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64)
+
+Perform the nested sampling algorithm to sample the energy landscape of a LatticeSystem.
+
+# Arguments
+- `walkers::Vector{LatticeSystem}`: An array of initialized walkers.
+- `num_steps::Int`: The number of steps to perform.
+- `adsorption_energy::Float64`: The adsorption energy of the particles.
+- `nn_energy::Float64`: The nearest-neighbor interaction energy.
+- `nnn_energy::Float64`: The next-nearest-neighbor interaction energy.
+
+# Returns
+- `walkers::Vector{LatticeSystem}`: The updated walkers.
+- `energies::Vector{Float64}`: The energies of the walkers.
+- `all_energies::Vector{Float64}`: The energies of all sampled configurations.
+
+"""
 
 function nested_sampling(
     walkers::Vector{LatticeSystem},  # User supplies an array of initialized walkers

@@ -537,11 +537,12 @@ function rejection_sampling(
     energy_limit::Float64, 
     adsorption_energy::Float64, 
     nn_energy::Float64, 
-    nnn_energy::Float64
+    nnn_energy::Float64,
+    perturbation::Float64
 )
-    current_energy = interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy)
-    
-    while current_energy >= energy_limit
+    current_energy = interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy) + 1 / perturbation
+
+    while current_energy > energy_limit
         # Save the current lattice state
         current_occupations = deepcopy(walker.occupations)
 
@@ -553,6 +554,7 @@ function rejection_sampling(
         
         # Calculate the new energy
         current_energy = interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy)
+        current_energy += perturbation * (rand() - 0.5)
         
         # If the new energy is below the energy limit, we keep this configuration
         if current_energy < energy_limit
@@ -589,10 +591,11 @@ function nested_sampling(
     num_steps::Int,
     adsorption_energy::Float64,
     nn_energy::Float64,
-    nnn_energy::Float64
+    nnn_energy::Float64,
+    perturbation::Float64
 )
     # Calculate initial energies of the supplied walkers
-    energies = [interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy) for walker in walkers]
+    energies = [interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy) + perturbation * (rand() - 0.5) for walker in walkers]
 
     # Array to store all sampled energies
     all_energies = Float64[]
@@ -610,7 +613,7 @@ function nested_sampling(
         push!(all_energies, energy_limit)
 
         # Generate a new walker using rejection sampling
-        new_walker, new_energy = rejection_sampling(high_energy_walker, energy_limit, adsorption_energy, nn_energy, nnn_energy)
+        new_walker, new_energy = rejection_sampling(high_energy_walker, energy_limit, adsorption_energy, nn_energy, nnn_energy, perturbation)
         
         # Replace the highest energy walker if the new energy is less than the highest energy
         if new_energy < energies[high_energy_index]
@@ -620,4 +623,87 @@ function nested_sampling(
     end
     
     return walkers, energies, all_energies
+end
+
+function monte_carlo_displacement_step_constant_N!(lattice::LatticeSystem, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, temperature::Float64)
+    # Randomly select any site
+    site_index = rand(1:length(lattice.occupations))
+    
+    # Propose a swap in occupation state while maintaining constant N
+    proposed_lattice = deepcopy(lattice)
+    
+    if proposed_lattice.occupations[site_index]
+        # Current site is occupied, find a vacant site to swap with
+        vacant_sites = findall(x -> x == false, proposed_lattice.occupations)
+        if isempty(vacant_sites)
+            return interaction_energy(lattice, adsorption_energy, nn_energy, nnn_energy)  # No change possible
+        end
+        swap_site = rand(vacant_sites)
+        proposed_lattice.occupations[site_index] = false
+        proposed_lattice.occupations[swap_site] = true
+    else
+        # Current site is vacant, find an occupied site to swap with
+        occupied_sites = findall(x -> x == true, proposed_lattice.occupations)
+        if isempty(occupied_sites)
+            return interaction_energy(lattice, adsorption_energy, nn_energy, nnn_energy)  # No change possible
+        end
+        swap_site = rand(occupied_sites)
+        proposed_lattice.occupations[site_index] = true
+        proposed_lattice.occupations[swap_site] = false
+    end
+
+    # Calculate energy difference
+    current_energy = interaction_energy(lattice, adsorption_energy, nn_energy, nnn_energy)
+    proposed_energy = interaction_energy(proposed_lattice, adsorption_energy, nn_energy, nnn_energy)
+    ΔE = proposed_energy - current_energy
+
+    # Metropolis criterion
+    if ΔE < 0 || exp(-ΔE / (k_B * temperature)) > rand()
+        # Accept the swap
+        lattice.occupations[site_index], lattice.occupations[swap_site] = proposed_lattice.occupations[site_index], proposed_lattice.occupations[swap_site]
+        return proposed_energy
+    end
+    return current_energy
+end
+
+# Function to attempt swapping configurations between two replicas
+function attempt_swap!(replicas::Vector{LatticeSystem}, energies::Vector{Float64}, temperatures::Vector{Float64}, index1::Int, index2::Int)
+    Δ = (1/(k_B * temperatures[index1]) - 1/(k_B * temperatures[index2])) * (energies[index2] - energies[index1])
+    if Δ < 0 || exp(-Δ) > rand()
+        replicas[index1], replicas[index2] = replicas[index2], replicas[index1]
+        energies[index1], energies[index2] = energies[index2], energies[index1]
+        return true
+    end
+    return false
+end
+
+function nvt_replica_exchange(replicas::Vector{LatticeSystem}, temperatures::Vector{Float64}, steps::Int, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, swap_fraction::Float64)
+    num_replicas = length(replicas)
+    energies = [interaction_energy(replica, adsorption_energy, nn_energy, nnn_energy) for replica in replicas]
+    
+    # Initialize array to track which replica is at each temperature
+    temperature_indices = collect(1:num_replicas)
+    
+    # Array to store temperature history for each replica
+    temperature_history = zeros(Int, steps, num_replicas)
+    
+    for step in 1:steps
+        for i in 1:num_replicas
+            temperature_history[step, temperature_indices[i]] = temperatures[i]
+            
+            if rand() < swap_fraction && i < num_replicas
+                # Attempt swap with next replica with a probability of swap_fraction
+                success = attempt_swap!(replicas, energies, temperatures, temperature_indices[i], temperature_indices[i+1])
+                if success
+                    # Swap temperature indices if the swap was successful
+                    temperature_indices[i], temperature_indices[i+1] = temperature_indices[i+1], temperature_indices[i]
+                end
+            else
+                # Perform a Monte Carlo displacement step
+                energies[temperature_indices[i]] = monte_carlo_displacement_step_constant_N!(replicas[temperature_indices[i]], adsorption_energy, nn_energy, nnn_energy, temperatures[i])
+            end
+        end
+    end
+    
+    return replicas, energies, temperature_history
 end

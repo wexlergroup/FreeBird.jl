@@ -64,10 +64,12 @@ function convert_system_to_walker(at::FlexibleSystem, resume::Bool)
     data = at.data
     energy = (haskey(data, :energy) && resume) ? data[:energy]*u"eV" : 0.0u"eV"
     iter = (haskey(data, :iter) && resume && data[:iter]>=0) ? data[:iter] : 0
-    num = (haskey(data, :num_frozen_part)  && resume) ? data[:num_frozen_part] : 0
+    list_num_par = (haskey(data, :list_num_par) && resume) ? data[:list_num_par] : [length(at)]
+    frozen = (haskey(data, :frozen) && resume) ? data[:frozen] : [false]
     e_frozen = (haskey(data, :energy_frozen_part) && resume) ? data[:energy_frozen_part]*u"eV" : 0.0u"eV"
     at = FastSystem(at)
-    return AtomWalker(at; energy=energy, iter=iter, num_frozen_part=num, energy_frozen_part=e_frozen)
+    C = length(list_num_par)
+    return AtomWalker{C}(at; energy=energy, iter=iter, list_num_par=list_num_par, frozen=frozen, energy_frozen_part=e_frozen)
 end
 
 """
@@ -196,9 +198,10 @@ function convert_walker_to_system(at::AtomWalker)
     config::FastSystem = at.configuration
     energy = at.energy.val
     iter = at.iter
-    num = at.num_frozen_part
+    num = join(at.list_num_par, ",")
+    frozen = join(at.frozen, ",")
     e_frozen = at.energy_frozen_part.val
-    return AbstractSystem(config; energy=energy, iter=iter, num_frozen_part=num, energy_frozen_part=e_frozen)
+    return AbstractSystem(config; energy=energy, iter=iter, list_num_par=num, frozen=frozen, energy_frozen_part=e_frozen)
 end
 
 """
@@ -206,10 +209,12 @@ end
 
 Append an `AtomWalker` object to a file.
 """
-function append_walker(filename::String, at::AtomWalker)
-    ats = read_walkers(filename)
-    push!(ats, at)
-    write_walkers(filename, ats)
+function append_walker(filename::String, at::AtomWalker{C}) where C
+    # ats = read_walkers(filename)
+    sys = convert_walker_to_system(at)
+    # push!(ats, at)
+    # write_walkers(filename, ats)
+    write_frame(filename, ExtXYZ.write_dict(Atoms(sys)), append=true)
 end
 
 """
@@ -237,7 +242,7 @@ Write a collection of `AtomWalker` objects to a file.
 - `ats::Vector{AtomWalker}`: The collection of `AtomWalker` objects to write.
 
 """
-function write_walkers(filename::String, ats::Vector{AtomWalker})
+function write_walkers(filename::String, ats::Vector{AtomWalker{C}}) where C
     flex = convert_walker_to_system.(ats)
     save_trajectory(filename::String, flex)
 end

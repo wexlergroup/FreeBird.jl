@@ -44,6 +44,73 @@ end
 
 
 """
+    AtomWalker(configuration::FastSystem; freeze_species::Vector{Symbol}=Symbol[], merge_same_species=true)
+
+Constructs an `AtomWalker` object with the given configuration.
+
+# Arguments
+- `configuration::FastSystem`: The configuration of the walker.
+- `freeze_species::Vector{Symbol}`: A vector of species to freeze.
+- `merge_same_species::Bool`: A boolean indicating whether to merge the same species into one component.
+
+# Returns
+- `AtomWalker{C}`: The constructed `AtomWalker` object.
+
+# Example
+```jldoctest
+julia> at = FreeBirdIO.generate_multi_type_random_starting_config(10.0,[2,1,3,4,5,6];particle_types=[:H,:O,:H,:Fe,:Au,:Cl])
+FastSystem(Au₅Cl₆Fe₄H₅O, periodic = FFF):
+    bounding_box      : [ 5.94392        0        0;
+                                0  5.94392        0;
+                                0        0  5.94392]u"Å"
+
+        .--------------.  
+       /|Fel           |  
+      / H   H   Cl     |  
+     /  Hu   O         |  
+    *   |       Au   Fe|  
+    |   |FeCl        Fe|  
+    |   |        Au    |  
+    |   .---------Au---.  
+    |  /           H  /   
+    | Au Cl          /    
+    |/              /     
+    *--------------*      
+
+julia> AtomWalker(at;freeze_species=[:H],merge_same_species=false)
+AtomWalker{6}(FastSystem(Au₅Cl₆Fe₄H₅O, periodic = FFF, bounding_box = [[5.943921952763129, 0.0, 0.0], [0.0, 5.943921952763129, 0.0], [0.0, 0.0, 5.943921952763129]]u"Å"), 0.0 eV, 0, [2, 3, 1, 6, 4, 5], Bool[1, 1, 0, 0, 0, 0], 0.0 eV)
+
+julia> AtomWalker(at;freeze_species=[:H],merge_same_species=true)
+AtomWalker{5}(FastSystem(Au₅Cl₆Fe₄H₅O, periodic = FFF, bounding_box = [[5.943921952763129, 0.0, 0.0], [0.0, 5.943921952763129, 0.0], [0.0, 0.0, 5.943921952763129]]u"Å"), 0.0 eV, 0, [5, 1, 6, 4, 5], Bool[1, 0, 0, 0, 0], 0.0 eV)
+```
+
+"""
+function AtomWalker(configuration::FastSystem; freeze_species::Vector{Symbol}=Symbol[], merge_same_species=true)
+    list_num_par, configuration = sort_components_by_atomic_number(configuration, merge_same_species=merge_same_species)
+    C = length(list_num_par)
+    frozen = zeros(Bool, C)
+    if !isempty(freeze_species)
+        elements = unique(atomic_symbol(configuration))
+        @show elements
+        for species in freeze_species
+            if !(species in elements)
+                throw(ArgumentError("The species $species is not in the system."))
+            end
+        end
+        components = split_components(configuration, list_num_par)
+        for i in 1:length(freeze_species)
+            for j in 1:C
+                if freeze_species[i] in atomic_symbol(components[j])
+                    frozen[j] = true
+                end
+            end
+        end
+    end
+    return AtomWalker{C}(configuration, list_num_par=list_num_par, frozen=frozen)
+end
+
+
+"""
     assign_energy!(walker::AtomWalker, lj::LennardJonesParametersSets)
 
 Assigns the energy to the given `walker` using the Lennard-Jones parameters `lj`.

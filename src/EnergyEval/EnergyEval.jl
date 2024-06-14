@@ -10,6 +10,9 @@ using ..Potentials
 
 export pbc_dist
 export interacting_energy, frozen_energy
+export sort_components_by_atomic_number
+
+include("helpers.jl")
 
 """
     pbc_dist(pos1, pos2, at)

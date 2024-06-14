@@ -142,6 +142,15 @@ struct CompositeLJParameters{C} <: LennardJonesParametersSets
     end
 end
 
+function Base.show(io::IO, lj::CompositeLJParameters{C}) where C
+    println(io, "CompositeLJParameters{$C}(lj_param_sets::$(C)x$C Matrix{LJParameters}):")
+    for i in 1:C
+        for j in 1:C
+            println(io, "    lj_param_sets[$i, $j] : ", lj.lj_param_sets[i, j])
+        end
+    end
+end
+
 """
     CompositeLJParameters(c::Int, ljs::Vector{LJParameters})
 

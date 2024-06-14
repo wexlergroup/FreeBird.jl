@@ -42,6 +42,22 @@ mutable struct AtomWalker{C}
     end
 end
 
+function Base.show(io::IO, walker::AtomWalker{C}) where C
+    println(io, "AtomWalker{$C}(")
+    println(io, "    configuration      : ", walker.configuration)
+    println(io, "    energy             : ", walker.energy)
+    println(io, "    iter               : ", walker.iter)
+    println(io, "    list_num_par       : ", walker.list_num_par)
+    println(io, "    frozen             : ", walker.frozen)
+    println(io, "    energy_frozen_part : ", walker.energy_frozen_part,")")
+end
+
+function Base.show(io::IO, walker::Vector{AtomWalker{C}}) where C
+    println(io, "Vector{AtomWalker{$C}}(", length(walker), "):")
+    for (ind, w) in enumerate(walker)
+        println(io, "[$ind] ", w)
+    end
+end
 
 """
     AtomWalker(configuration::FastSystem; freeze_species::Vector{Symbol}=Symbol[], merge_same_species=true)
@@ -150,6 +166,24 @@ struct LJAtomWalkers <: AtomWalkers
         [assign_energy!(walker, lj_potential) for walker in walkers]
         return new(walkers, lj_potential)
     end
+end
+
+function Base.show(io::IO, walkers::LJAtomWalkers)
+    println(io, "LJAtomWalkers($(eltype(walkers.walkers)), $(typeof(walkers.lj_potential))):")
+    if length(walkers.walkers) > 10
+        for i in 1:5
+            println(io, "[$i] ", walkers.walkers[i])
+        end
+        println(io, "⋮\nOmitted ", length(walkers.walkers)-10, " walkers\n⋮\n")
+        for i in length(walkers.walkers)-4:length(walkers.walkers)
+            println(io, "[$i] ", walkers.walkers[i])
+        end
+    else
+        for (ind, w) in enumerate(walkers.walkers)
+            println(io, "[$ind] ", w)
+        end
+    end
+    println(io, walkers.lj_potential)
 end
 
 """

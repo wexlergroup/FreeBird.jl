@@ -18,8 +18,6 @@ export LatticeWalkers, LatticeSystem, LatticeWalker  # , LatticeWalkers
 export update_walker!
 export exact_enumeration, nvt_monte_carlo, wang_landau
 
-include("helpers.jl")
-
 include("AtomWalkers.jl")
 
 include("LatticeWalkers.jl")

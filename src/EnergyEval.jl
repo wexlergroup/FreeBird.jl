@@ -93,47 +93,7 @@ function intra_component_energy(at::AbstractSystem, lj::LJParameters)
     return energy
 end
 
-"""
-    split_components(at::AbstractSystem, list_num_par::Vector{Int})
 
-Split the system into components based on the number of particles in each component.
-
-# Arguments
-- `at::AbstractSystem`: The system to split.
-- `list_num_par::Vector{Int}`: The number of particles in each component.
-
-# Returns
-- `components`: An array of `FastSystem` objects representing the components of the system.
-
-"""
-function split_components(at::AbstractSystem, list_num_par::Vector{Int})
-    components = Array{FastSystem}(undef, length(list_num_par))
-    comp_cut = vcat([0],cumsum(list_num_par))
-    comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:length(list_num_par)]
-    for i in 1:length(list_num_par)
-        components[i] = FastSystem(at[comp_split[i]],at.bounding_box,at.boundary_conditions)
-    end
-    return components
-end
-
-"""
-    check_num_components(C::Int, list_num_par::Vector{Int}, frozen::Vector{Bool})
-
-Check that the number of components matches the length of the list of number of particles and frozen particles.
-
-# Arguments
-- `C::Int`: The number of components.
-- `list_num_par::Vector{Int}`: The number of particles in each component.
-- `frozen::Vector{Bool}`: A vector indicating whether each component is frozen.
-
-"""
-function check_num_components(C::Int, list_num_par::Vector{Int}, frozen::Vector{Bool})
-    if length(list_num_par) != C
-        throw(ArgumentError("The number of components does not match the length of the list of number of particles."))
-    elseif length(frozen) != C
-        throw(ArgumentError("The number of components does not match the length of the list of frozen particles."))
-    end
-end
 
 """
     frozen_energy(at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int}, frozen::Vector{Bool})

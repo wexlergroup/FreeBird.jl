@@ -156,14 +156,18 @@ The `LJAtomWalkers` struct represents a collection of atom walkers that interact
 - `lj_potential::LennardJonesParametersSets`: The Lennard-Jones potential parameters. See `LennardJonesParametersSets`.
 
 # Constructor
-- `LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParametersSets) where C`: Constructs a new `LJAtomWalkers` object with the given walkers and Lennard-Jones potential parameters.
+- `LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParametersSets; assign_energy=true)`: 
+    Constructs a new `LJAtomWalkers` object with the given walkers and Lennard-Jones potential parameters. If `assign_energy=true`,
+    the energy of each walker is assigned using the Lennard-Jones potential.
 
 """
 struct LJAtomWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
     lj_potential::LennardJonesParametersSets
-    function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParametersSets) where C
-        [assign_energy!(walker, lj_potential) for walker in walkers]
+    function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParametersSets; assign_energy=true) where C
+        if assign_energy
+            [assign_energy!(walker, lj_potential) for walker in walkers]
+        end
         return new(walkers, lj_potential)
     end
 end

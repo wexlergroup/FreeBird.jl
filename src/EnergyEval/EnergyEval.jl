@@ -11,6 +11,7 @@ using ..Potentials
 export pbc_dist
 export interacting_energy, frozen_energy
 export sort_components_by_atomic_number
+export split_components
 
 include("helpers.jl")
 

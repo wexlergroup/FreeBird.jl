@@ -55,7 +55,7 @@ FastSystem(Au₅Cl₆Fe₄H₅O, periodic = FFF):
     *--------------*      
 
 
-julia> AbstractWalkers.split_components_by_chemical_species(at)
+julia> split_components_by_chemical_species(at)
 5-element Vector{FastSystem}:
  FastSystem(H₅, periodic = FFF, bounding_box = [[5.943921952763129, 0.0, 0.0], [0.0, 5.943921952763129, 0.0], [0.0, 0.0, 5.943921952763129]]u"Å")
  FastSystem(O, periodic = FFF, bounding_box = [[5.943921952763129, 0.0, 0.0], [0.0, 5.943921952763129, 0.0], [0.0, 0.0, 5.943921952763129]]u"Å")
@@ -132,10 +132,10 @@ FastSystem(Au₅Cl₆Fe₄H₅O, periodic = FFF):
     *--------------*      
 
 
-julia> AbstractWalkers.sort_components_by_atomic_number(at; merge_same_species=false)
+julia> sort_components_by_atomic_number(at; merge_same_species=false)
 ([2, 3, 1, 6, 4, 5], FastSystem(Au₅Cl₆Fe₄H₅O, periodic = FFF, bounding_box = [[5.943921952763129, 0.0, 0.0], [0.0, 5.943921952763129, 0.0], [0.0, 0.0, 5.943921952763129]]u"Å"))
 
-julia> AbstractWalkers.sort_components_by_atomic_number(at)
+julia> sort_components_by_atomic_number(at)
 ([5, 1, 6, 4, 5], FastSystem(Au₅Cl₆Fe₄H₅O, periodic = FFF, bounding_box = [[5.943921952763129, 0.0, 0.0], [0.0, 5.943921952763129, 0.0], [0.0, 0.0, 5.943921952763129]]u"Å"))
 ```
 """

@@ -64,7 +64,8 @@ Compute the energy between two components of a system using the Lennard-Jones po
 function inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, lj::LJParameters)
     energy = 0.0u"eV"
     # build pairs of particles
-    pairs = [(i, j) for i in 1:length(at1), j in 1:length(at2) if i <= j]
+    pairs = [(i, j) for i in 1:length(at1), j in 1:length(at2)]
+    # @show pairs # DEBUG
     for (i, j) in pairs
         # @show i,j # DEBUG
         r = pbc_dist(position(at1, i), position(at2, j), at1)

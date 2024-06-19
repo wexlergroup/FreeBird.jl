@@ -545,10 +545,11 @@ function rejection_sampling(
     while current_energy > energy_limit
         # Save the current lattice state
         current_occupations = deepcopy(walker.occupations)
+        number_occupied_sites = sum(walker.occupations)  # Number of occupied sites
 
         # Generate a new walker with a random configuration
         walker.occupations = [false for i in 1:length(walker.occupations)]
-        for i in sample(1:length(walker.occupations), 4, replace=false)
+        for i in sample(1:length(walker.occupations), N, replace=false)
             walker.occupations[i] = true
         end
         

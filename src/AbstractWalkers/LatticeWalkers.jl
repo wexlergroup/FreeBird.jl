@@ -549,7 +549,7 @@ function rejection_sampling(
 
         # Generate a new walker with a random configuration
         walker.occupations = [false for i in 1:length(walker.occupations)]
-        for i in sample(1:length(walker.occupations), N, replace=false)
+        for i in sample(1:length(walker.occupations), number_occupied_sites, replace=false)
             walker.occupations[i] = true
         end
         

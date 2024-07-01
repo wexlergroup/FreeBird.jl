@@ -10,7 +10,7 @@ include("Hamiltonians.jl")
 include("Potentials.jl")
 @reexport using .Potentials
 
-include("EnergyEval.jl")
+include("EnergyEval/EnergyEval.jl")
 @reexport using .EnergyEval
 
 include("AbstractWalkers/AbstractWalkers.jl")

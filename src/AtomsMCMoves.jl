@@ -101,6 +101,17 @@ function single_atom_random_walk!(pos::SVector{3,T}, step_size::Float64) where T
     return pos 
 end
 
+function free_par_index(at::AtomWalker{C}) where C
+    ind_free_par = Array{Int}(undef, 0)
+    comp_cut = vcat([0],cumsum(at.list_num_par))
+    # @show comp_cut
+    for i in 1:C
+        if !at.frozen[i]
+            ind_free_par = vcat(ind_free_par,comp_cut[i]+1:comp_cut[i+1])
+        end
+    end
+    return ind_free_par
+end
 
 """
     MC_random_walk!(n_steps::Int, at::AtomWalker, lj::LJParameters, step_size::Float64, emax::typeof(0.0u"eV"))
@@ -122,24 +133,25 @@ Perform a Monte Carlo random walk on the atomic/molecular system.
 """
 function MC_random_walk!(
                     n_steps::Int, 
-                    at::AtomWalker, 
-                    lj::LJParameters, 
+                    at::AtomWalker{C}, 
+                    lj::LennardJonesParametersSets, 
                     step_size::Float64, 
                     emax::typeof(0.0u"eV")
-                    )
+                    ) where C
     n_accept = 0
     accept_this_walker = false
     for i_mc_step in 1:n_steps
         config = at.configuration
-        frozen = at.num_frozen_part
-        e_shift = at.energy_frozen_part
-        i_at = rand((frozen+1):length(config))
+        # frozen = at.num_frozen_part
+        # e_shift = at.energy_frozen_part
+        free_index = free_par_index(at)
+        i_at = rand(free_index)
         pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
         orig_pos = deepcopy(pos)
         pos = single_atom_random_walk!(pos, step_size)
         pos = periodic_boundary_wrap!(pos, config)
         config.position[i_at] = pos
-        energy = interaction_energy(config, lj; frozen=frozen) + e_shift
+        energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
         if energy >= emax
             # reject the move, revert to original position
             config.position[i_at] = orig_pos

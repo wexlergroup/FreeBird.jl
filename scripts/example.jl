@@ -26,4 +26,4 @@ energies, ls, _ = nested_sampling_loop!(ls, ns_params, 10_000, mc, save)
 
 # The energies are saved in the file output-energies.csv
 # We can also save the final walkers to a file
-write_walkers("slab-08-final-ls.extxyz", ls.walkers)
+write_walkers("output-final-ls.extxyz", ls.walkers)

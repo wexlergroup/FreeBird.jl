@@ -359,14 +359,16 @@ SaveEveryN is a concrete subtype of DataSavingStrategy that specifies saving dat
 - `df_filename::String`: The name of the file to save the DataFrame to.
 - `wk_filename::String`: The name of the file to save the atom walker to.
 - `ls_filename::String`: The name of the file to save the liveset to.
-- `n::Int`: The number of steps between each save.
+- `n_traj::Int`: The number of steps between each save of the culled walker into a trajectory file.
+- `n_snap::Int`: The number of steps between each save of the liveset into a snapshot file.
 
 """
 @kwdef struct SaveEveryN <: DataSavingStrategy
     df_filename::String = "output_df.csv"
     wk_filename::String = "output.traj.extxyz"
     ls_filename::String = "output.ls.extxyz"
-    n::Int = 100
+    n_traj::Int = 100
+    n_snap::Int = 1000
 end
 
 """
@@ -393,7 +395,7 @@ Write the DataFrame `df` to a file specified by `d_strategy.filename` every `d_s
 
 """
 function write_df_every_n(df::DataFrame, step::Int, d_strategy::SaveEveryN)
-    if step % d_strategy.n == 0
+    if step % d_strategy.n_traj == 0
         write_df(d_strategy.df_filename, df)
     end
 end
@@ -410,7 +412,7 @@ Write the atom walker `at` to a file specified by `d_strategy.wk_filename` every
 
 """
 function write_walker_every_n(at::AtomWalker, step::Int, d_strategy::SaveEveryN)
-    if step % d_strategy.n == 0
+    if step % d_strategy.n_traj == 0
         write_single_walker(d_strategy.wk_filename, at, true)
     end
 end
@@ -427,7 +429,7 @@ Write the liveset `ls` to file every `n` steps, as specified by the `d_strategy`
 
 """
 function write_ls_every_n(ls::AtomWalkers, step::Int, d_strategy::SaveEveryN)
-    if step % d_strategy.n == 0
+    if step % d_strategy.n_snap == 0
         write_walkers(d_strategy.ls_filename, ls.walkers)
     end
 end

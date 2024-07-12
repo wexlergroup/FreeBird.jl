@@ -8,6 +8,7 @@ using Unitful
 export LJParameters, lj_energy
 export CompositeLJParameters
 export LennardJonesParametersSets
+export substrate_mediated_dispersion
 
 abstract type LennardJonesParametersSets end
 
@@ -96,7 +97,9 @@ function lj_energy(epsilon::typeof(1.0u"eV"), sigma::typeof(1.0u"Å"), r::typeof
     return 4 * epsilon * (r12 - r6)
 end
 
-
+function substrate_mediated_dispersion(Cs1, Cs2, r, Z)
+    return Cs1*((r^2 + 4* Z^2)^(-3/2) * r^(-3) * (4/3 + (4*Z^2)/(r^2 + 4* Z^2))) - Cs2*(r^2 + 4* Z^2)^(-3)
+end
 """
     lj_energy(r::typeof(1.0u"Å"), lj::LJParameters)
 

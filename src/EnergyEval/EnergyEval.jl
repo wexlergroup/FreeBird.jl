@@ -47,6 +47,25 @@ function pbc_dist(pos1::Union{SVector{T},Vector{T}},
     return sqrt(distsq)
 end
 
+function pbc_dist2(pos1::Union{SVector{T},Vector{T}},
+                   pos2::Union{SVector{T},Vector{T}},
+                       at::AbstractSystem) where {T}
+    pbc = at.boundary_conditions
+    box = at.bounding_box
+    Zs = [pos1[3], pos2[3]]
+    distsq = 0.0u"Å"^2
+    for i in eachindex(pos1)
+        if pbc[i] == Periodic()
+            distsq += min(abs(pos1[i] - pos2[i]), box[i][i] - abs(pos1[i] - pos2[i]))^2
+        elseif pbc[i] == DirichletZero()
+            distsq += (pos1[i] - pos2[i])^2
+        else
+            error("Unsupported boundary condition: $(pbc[i])")
+        end
+    end
+    return (sqrt(distsq), maximum(Zs))
+end
+
 """
     inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, lj::LJParameters)
 
@@ -98,6 +117,17 @@ function intra_component_energy(at::AbstractSystem, lj::LJParameters)
     return energy
 end
 
+function intra_component_energy(at::AbstractSystem, lj::LJParameters, slab_height, img_plane, Cs1, Cs2)
+    energy = 0.0u"eV"
+    for i in 1:length(at)
+        for j in (i+1):length(at)
+            r, Z = pbc_dist2(position(at, i), position(at, j), at)
+            Z -= slab_height-img_plane
+            energy += lj_energy(r,lj) + substrate_mediated_dispersion(Cs1, Cs2, r, Z)
+        end
+    end
+    return energy
+end
 
 
 """
@@ -208,7 +238,8 @@ The energy is calculated by summing the pairwise interactions between the free p
 function interacting_energy(at::AbstractSystem, 
                           ljs::CompositeLJParameters{C}, 
                           list_num_par::Vector{Int},
-                          frozen::Vector{Bool}
+                          frozen::Vector{Bool};
+                          dispersion_params = []
                           ) where {C}
     check_num_components(C, list_num_par, frozen)
     energy = 0.0u"eV"
@@ -216,7 +247,13 @@ function interacting_energy(at::AbstractSystem,
     # intra-component interactions
     for i in findall(.!frozen) # find non-frozen components
         if length(components[i]) > 1
-            energy += intra_component_energy(components[i], ljs.lj_param_sets[i,i])
+            if isempty(dispersion_params)
+                energy += intra_component_energy(components[i], ljs.lj_param_sets[i,i])
+            elseif length(dispersion_params) == 4
+                energy += intra_component_energy(components[i], ljs.lj_param_sets[i,i], dispersion_params[1], dispersion_params[2], dispersion_params[3], dispersion_params[4])
+            else 
+                error("Unsupported dispersion parameters!")
+            end
         end
     end
     # inter-component interactions
@@ -230,6 +267,7 @@ function interacting_energy(at::AbstractSystem,
     end
     return energy
 end
+
 
 """
     interacting_energy(at::AbstractSystem, lj::LJParameters, list_num_par::Vector{Int}, frozen::Vector{Bool})

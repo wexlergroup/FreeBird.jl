@@ -153,7 +153,7 @@ Returns
 - `liveset`: The updated set of atom walkers.
 - `ns_params`: The updated nested sampling parameters.
 """
-function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine)
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine; slab_height = 0.0u"Å", dispersion_params = [])
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.lj_potential
@@ -166,7 +166,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     else
         error("Unsupported MCRoutine type: $mc_routine")
     end
-    accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
+    accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax; slab_height = slab_height, dispersion_params = dispersion_params)
     @info "iter: $(liveset.walkers[1].iter), acceptance rate: $rate, emax: $emax, is_accepted: $accept, step_size: $(ns_params.step_size)"
     if accept
         push!(ats, at)
@@ -277,11 +277,13 @@ function nested_sampling_loop!(liveset::AtomWalkers,
                                 ns_params::NestedSamplingParameters, 
                                 n_steps::Int64, 
                                 mc_routine::MCRoutine,
-                                save_strategy::DataSavingStrategy)
+                                save_strategy::DataSavingStrategy;
+                                slab_height = 0.0u"Å", 
+                                dispersion_params = [])
     df = DataFrame(iter=Int[], emax=Float64[])
     for i in 1:n_steps
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
-        iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+        iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine; slab_height = slab_height, dispersion_params = dispersion_params)
         @debug "n_step $i, iter: $iter, emax: $emax"
         if ns_params.fail_count >= ns_params.allowed_fail_count
             @warn "Failed to accept MC move $(ns_params.allowed_fail_count) times in a row. Reset step size!"

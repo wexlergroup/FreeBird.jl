@@ -17,6 +17,7 @@ using ..EnergyEval
 
 export periodic_boundary_wrap!
 export MC_random_walk!, MC_nve_walk!
+export build_new_box
 
 
 """
@@ -49,6 +50,55 @@ function periodic_boundary_wrap!(pos::SVector{3,T}, system::AbstractSystem) wher
             else
                 new_pos[i] = pos[i]
             end
+        else
+            error("Unsupported boundary condition: $(pbc[i]).")
+        end
+    end
+    pos = SVector{3,T}(new_pos)
+    return pos
+end
+
+function build_new_box(old_box, slab_height)
+    new_box = [[old_box[i][j] for j in 1:3] for i in 1:3]
+    new_box[3][3] -= slab_height
+    return new_box
+end
+
+
+function periodic_boundary_wrap!(pos::SVector{3,T}, pbc, box, slab_h) where T
+    new_pos = Vector{typeof(0.0u"Å")}(undef, 3)
+    for i in eachindex(pbc)
+        if pbc[i] == Periodic() # wrap the position
+            if i ==3
+                pos[i] = pbc[i] - slab_h
+                new_pos[i] = mod(pos[i], box[i][i]) + slab_h
+            elseif i != 3
+                pos[i] = pbc[i]
+                new_pos[i] = mod(pos[i], box[i][i])
+            end
+
+            
+        elseif pbc[i] == DirichletZero() # reflect the position
+            if i ==3
+                if (pos[i] - slab_h) > box[i][i]
+                    new_pos[i] = box[i][i]*2 - (pos[i] - slab_h) - slab_h
+                elseif (pos[i] - slab_h) < 0.0u"Å"
+                    new_pos[i] = -(pos[i] - slab_h) + slab_h
+                else
+                    new_pos[i] = (pos[i] - slab_h) + slab_h
+                end
+                
+            elseif i != 3
+                if pos[i] > box[i][i]
+                    new_pos[i] = box[i][i]*2 - pos[i]
+                elseif pos[i] < 0.0u"Å"
+                    new_pos[i] = -pos[i]
+                else
+                    new_pos[i] = pos[i]
+                end
+                
+            end
+
         else
             error("Unsupported boundary condition: $(pbc[i]).")
         end
@@ -136,10 +186,14 @@ function MC_random_walk!(
                     at::AtomWalker{C}, 
                     lj::LennardJonesParametersSets, 
                     step_size::Float64, 
-                    emax::typeof(0.0u"eV")
+                    emax::typeof(0.0u"eV");
+                    slab_height = 0.0u"Å",
+                    dispersion_params = []
                     ) where C
     n_accept = 0
     accept_this_walker = false
+    pbc = at.configuration.boundary_conditions
+    box = build_new_box(at.configuration.bounding_box, slab_height)
     for i_mc_step in 1:n_steps
         config = at.configuration
         free_index = free_par_index(at)
@@ -147,9 +201,9 @@ function MC_random_walk!(
         pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
         orig_pos = deepcopy(pos)
         pos = single_atom_random_walk!(pos, step_size)
-        pos = periodic_boundary_wrap!(pos, config)
+        pos = periodic_boundary_wrap!(pos, pbc, box, slab_height)
         config.position[i_at] = pos
-        energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
+        energy = interacting_energy(config, lj, at.list_num_par, at.frozen, dispersion_params=dispersion_params) + at.energy_frozen_part
         if energy >= emax
             # reject the move, revert to original position
             config.position[i_at] = orig_pos

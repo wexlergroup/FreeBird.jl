@@ -70,6 +70,52 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, positions
 end
 
 """
+lattice_positions(lattice_vectors::Matrix{Float64}, basis::Vector{Tuple{Float64, Float64, Float64}}, supercell_dimensions::Tuple{Int64, Int64, Int64})
+
+Compute the positions of atoms in a 3D lattice.
+
+# Arguments
+- `lattice_vectors::Matrix{Float64}`: The lattice vectors of the system.
+- `basis::Vector{Tuple{Float64, Float64, Float64}}`: The basis of the system.
+- `supercell_dimensions::Tuple{Int64, Int64, Int64}`: The dimensions of the supercell.
+
+# Returns
+- `positions::Matrix{Float64}`: The positions of the atoms in the supercell.
+
+"""
+function lattice_positions(lattice_vectors::Matrix{Float64}, 
+                           basis::Vector{Tuple{Float64, Float64, Float64}}, 
+                           supercell_dimensions::Tuple{Int64, Int64, Int64},
+                           )
+
+    num_basis_sites = length(basis)
+    num_supercell_sites = supercell_dimensions[1] * supercell_dimensions[2] * supercell_dimensions[3] * num_basis_sites
+
+    positions = zeros(Float64, num_supercell_sites, 3)
+    index = 1
+
+    a1 = lattice_vectors[:, 1]
+        a2 = lattice_vectors[:, 2]
+        a3 = lattice_vectors[:, 3]
+
+    for k in 1:supercell_dimensions[3]
+        for j in 1:supercell_dimensions[2]
+            for i in 1:supercell_dimensions[1]
+                for (bx, by, bz) in basis
+                    x = (i - 1) * a1[1] + (j - 1) * a2[1] + (k - 1) * a3[1] + bx
+                    y = (i - 1) * a1[2] + (j - 1) * a2[2] + (k - 1) * a3[2] + by
+                    z = (i - 1) * a1[3] + (j - 1) * a2[3] + (k - 1) * a3[3] + bz
+                    positions[index, :] = [x, y, z]
+                    index += 1
+                end
+            end
+        end
+    end
+    
+    return positions
+end
+
+"""
 mutable struct LatticeSystem
 
 The `LatticeSystem` struct represents a 3D lattice system.
@@ -107,29 +153,7 @@ mutable struct LatticeSystem
         adsorptions::Vector{Bool},
         cutoff_radii::Tuple{Float64, Float64}
     )
-        num_basis_sites = length(basis)
-        num_supercell_sites = supercell_dimensions[1] * supercell_dimensions[2] * supercell_dimensions[3] * num_basis_sites
-        
-        positions = zeros(Float64, num_supercell_sites, 3)
-        index = 1
-
-        a1 = lattice_vectors[:, 1]
-        a2 = lattice_vectors[:, 2]
-        a3 = lattice_vectors[:, 3]
-
-        for k in 1:supercell_dimensions[3]
-            for j in 1:supercell_dimensions[2]
-                for i in 1:supercell_dimensions[1]
-                    for (bx, by, bz) in basis
-                        x = (i - 1) * a1[1] + (j - 1) * a2[1] + (k - 1) * a3[1] + bx
-                        y = (i - 1) * a1[2] + (j - 1) * a2[2] + (k - 1) * a3[2] + by
-                        z = (i - 1) * a1[3] + (j - 1) * a2[3] + (k - 1) * a3[3] + bz
-                        positions[index, :] = [x, y, z]
-                        index += 1
-                    end
-                end
-            end
-        end
+        positions = lattice_positions(lattice_vectors, basis, supercell_dimensions)
 
         if length(occupations) != size(positions, 1)
             throw(ArgumentError("Length of occupations vector must match the number of lattice sites"))
@@ -143,6 +167,30 @@ mutable struct LatticeSystem
         neighbors = compute_neighbors(supercell_lattice_vectors, positions, periodicity, cutoff_radii)
         
         return new(lattice_vectors, positions, supercell_dimensions, occupations, neighbors, adsorptions)
+    end
+end
+
+
+function Base.show(io::IO, lattice::LatticeSystem)
+    println(io, "LatticeSystem:")
+    println(io, "    lattice_vectors      : ", lattice.lattice_vectors)
+    println(io, "    positions            : ", lattice.positions)
+    println(io, "    supercell_dimensions : ", lattice.supercell_dimensions)
+    println(io, "    occupations          : ", lattice.occupations)
+    println(io, "    adsorptions          : ", lattice.adsorptions)
+    println(io, "    neighbors            : ")
+    if length(lattice.neighbors) > 10
+        for i in 1:5
+            println(io, "        site ", i, ": ", "nearest = ", lattice.neighbors[i][1], ", next-nearest = ", lattice.neighbors[i][2])
+        end
+        println(io, "        ⋮")
+        for i in length(lattice.neighbors)-4:length(lattice.neighbors)
+            println(io, "        site ", i, ": ", "nearest = ", lattice.neighbors[i][1], ", next-nearest = ", lattice.neighbors[i][2])
+        end
+    else
+        for i in 1:length(lattice.neighbors)
+            println(io, "        site ", i, ": ", "nearest = ", lattice.neighbors[i][1], ", next-nearest = ", lattice.neighbors[i][2])
+        end
     end
 end
 

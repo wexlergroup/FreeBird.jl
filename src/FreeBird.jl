@@ -10,11 +10,14 @@ include("Hamiltonians.jl")
 include("Potentials.jl")
 @reexport using .Potentials
 
+include("AbstractWalkers/AbstractWalkers.jl")
+@reexport using .AbstractWalkers
+
 include("EnergyEval/EnergyEval.jl")
 @reexport using .EnergyEval
 
-include("AbstractWalkers/AbstractWalkers.jl")
-@reexport using .AbstractWalkers
+include("AbstractLiveSets/AbstractLiveSets.jl")
+@reexport using .AbstractLiveSets
 
 include("AtomsMCMoves.jl")
 @reexport using .AtomsMCMoves

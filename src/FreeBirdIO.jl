@@ -9,6 +9,7 @@ using AtomsIO, ExtXYZ, DataFrames, CSV
 using AtomsBase, Unitful
 
 using ..AbstractWalkers
+using ..AbstractLiveSets
 
 export read_single_config, read_configs, read_single_walker, read_walkers
 export write_single_walker, write_walkers

@@ -1,5 +1,3 @@
-abstract type LatticeWalkers end
-
 """
 compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, positions::Matrix{Float64}, cutoff_radii::Tuple{Float64, Float64}, periodicity::Vector{Bool})
 
@@ -212,7 +210,7 @@ Create a new `LatticeWalker` with the given configuration and optional energy an
 
 """
 
-mutable struct LatticeWalker
+mutable struct LatticeWalker <: AbstractWalker
     configuration::LatticeSystem
     energy::Float64
     iter::Int64

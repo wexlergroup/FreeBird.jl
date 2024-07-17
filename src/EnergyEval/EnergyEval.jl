@@ -6,7 +6,9 @@ module EnergyEval
 using AtomsBase
 using Unitful
 using StaticArrays
+using ..AbstractWalkers
 using ..Potentials
+using ..Hamiltonians
 
 export pbc_dist
 export interacting_energy, frozen_energy
@@ -290,5 +292,9 @@ The energy is calculated by summing the pairwise interactions between the free p
 
 """
 interacting_energy(at::AbstractSystem, lj::LJParameters) = intra_component_energy(at, lj)
+
+function interacting_energy(lattice::LatticeSystem, h::LatticeGasHamiltonian)
+    return
+end
 
 end # module EnergyEval

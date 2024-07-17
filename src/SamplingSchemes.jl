@@ -8,6 +8,7 @@ using DataFrames
 using ..AtomsMCMoves
 using ..Potentials
 using ..AbstractWalkers
+using ..AbstractLiveSets
 using ..EnergyEval
 using ..FreeBirdIO
 

@@ -5,7 +5,7 @@ module Hamiltonians
 
 using Unitful
 
-export LGHamiltonian
+export LatticeGasHamiltonian
 
 """
     struct LGHamiltonian
@@ -19,7 +19,7 @@ The `LGHamiltonian` struct represents the parameters for a lattice-gas Hamiltoni
 
 """
 
-struct LGHamiltonian
+struct LatticeGasHamiltonian
     adsorption_energy::typeof(1.0u"eV")
     nn_interaction_energy::typeof(1.0u"eV")
     nnn_interaction_energy::typeof(1.0u"eV")

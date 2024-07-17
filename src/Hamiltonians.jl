@@ -8,9 +8,9 @@ using Unitful
 export LatticeGasHamiltonian
 
 """
-    struct LGHamiltonian
+    struct LatticeGasHamiltonian
 
-The `LGHamiltonian` struct represents the parameters for a lattice-gas Hamiltonian.
+The `LatticeGasHamiltonian` struct represents the parameters for a lattice-gas Hamiltonian.
 
 # Fields
 - `adsorption_energy::typeof(1.0u"eV")`: The energy of adsorption on the lattice.

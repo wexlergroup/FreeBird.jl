@@ -1,25 +1,3 @@
-module SamplingSchemes
-
-using ExtXYZ
-using Setfield
-using Unitful
-using DataFrames
-
-using ..AtomsMCMoves
-using ..Potentials
-using ..AbstractWalkers
-using ..AbstractLiveSets
-using ..EnergyEval
-using ..FreeBirdIO
-
-export NestedSamplingParameters
-export sort_by_energy!, nested_sampling_step!
-export nested_sampling_loop!
-export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCDemonWalk, MixedMCRoutine
-
-abstract type SamplingParameters end
-
-
 """
     mutable struct NestedSamplingParameters <: SamplingParameters
 
@@ -336,9 +314,3 @@ function nested_sampling_loop!(liveset::AtomWalkers,
     end
     return df, liveset, mc_routine.ns_params_main
 end
-
-
-
-
-
-end # module NestedSamplingLoops

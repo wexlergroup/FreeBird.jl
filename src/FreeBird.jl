@@ -25,7 +25,7 @@ include("AtomsMCMoves.jl")
 include("FreeBirdIO.jl")
 @reexport using .FreeBirdIO
 
-include("SamplingSchemes.jl")
+include("SamplingSchemes/SamplingSchemes.jl")
 @reexport using .SamplingSchemes
 
 include("AnalysisTools.jl")

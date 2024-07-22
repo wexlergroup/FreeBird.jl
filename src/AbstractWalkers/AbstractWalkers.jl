@@ -22,4 +22,6 @@ include("AtomWalkers.jl")
 
 include("LatticeWalkers.jl")
 
+include("helpers.jl")
+
 end # module AbstractWalkers

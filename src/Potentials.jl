@@ -151,6 +151,10 @@ function Base.show(io::IO, lj::CompositeLJParameters{C}) where C
     end
 end
 
+function Base.:(==)(cljp1::CompositeLJParameters{C}, cljp2::CompositeLJParameters{C}) where C
+    return cljp1.lj_param_sets == cljp2.lj_param_sets
+end
+
 """
     CompositeLJParameters(c::Int, ljs::Vector{LJParameters})
 

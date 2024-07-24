@@ -14,6 +14,7 @@ using ..Hamiltonians
 export AbstractWalker
 export AtomWalker, AtomWalkers, LJAtomWalkers
 export LatticeWalkers, LatticeSystem, LatticeWalker  # , LatticeWalkers
+export LatticeGeometry, SquareLattice, TriangularLattice, GenericLattice
 export update_walker!
 
 abstract type AbstractWalker end

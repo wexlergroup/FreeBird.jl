@@ -1,34 +1,31 @@
 """
-    exact_enumeration(primitive_lattice_vectors::Matrix{Float64}, basis::Vector{Tuple{Float64, Float64}}, supercell_dimensions::Tuple{Int64, Int64}, number_occupied_sites::Int64, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, cutoff_radii::Tuple{Float64, Float64})
+    exact_enumeration(lattice::LatticeSystem{G}, cutoff_radii::Tuple{Float64, Float64}, h::LatticeGasHamiltonian) where G
 
 Enumerate all possible configurations of a lattice system and compute the energy of each configuration.
 
 # Arguments
-- `primitive_lattice_vectors::Matrix{Float64}`: The primitive lattice vectors of the system.
-- `basis::Vector{Tuple{Float64, Float64}}`: The basis of the system.
-- `supercell_dimensions::Tuple{Int64, Int64}`: The dimensions of the supercell.
-- `number_occupied_sites::Int64`: The number of occupied sites in each configuration.
-- `adsorption_energy::Float64`: The adsorption energy of the particles.
-- `nn_energy::Float64`: The nearest-neighbor interaction energy.
-- `nnn_energy::Float64`: The next-nearest-neighbor interaction energy.
+- `lattice::LatticeSystem{G}`: The (starting) lattice system to enumerate. All possible configurations will be generated from this lattice system.
 - `cutoff_radii::Tuple{Float64, Float64}`: The cutoff radii for the first and second nearest neighbors.
+- `h::LatticeGasHamiltonian`: The lattice gas Hamiltonian.
 
 # Returns
-- `energies::Vector{Float64}`: A vector of the energies of each configuration.
-- `configurations::Vector{Vector{Bool}}`: A vector of the configurations of the lattice system.
-
+- `energies::Vector{typeof(0.0u"eV")}`: An array of energies for each configuration.
+- `configurations::Vector{LatticeSystem{G}}`: An array of lattice system configurations for each configuration.
+- `walkers::Vector{LatticeWalker}`: An array of lattice walkers for each configuration.
 """
-
 function exact_enumeration(
-    primitive_lattice_vectors::Matrix{Float64},
-    basis::Vector{Tuple{Float64, Float64, Float64}},
-    supercell_dimensions::Tuple{Int64, Int64, Int64},
-    periodicity::Tuple{Bool, Bool, Bool},
-    number_occupied_sites::Int64,
-    adsorptions::Vector{Bool},
+    lattice::LatticeSystem{G},
+    cutoff_radii::Tuple{Float64, Float64},
     h::LatticeGasHamiltonian,
-    cutoff_radii::Tuple{Float64, Float64}
-)
+    ) where G
+
+    primitive_lattice_vectors::Matrix{Float64} = lattice.lattice_vectors
+    basis::Vector{Tuple{Float64, Float64, Float64}} = lattice.basis
+    supercell_dimensions::Tuple{Int64, Int64, Int64} = lattice.supercell_dimensions
+    periodicity::Tuple{Bool, Bool, Bool} = lattice.periodicity 
+    adsorptions::Vector{Bool} = lattice.adsorptions
+    number_occupied_sites::Int64 = sum(lattice.occupations)
+
     K, L, M = supercell_dimensions
     num_basis_sites = length(basis)
     total_sites = K * L * M * num_basis_sites
@@ -45,7 +42,7 @@ function exact_enumeration(
     end
 
     # Generate LatticeSystem objects for each configuration
-    lattices = [LatticeSystem(primitive_lattice_vectors, basis, supercell_dimensions, periodicity, occupations, adsorptions, cutoff_radii) for occupations in all_occupation_vectors]
+    lattices = [LatticeSystem{G}(primitive_lattice_vectors, basis, supercell_dimensions, periodicity, occupations, adsorptions, cutoff_radii) for occupations in all_occupation_vectors]
 
     # Generate LatticeWalker objects for each lattice system
     walkers = [LatticeWalker(lattice) for lattice in lattices]
@@ -57,10 +54,15 @@ function exact_enumeration(
     end
 
     # Extract energies and configurations
-    energies = [walker.energy for walker in walkers]
-    configurations = [walker.configuration for walker in walkers]
+    energies = Array{typeof(0.0u"eV")}(undef, length(walkers))
+    configurations = Array{LatticeSystem{G}}(undef, length(walkers))
 
-    return energies, configurations
+    for (i, walker) in enumerate(walkers)
+        energies[i] = walker.energy
+        configurations[i] = walker.configuration
+    end
+
+    return energies, configurations, walkers
 end
 
 """

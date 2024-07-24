@@ -89,12 +89,11 @@ function lattice_positions(lattice_vectors::Matrix{Float64},
     num_basis_sites = length(basis)
     num_supercell_sites = supercell_dimensions[1] * supercell_dimensions[2] * supercell_dimensions[3] * num_basis_sites
 
-    positions = zeros(Float64, num_supercell_sites, 3)
-    index = 1
+    a1, a2, a3 = [lattice_vectors[:, i] for i in 1:3]
 
-    a1 = lattice_vectors[:, 1]
-        a2 = lattice_vectors[:, 2]
-        a3 = lattice_vectors[:, 3]
+    positions = zeros(Float64, num_supercell_sites, 3)
+
+    index = 1
 
     for k in 1:supercell_dimensions[3]
         for j in 1:supercell_dimensions[2]
@@ -112,6 +111,17 @@ function lattice_positions(lattice_vectors::Matrix{Float64},
     
     return positions
 end
+
+
+abstract type LatticeGeometry end
+
+abstract type SquareLattice <: LatticeGeometry end
+
+abstract type TriangularLattice <: LatticeGeometry end
+
+abstract type GenericLattice <: LatticeGeometry end
+
+
 
 """
 mutable struct LatticeSystem
@@ -134,23 +144,25 @@ Create a new `LatticeSystem` with the given lattice vectors, basis, supercell di
 
 """
 
-mutable struct LatticeSystem
+mutable struct LatticeSystem{G}
     lattice_vectors::Matrix{Float64}
     positions::Matrix{Float64}
+    basis::Vector{Tuple{Float64, Float64, Float64}}
     supercell_dimensions::Tuple{Int64, Int64, Int64}
+    periodicity::Tuple{Bool, Bool, Bool}
     occupations::Vector{Bool}
     neighbors::Vector{Tuple{Vector{Int}, Vector{Int}}}
     adsorptions::Vector{Bool}
 
-    function LatticeSystem(
+    function LatticeSystem{G}(
         lattice_vectors::Matrix{Float64},
         basis::Vector{Tuple{Float64, Float64, Float64}},
         supercell_dimensions::Tuple{Int64, Int64, Int64},
         periodicity::Tuple{Bool, Bool, Bool},
         occupations::Vector{Bool},
         adsorptions::Vector{Bool},
-        cutoff_radii::Tuple{Float64, Float64}
-    )
+        cutoff_radii::Tuple{Float64, Float64},
+    ) where G
         positions = lattice_positions(lattice_vectors, basis, supercell_dimensions)
 
         if length(occupations) != size(positions, 1)
@@ -164,33 +176,12 @@ mutable struct LatticeSystem
         supercell_lattice_vectors = lattice_vectors * Diagonal([supercell_dimensions[1], supercell_dimensions[2], supercell_dimensions[3]])
         neighbors = compute_neighbors(supercell_lattice_vectors, positions, periodicity, cutoff_radii)
         
-        return new(lattice_vectors, positions, supercell_dimensions, occupations, neighbors, adsorptions)
+        return new{G}(lattice_vectors, positions, basis, supercell_dimensions, periodicity, occupations, neighbors, adsorptions)
     end
 end
 
 
-function Base.show(io::IO, lattice::LatticeSystem)
-    println(io, "LatticeSystem:")
-    println(io, "    lattice_vectors      : ", lattice.lattice_vectors)
-    println(io, "    positions            : ", lattice.positions)
-    println(io, "    supercell_dimensions : ", lattice.supercell_dimensions)
-    println(io, "    occupations          : ", lattice.occupations)
-    println(io, "    adsorptions          : ", lattice.adsorptions)
-    println(io, "    neighbors            : ")
-    if length(lattice.neighbors) > 10
-        for i in 1:5
-            println(io, "        site ", i, ": ", "nearest = ", lattice.neighbors[i][1], ", next-nearest = ", lattice.neighbors[i][2])
-        end
-        println(io, "        ⋮")
-        for i in length(lattice.neighbors)-4:length(lattice.neighbors)
-            println(io, "        site ", i, ": ", "nearest = ", lattice.neighbors[i][1], ", next-nearest = ", lattice.neighbors[i][2])
-        end
-    else
-        for i in 1:length(lattice.neighbors)
-            println(io, "        site ", i, ": ", "nearest = ", lattice.neighbors[i][1], ", next-nearest = ", lattice.neighbors[i][2])
-        end
-    end
-end
+
 
 """
     mutable struct LatticeWalker
@@ -217,4 +208,11 @@ mutable struct LatticeWalker <: AbstractWalker
     function LatticeWalker(configuration::LatticeSystem; energy=0.0u"eV", iter=0)
         return new(configuration, energy, iter)
     end
+end
+
+function Base.show(io::IO, walker::LatticeWalker)
+    println(io, "LatticeWalker(")
+    println(io, "    configuration : ", walker.configuration)
+    println(io, "    energy       : ", walker.energy)
+    println(io, "    iter         : ", walker.iter, ")")
 end

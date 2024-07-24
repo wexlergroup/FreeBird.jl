@@ -99,5 +99,5 @@ function Base.show(io::IO, lattice::LatticeSystem{G}) where G
     println(io, "    supercell_dimensions : ", lattice.supercell_dimensions)
     println(io, "    occupations          : "), print_lattice(io, lattice, lattice.occupations)
     println(io, "    adsorptions          : "), print_lattice(io, lattice, lattice.adsorptions)
-    println(io, "    neighbors            : ", lattice.neighbors)
+    # println(io, "    neighbors            : ", lattice.neighbors)
 end

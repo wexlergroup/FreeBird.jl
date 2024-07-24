@@ -212,7 +212,14 @@ end
 
 function Base.show(io::IO, walker::LatticeWalker)
     println(io, "LatticeWalker(")
-    println(io, "    configuration : ", walker.configuration)
-    println(io, "    energy       : ", walker.energy)
-    println(io, "    iter         : ", walker.iter, ")")
+    println(io, "    configuration: ", walker.configuration)
+    println(io, "    energy: ", walker.energy)
+    println(io, "    iter: ", walker.iter, ")")
+end
+
+function Base.show(io::IO, walker::Vector{LatticeWalker})
+    println(io, "Vector{LatticeWalker}(", length(walker), "):")
+    for (ind, w) in enumerate(walker)
+        println(io, "[", ind, "] ", w)
+    end
 end

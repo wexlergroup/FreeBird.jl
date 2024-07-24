@@ -7,8 +7,10 @@ using Unitful
 
 export LatticeGasHamiltonian
 
+abstract type ClassicalHamiltonian end
+
 """
-    struct LatticeGasHamiltonian
+    struct LatticeGasHamiltonian <: ClassicalHamiltonian
 
 The `LatticeGasHamiltonian` struct represents the parameters for a lattice-gas Hamiltonian.
 
@@ -19,10 +21,17 @@ The `LatticeGasHamiltonian` struct represents the parameters for a lattice-gas H
 
 """
 
-struct LatticeGasHamiltonian
+struct LatticeGasHamiltonian <: ClassicalHamiltonian
     adsorption_energy::typeof(1.0u"eV")
     nn_interaction_energy::typeof(1.0u"eV")
     nnn_interaction_energy::typeof(1.0u"eV")
+end
+
+function Base.show(io::IO, hamiltonian::LatticeGasHamiltonian)
+    println(io, "LatticeGasHamiltonian:")
+    println(io, "    adsorption_energy:      ", hamiltonian.adsorption_energy)
+    println(io, "    nn_interaction_energy:  ", hamiltonian.nn_interaction_energy)
+    println(io, "    nnn_interaction_energy: ", hamiltonian.nnn_interaction_energy)
 end
 
 end # module Hamiltonians

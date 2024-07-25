@@ -177,7 +177,7 @@ function CompositeLJParameters(c::Int, ljs::Vector{LJParameters})
     if length(ljs) == c^2
         # If the number of LJParameters sets is equal to the number 
         # of elements in the matrix, then assume that Vector{LJParameters} 
-        # is a flattened matrix, then reshape the vector into a matrix.
+        # is a flattened matrix and reshape the vector into a matrix.
         return CompositeLJParameters{c}(reshape(ljs, c, c))
     elseif length(ljs) == c*(c+1)/2
         # If the number of LJParameters sets is equal to the number

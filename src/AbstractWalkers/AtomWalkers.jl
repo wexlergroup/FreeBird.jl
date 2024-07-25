@@ -30,7 +30,7 @@ mutable struct AtomWalker{C}
         if length(list_num_par) != C
             throw(ArgumentError("the length of list_num_par is not compatible with the number of components."))
         elseif length(frozen) != C
-            throw(ArgumentError("the length of the frozen is not compatible with the number of components."))
+            throw(ArgumentError("the length of frozen is not compatible with the number of components."))
         end
         if C==1
             list_num_par = [length(configuration)]

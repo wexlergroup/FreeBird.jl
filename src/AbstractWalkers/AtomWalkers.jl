@@ -28,7 +28,7 @@ mutable struct AtomWalker{C}
     energy_frozen_part::typeof(0.0u"eV")
     function AtomWalker{C}(configuration::FastSystem; energy=0.0u"eV", iter=0, list_num_par=zeros(Int,C), frozen=zeros(Bool,C), energy_frozen_part=0.0u"eV") where C
         if length(list_num_par) != C
-            throw(ArgumentError("the length of the list_num_par is not compatible with the number of components."))
+            throw(ArgumentError("the length of list_num_par is not compatible with the number of components."))
         elseif length(frozen) != C
             throw(ArgumentError("the length of the frozen is not compatible with the number of components."))
         end

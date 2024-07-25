@@ -31,7 +31,7 @@ Compute the distance between two positions considering periodic boundary conditi
 """
 function pbc_dist(pos1::Union{SVector{T},Vector{T}},
                   pos2::Union{SVector{T},Vector{T}},
-                      at::AbstractSystem) where {T}
+                  at::AbstractSystem) where {T}
     pbc = at.boundary_conditions
     box = at.bounding_box
     distsq = 0.0u"Å"^2

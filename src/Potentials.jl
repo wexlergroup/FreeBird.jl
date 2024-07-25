@@ -172,17 +172,46 @@ the upper triangular part of the matrix is needed.
 # Returns
 - A `CompositeLJParameters` object.
 
+# Example
+```jldoctest
+julia> ljs = [LJParameters(epsilon=e) for e in [11, 12, 13, 22, 23, 33]]
+6-element Vector{LJParameters}:
+ LJParameters(11.0 eV, 1.0 Å, Inf, 0.0 eV)
+ LJParameters(12.0 eV, 1.0 Å, Inf, 0.0 eV)
+ LJParameters(13.0 eV, 1.0 Å, Inf, 0.0 eV)
+ LJParameters(22.0 eV, 1.0 Å, Inf, 0.0 eV)
+ LJParameters(23.0 eV, 1.0 Å, Inf, 0.0 eV)
+ LJParameters(33.0 eV, 1.0 Å, Inf, 0.0 eV)
+
+julia> ljp = CompositeLJParameters(3,ljs)
+CompositeLJParameters{3}(lj_param_sets::3x3 Matrix{LJParameters}):
+    lj_param_sets[1, 1] : LJParameters(11.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[1, 2] : LJParameters(12.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[1, 3] : LJParameters(13.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[2, 1] : LJParameters(12.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[2, 2] : LJParameters(22.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[2, 3] : LJParameters(23.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[3, 1] : LJParameters(13.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[3, 2] : LJParameters(23.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[3, 3] : LJParameters(33.0 eV, 1.0 Å, Inf, 0.0 eV)
+```
 """
 function CompositeLJParameters(c::Int, ljs::Vector{LJParameters})
     if length(ljs) == c^2
         # If the number of LJParameters sets is equal to the number 
         # of elements in the matrix, then assume that Vector{LJParameters} 
         # is a flattened matrix and reshape the vector into a matrix.
+        @info "Creating CompositeLJParameters from a flattened matrix. By specifying
+        $length(ljs) sets of LJParameters, a $c x $c matrix is constructed. If this 
+        was not your intention, please check the documentation or raise an issue."
         return CompositeLJParameters{c}(reshape(ljs, c, c))
     elseif length(ljs) == c*(c+1)/2
         # If the number of LJParameters sets is equal to the number
         # of elements in the upper triangular part of the matrix, then
         # construct the full matrix from the upper triangular part.
+        @info "Creating CompositeLJParameters from the upper triangular part of the matrix.
+        By specifying $length(ljs) sets of LJParameters, a $c x $c matrix is constructed.
+        If this was not your intention, please check the documentation or raise an issue."
         ljmatrix = Matrix{LJParameters}(undef, c, c)
         k = 1
         for i in 1:c

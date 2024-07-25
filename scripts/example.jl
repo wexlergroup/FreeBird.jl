@@ -3,6 +3,7 @@ using FreeBird
 
 # First, we need to read the walkers from a file
 # Note that the periodic boundary conditions are updated to True, True, False
+# where False means "confined by a reflecting wall"
 ats = read_walkers("scripts/slab-08-4x4.extxyz",pbc="TTF")
 
 # Update the system to have 80 frozen particles and 8 free particles

@@ -36,7 +36,7 @@ mutable struct AtomWalker{C}
             list_num_par = [length(configuration)]
         end
         if sum(list_num_par) != length(configuration)
-            throw(ArgumentError("the sum of the list_num_par is not compatible with the length of the configuration."))
+            throw(ArgumentError("the sum of list_num_par is not compatible with the length of the configuration."))
         end
         return new{C}(configuration, energy, iter, list_num_par, frozen, energy_frozen_part)
     end

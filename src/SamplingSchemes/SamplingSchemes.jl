@@ -5,6 +5,7 @@ using Setfield
 using Unitful
 using DataFrames
 using Combinatorics
+using Random
 
 using ..AtomsMCMoves
 using ..Potentials

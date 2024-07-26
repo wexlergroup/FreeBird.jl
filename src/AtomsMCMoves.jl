@@ -101,6 +101,11 @@ function single_atom_random_walk!(pos::SVector{3,T}, step_size::Float64) where T
     return pos 
 end
 
+"""
+    free_par_index(at::AtomWalker{C}) where C
+
+Get the indices of the free particles in the `AtomWalker`.
+"""
 function free_par_index(at::AtomWalker{C}) where C
     ind_free_par = Array{Int}(undef, 0)
     comp_cut = vcat([0],cumsum(at.list_num_par))

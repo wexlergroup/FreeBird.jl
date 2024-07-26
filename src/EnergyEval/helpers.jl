@@ -1,3 +1,5 @@
+# This file contains several convience functions related to the manipulation of `AbstractSystem` objects. 
+
 """
     split_components(at::AbstractSystem, list_num_par::Vector{Int})
 

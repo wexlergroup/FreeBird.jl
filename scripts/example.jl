@@ -18,8 +18,11 @@ ls = LJAtomWalkers(ats, lj)
 # We can now create a Monte Carlo object
 mc = MCRandomWalkClone()
 
+# Let's specify the nested sampling parameters: 
+# Monte Carlo steps, default step size, step size, step size lower bound, step size upper bound, current fail count, allowed fail count
+# Use `?NestedSamplingParameters` to see the documentation for more information
 ns_params = NestedSamplingParameters(1600, 0.1, 0.01, 1e-5, 0.1, 0, 200)
-# We can also create a save object, using default value for most parameters except n_snap
+# We can also create a save object, using default value for most parameters except `n_snap` for saving snapshots
 save = SaveEveryN(n_snap=1000)
 
 # And finally, we can run the simulation

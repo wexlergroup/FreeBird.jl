@@ -70,10 +70,8 @@ function periodic_boundary_wrap!(pos::SVector{3,T}, pbc, box, slab_h) where T
     for i in eachindex(pbc)
         if pbc[i] == Periodic() # wrap the position
             if i ==3
-                pos[i] = pbc[i] - slab_h
-                new_pos[i] = mod(pos[i], box[i][i]) + slab_h
+                new_pos[i] = mod(pos[i], box[i][i])
             elseif i != 3
-                pos[i] = pbc[i]
                 new_pos[i] = mod(pos[i], box[i][i])
             end
 
@@ -81,7 +79,7 @@ function periodic_boundary_wrap!(pos::SVector{3,T}, pbc, box, slab_h) where T
         elseif pbc[i] == DirichletZero() # reflect the position
             if i ==3
                 if (pos[i] - slab_h) > box[i][i]
-                    new_pos[i] = box[i][i]*2 - (pos[i] - slab_h) - slab_h
+                    new_pos[i] = box[i][i]*2 - (pos[i] - slab_h) + slab_h
                 elseif (pos[i] - slab_h) < 0.0u"Å"
                     new_pos[i] = -(pos[i] - slab_h) + slab_h
                 else

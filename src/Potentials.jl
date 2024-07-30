@@ -6,6 +6,11 @@ module Potentials
 using Unitful
 
 export LJParameters, lj_energy
+export CompositeLJParameters
+export LennardJonesParametersSets
+
+abstract type LennardJonesParametersSets end
+
 
 """
     struct LJParameters
@@ -19,7 +24,7 @@ The `LJParameters` struct represents the parameters for the Lennard-Jones potent
 - `shift::typeof(0.0u"eV")`: The energy shift applied to the potential, calculated at the cutoff distance.
 
 """
-struct LJParameters
+struct LJParameters <: LennardJonesParametersSets
     epsilon::typeof(1.0u"eV")
     sigma::typeof(1.0u"Å")
     cutoff::Float64
@@ -115,6 +120,113 @@ end
 
 
 
+"""
+    struct CompositeLJParameters{C} <: LennardJonesParametersSets
 
+CompositeLJParameters is a struct that represents a set of composite Lennard-Jones parameters.
+
+# Fields
+- `lj_param_sets::Matrix{LJParameters}`: A matrix of LJParameters representing the LJ parameter sets.
+
+# Type Parameters
+- `C::Int`: The number of composite parameter sets.
+
+"""
+struct CompositeLJParameters{C} <: LennardJonesParametersSets
+    lj_param_sets::Matrix{LJParameters}
+    function CompositeLJParameters{C}(lj_param_sets::Matrix{LJParameters}) where C
+        if size(lj_param_sets) != (C, C)
+            throw(ArgumentError("the size of the matrix is not compatible with the number of components."))
+        end
+        new{C}(lj_param_sets)
+    end
+end
+
+function Base.show(io::IO, lj::CompositeLJParameters{C}) where C
+    println(io, "CompositeLJParameters{$C}(lj_param_sets::$(C)x$C Matrix{LJParameters}):")
+    for i in 1:C
+        for j in 1:C
+            println(io, "    lj_param_sets[$i, $j] : ", lj.lj_param_sets[i, j])
+        end
+    end
+end
+
+function Base.:(==)(cljp1::CompositeLJParameters{C}, cljp2::CompositeLJParameters{C}) where C
+    return cljp1.lj_param_sets == cljp2.lj_param_sets
+end
+
+"""
+    CompositeLJParameters(c::Int, ljs::Vector{LJParameters})
+
+Construct a `CompositeLJParameters` object from a vector of LJParameters.
+
+# Arguments
+- `c::Int`: The number of components.
+- `ljs::Vector{LJParameters}`: A vector of LJParameters. 
+The number of elements in the vector must be equal to `c^2` or `c*(c+1)/2`. 
+The former case is for a full flattened matrix of LJParameters, useful when 
+the interactions are asymmetric, i.e., `epsilon_ij != epsilon_ji`. The latter
+case is for symmetric interactions, i.e., `epsilon_ij = epsilon_ji`, hence only
+the upper triangular part of the matrix is needed.
+
+# Returns
+- A `CompositeLJParameters` object.
+
+# Example
+```jldoctest
+julia> ljs = [LJParameters(epsilon=e) for e in [11, 12, 13, 22, 23, 33]]
+6-element Vector{LJParameters}:
+ LJParameters(11.0 eV, 1.0 Å, Inf, 0.0 eV)
+ LJParameters(12.0 eV, 1.0 Å, Inf, 0.0 eV)
+ LJParameters(13.0 eV, 1.0 Å, Inf, 0.0 eV)
+ LJParameters(22.0 eV, 1.0 Å, Inf, 0.0 eV)
+ LJParameters(23.0 eV, 1.0 Å, Inf, 0.0 eV)
+ LJParameters(33.0 eV, 1.0 Å, Inf, 0.0 eV)
+
+julia> ljp = CompositeLJParameters(3,ljs)
+CompositeLJParameters{3}(lj_param_sets::3x3 Matrix{LJParameters}):
+    lj_param_sets[1, 1] : LJParameters(11.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[1, 2] : LJParameters(12.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[1, 3] : LJParameters(13.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[2, 1] : LJParameters(12.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[2, 2] : LJParameters(22.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[2, 3] : LJParameters(23.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[3, 1] : LJParameters(13.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[3, 2] : LJParameters(23.0 eV, 1.0 Å, Inf, 0.0 eV)
+    lj_param_sets[3, 3] : LJParameters(33.0 eV, 1.0 Å, Inf, 0.0 eV)
+```
+"""
+function CompositeLJParameters(c::Int, ljs::Vector{LJParameters})
+    if length(ljs) == c^2
+        # If the number of LJParameters sets is equal to the number 
+        # of elements in the matrix, then assume that Vector{LJParameters} 
+        # is a flattened matrix and reshape the vector into a matrix.
+        @info "Creating CompositeLJParameters from a flattened matrix. By specifying
+        $length(ljs) sets of LJParameters, a $c x $c matrix is constructed. If this 
+        was not your intention, please check the documentation or raise an issue."
+        return CompositeLJParameters{c}(reshape(ljs, c, c))
+    elseif length(ljs) == c*(c+1)/2
+        # If the number of LJParameters sets is equal to the number
+        # of elements in the upper triangular part of the matrix, then
+        # construct the full matrix from the upper triangular part.
+        @info "Creating CompositeLJParameters from the upper triangular part of the matrix.
+        By specifying $length(ljs) sets of LJParameters, a $c x $c matrix is constructed.
+        If this was not your intention, please check the documentation or raise an issue."
+        ljmatrix = Matrix{LJParameters}(undef, c, c)
+        k = 1
+        for i in 1:c
+            for j in i:c
+            ljmatrix[i, j] = ljs[k]
+            if i != j
+                ljmatrix[j, i] = ljs[k]
+            end
+            k += 1
+            end
+        end
+        return CompositeLJParameters{c}(ljmatrix)
+    else
+        throw(ArgumentError("the number of LJParameters sets is not compatible with the number of components."))
+    end
+end
 
 end # module Potentials

@@ -64,10 +64,12 @@ function convert_system_to_walker(at::FlexibleSystem, resume::Bool)
     data = at.data
     energy = (haskey(data, :energy) && resume) ? data[:energy]*u"eV" : 0.0u"eV"
     iter = (haskey(data, :iter) && resume && data[:iter]>=0) ? data[:iter] : 0
-    num = (haskey(data, :num_frozen_part)  && resume) ? data[:num_frozen_part] : 0
+    list_num_par = (haskey(data, :list_num_par) && resume) ? data[:list_num_par] : [length(at)]
+    frozen = (haskey(data, :frozen) && resume) ? data[:frozen] : [false]
     e_frozen = (haskey(data, :energy_frozen_part) && resume) ? data[:energy_frozen_part]*u"eV" : 0.0u"eV"
     at = FastSystem(at)
-    return AtomWalker(at; energy=energy, iter=iter, num_frozen_part=num, energy_frozen_part=e_frozen)
+    C = length(list_num_par)
+    return AtomWalker{C}(at; energy=energy, iter=iter, list_num_par=list_num_par, frozen=frozen, energy_frozen_part=e_frozen)
 end
 
 """
@@ -196,9 +198,10 @@ function convert_walker_to_system(at::AtomWalker)
     config::FastSystem = at.configuration
     energy = at.energy.val
     iter = at.iter
-    num = at.num_frozen_part
+    num = join(at.list_num_par, ",")
+    frozen = join(at.frozen, ",")
     e_frozen = at.energy_frozen_part.val
-    return AbstractSystem(config; energy=energy, iter=iter, num_frozen_part=num, energy_frozen_part=e_frozen)
+    return AbstractSystem(config; energy=energy, iter=iter, list_num_par=num, frozen=frozen, energy_frozen_part=e_frozen)
 end
 
 """
@@ -206,10 +209,12 @@ end
 
 Append an `AtomWalker` object to a file.
 """
-function append_walker(filename::String, at::AtomWalker)
-    ats = read_walkers(filename)
-    push!(ats, at)
-    write_walkers(filename, ats)
+function append_walker(filename::String, at::AtomWalker{C}) where C
+    # ats = read_walkers(filename)
+    sys = convert_walker_to_system(at)
+    # push!(ats, at)
+    # write_walkers(filename, ats)
+    write_frame(filename, ExtXYZ.write_dict(Atoms(sys)), append=true)
 end
 
 """
@@ -237,7 +242,7 @@ Write a collection of `AtomWalker` objects to a file.
 - `ats::Vector{AtomWalker}`: The collection of `AtomWalker` objects to write.
 
 """
-function write_walkers(filename::String, ats::Vector{AtomWalker})
+function write_walkers(filename::String, ats::Vector{AtomWalker{C}}) where C
     flex = convert_walker_to_system.(ats)
     save_trajectory(filename::String, flex)
 end
@@ -288,6 +293,38 @@ function generate_random_starting_config(volume_per_particle::Float64, num_parti
 end
 
 """
+    generate_multi_type_random_starting_config(volume_per_particle::Float64, num_particle::Vector{Int}; particle_types::Vector{Symbol}=[Symbol(:H), Symbol(:O)])
+
+Generate a random starting configuration for a system of particles with multiple types.
+
+# Arguments
+- `volume_per_particle::Float64`: The volume per particle.
+- `num_particle::Vector{Int}`: The number of particles of each type.
+- `particle_types::Vector{Symbol}=[Symbol(:H), Symbol(:O)]`: The types of particles.
+
+# Returns
+- `FastSystem`: A FastSystem object representing the generated system.
+
+"""
+function generate_multi_type_random_starting_config(volume_per_particle::Float64, num_particle::Vector{Int}; particle_types::Vector{Symbol}=[Symbol(:H), Symbol(:O)])
+    num_types = length(num_particle)
+    total_num_particle = sum(num_particle)
+    total_volume = volume_per_particle * total_num_particle
+    box_length = total_volume^(1/3)
+    box = [[box_length, 0.0, 0.0], [0.0, box_length, 0.0], [0.0, 0.0, box_length]]u"Å"
+    boundary_conditions = [DirichletZero(), DirichletZero(), DirichletZero()]
+    list_of_atoms = []
+    for i in 1:num_types
+        for _ in 1:num_particle[i]
+            push!(list_of_atoms, particle_types[i] => [rand(), rand(), rand()])
+        end
+    end
+    system = periodic_system(list_of_atoms, box, fractional=true)
+    flex = FlexibleSystem(system; boundary_conditions=boundary_conditions)
+    return FastSystem(flex)
+end
+
+"""
     generate_initial_configs(num_walkers::Int, volume_per_particle::Float64, num_particle::Int; particle_type::Symbol=:H)
 
 Generate initial configurations for a given number of walkers.
@@ -322,14 +359,16 @@ SaveEveryN is a concrete subtype of DataSavingStrategy that specifies saving dat
 - `df_filename::String`: The name of the file to save the DataFrame to.
 - `wk_filename::String`: The name of the file to save the atom walker to.
 - `ls_filename::String`: The name of the file to save the liveset to.
-- `n::Int`: The number of steps between each save.
+- `n_traj::Int`: The number of steps between each save of the culled walker into a trajectory file.
+- `n_snap::Int`: The number of steps between each save of the liveset into a snapshot file.
 
 """
 @kwdef struct SaveEveryN <: DataSavingStrategy
     df_filename::String = "output_df.csv"
     wk_filename::String = "output.traj.extxyz"
     ls_filename::String = "output.ls.extxyz"
-    n::Int = 100
+    n_traj::Int = 100
+    n_snap::Int = 1000
 end
 
 """
@@ -356,7 +395,7 @@ Write the DataFrame `df` to a file specified by `d_strategy.filename` every `d_s
 
 """
 function write_df_every_n(df::DataFrame, step::Int, d_strategy::SaveEveryN)
-    if step % d_strategy.n == 0
+    if step % d_strategy.n_traj == 0
         write_df(d_strategy.df_filename, df)
     end
 end
@@ -373,7 +412,7 @@ Write the atom walker `at` to a file specified by `d_strategy.wk_filename` every
 
 """
 function write_walker_every_n(at::AtomWalker, step::Int, d_strategy::SaveEveryN)
-    if step % d_strategy.n == 0
+    if step % d_strategy.n_traj == 0
         write_single_walker(d_strategy.wk_filename, at, true)
     end
 end
@@ -390,7 +429,7 @@ Write the liveset `ls` to file every `n` steps, as specified by the `d_strategy`
 
 """
 function write_ls_every_n(ls::AtomWalkers, step::Int, d_strategy::SaveEveryN)
-    if step % d_strategy.n == 0
+    if step % d_strategy.n_snap == 0
         write_walkers(d_strategy.ls_filename, ls.walkers)
     end
 end

@@ -5,10 +5,12 @@ The `NestedSamplingParameters` struct represents the parameters used in the nest
 
 # Fields
 - `mc_steps::Int64`: The number of total Monte Carlo moves to perform.
-- `step_size::Float64`: The step size used in the sampling process.
+- `initial_step_size::Float64`: The initial step size, which is the fallback step size if MC routine fails to accept a move.
+- `step_size::Float64`: The on-the-fly step size used in the sampling process.
 - `step_size_lo::Float64`: The lower bound of the step size.
 - `step_size_up::Float64`: The upper bound of the step size.
-- `fail_count::Int64`: The number of failed MC moves in a row. Used to terminate the sampling process if it exceeds a certain threshold.
+- `fail_count::Int64`: The number of failed MC moves in a row.
+- `allowed_fail_count::Int64`: The maximum number of failed MC moves allowed before resetting the step size.
 
 """
 mutable struct NestedSamplingParameters <: SamplingParameters

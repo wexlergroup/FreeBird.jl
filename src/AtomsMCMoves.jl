@@ -71,12 +71,16 @@ Calculate the mean squared displacement before and after random walk(s). Note th
 
 """
 function mean_sq_displacement(at::AtomWalker{C}, at_orig::AtomWalker{C}) where C
+function mean_sq_displacement(at::AtomWalker{C}, at_orig::AtomWalker{C}) where C
     distsq::typeof(0.0u"Å"^2) = 0.0u"Å"^2
+    free_index = free_par_index(at)
+    for i in free_index
     free_index = free_par_index(at)
     for i in free_index
         dist::typeof(0.0u"Å") = pbc_dist(at.configuration.position[i], at_orig.configuration.position[i], at.configuration)
         distsq += dist^2
     end
+    return distsq/length(free_index)
     return distsq/length(free_index)
 end
 
@@ -101,6 +105,11 @@ function single_atom_random_walk!(pos::SVector{3,T}, step_size::Float64) where T
     return pos 
 end
 
+"""
+    free_par_index(at::AtomWalker{C}) where C
+
+Get the indices of the free particles in the `AtomWalker`.
+"""
 function free_par_index(at::AtomWalker{C}) where C
     ind_free_par = Array{Int}(undef, 0)
     comp_cut = vcat([0],cumsum(at.list_num_par))
@@ -122,6 +131,8 @@ Perform a Monte Carlo random walk on the atomic/molecular system.
 - `n_steps::Int`: The number of Monte Carlo steps to perform.
 - `at::AtomWalker{C}`: The walker to perform the random walk on.
 - `lj::LennardJonesParametersSets`: The Lennard-Jones potential parameters.
+- `at::AtomWalker{C}`: The walker to perform the random walk on.
+- `lj::LennardJonesParametersSets`: The Lennard-Jones potential parameters.
 - `step_size::Float64`: The maximum distance an atom can move in any direction.
 - `emax::typeof(0.0u"eV")`: The maximum energy allowed for accepting a move.
 
@@ -135,8 +146,11 @@ function MC_random_walk!(
                     n_steps::Int, 
                     at::AtomWalker{C}, 
                     lj::LennardJonesParametersSets, 
+                    at::AtomWalker{C}, 
+                    lj::LennardJonesParametersSets, 
                     step_size::Float64, 
                     emax::typeof(0.0u"eV")
+                    ) where C
                     ) where C
     n_accept = 0
     accept_this_walker = false
@@ -144,11 +158,14 @@ function MC_random_walk!(
         config = at.configuration
         free_index = free_par_index(at)
         i_at = rand(free_index)
+        free_index = free_par_index(at)
+        i_at = rand(free_index)
         pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
         orig_pos = deepcopy(pos)
         pos = single_atom_random_walk!(pos, step_size)
         pos = periodic_boundary_wrap!(pos, config)
         config.position[i_at] = pos
+        energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
         energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
         if energy >= emax
             # reject the move, revert to original position
@@ -165,6 +182,9 @@ end
 
 
 """
+    single_atom_demon_walk!(at::AtomWalker{C}, 
+                            lj::LennardJonesParametersSets, 
+                            step_size::Float64;
     single_atom_demon_walk!(at::AtomWalker{C}, 
                             lj::LennardJonesParametersSets, 
                             step_size::Float64;
@@ -192,6 +212,8 @@ Returns:
 function single_atom_demon_walk!(
                         at::AtomWalker{C}, 
                         lj::LennardJonesParametersSets, 
+                        at::AtomWalker{C}, 
+                        lj::LennardJonesParametersSets, 
                         step_size::Float64;
                         e_demon=0.0u"eV",
                         demon_energy_threshold=Inf*u"eV",
@@ -207,6 +229,7 @@ function single_atom_demon_walk!(
     pos = single_atom_random_walk!(pos, step_size)
     pos = periodic_boundary_wrap!(pos, config)
     config.position[i_at] = pos
+    new_energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
     new_energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
     ΔE = new_energy - orig_energy
     if -demon_gain_threshold <= ΔE <= 0.0u"eV" && e_demon-ΔE < demon_energy_threshold
@@ -235,6 +258,8 @@ or the maximum number of additional steps `max_add_steps` is reached.
 
 # Arguments
 - `e_demon::typeof(0.0u"eV")`: The initial demon energy.
+- `at::AtomWalker{C}`: The walker that the demon walk is performed on.
+- `lj::LennardJonesParametersSets`: The LJ parameters.
 - `at::AtomWalker{C}`: The walker that the demon walk is performed on.
 - `lj::LennardJonesParametersSets`: The LJ parameters.
 - `step_size::Float64`: The step size for the demon walk.
@@ -286,6 +311,8 @@ end
 """
     MC_nve_walk!(
         n_steps::Int, 
+        at::AtomWalker{C}, 
+        lj::LennardJonesParametersSets, 
         at::AtomWalker{C}, 
         lj::LennardJonesParametersSets, 
         step_size::Float64; 

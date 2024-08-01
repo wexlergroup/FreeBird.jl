@@ -11,11 +11,6 @@ export LennardJonesParametersSets
 
 abstract type LennardJonesParametersSets end
 
-export CompositeLJParameters
-export LennardJonesParametersSets
-
-abstract type LennardJonesParametersSets end
-
 
 """
     struct LJParameters
@@ -29,7 +24,6 @@ The `LJParameters` struct represents the parameters for the Lennard-Jones potent
 - `shift::typeof(0.0u"eV")`: The energy shift applied to the potential, calculated at the cutoff distance.
 
 """
-struct LJParameters <: LennardJonesParametersSets
 struct LJParameters <: LennardJonesParametersSets
     epsilon::typeof(1.0u"eV")
     sigma::typeof(1.0u"Å")

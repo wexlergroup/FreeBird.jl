@@ -23,8 +23,6 @@ mutable struct AtomWalker{C} <: AbstractWalker
     iter::Int64
     list_num_par::Vector{Int64}
     frozen::Vector{Bool}
-    list_num_par::Vector{Int64}
-    frozen::Vector{Bool}
     energy_frozen_part::typeof(0.0u"eV")
     function AtomWalker{C}(configuration::FastSystem; energy=0.0u"eV", iter=0, list_num_par=zeros(Int,C), frozen=zeros(Bool,C), energy_frozen_part=0.0u"eV") where C
         if length(list_num_par) != C

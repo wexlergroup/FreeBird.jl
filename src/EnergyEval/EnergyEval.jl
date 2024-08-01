@@ -33,7 +33,7 @@ Compute the distance between two positions considering periodic boundary conditi
 """
 function pbc_dist(pos1::Union{SVector{T},Vector{T}},
                   pos2::Union{SVector{T},Vector{T}},
-                      at::AbstractSystem) where {T}
+                  at::AbstractSystem) where {T}
     pbc = at.boundary_conditions
     box = at.bounding_box
     distsq = 0.0u"Å"^2
@@ -208,10 +208,10 @@ The energy is calculated by summing the pairwise interactions between the free p
 
 """
 function interacting_energy(at::AbstractSystem, 
-                          ljs::CompositeLJParameters{C}, 
-                          list_num_par::Vector{Int},
-                          frozen::Vector{Bool}
-                          ) where {C}
+                            ljs::CompositeLJParameters{C}, 
+                            list_num_par::Vector{Int},
+                            frozen::Vector{Bool}
+                            ) where {C}
     check_num_components(C, list_num_par, frozen)
     energy = 0.0u"eV"
     components = split_components(at, list_num_par)
@@ -250,10 +250,10 @@ The energy is calculated by summing the pairwise interactions between the free p
 
 """
 function interacting_energy(at::AbstractSystem, 
-                          lj::LJParameters,
-                          list_num_par::Vector{Int},
-                          frozen::Vector{Bool}
-                          )
+                            lj::LJParameters,
+                            list_num_par::Vector{Int},
+                            frozen::Vector{Bool}
+                            )
     if length(list_num_par) != length(frozen)
         throw(ArgumentError("The number of frozen and free parts does not match the length of the number of components."))
     end

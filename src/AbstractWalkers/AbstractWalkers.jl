@@ -4,7 +4,6 @@ Module containing abstract definitions for walkers.
 module AbstractWalkers
 
 using AtomsBase
-using Distributions
 using Unitful
 using Random
 using LinearAlgebra

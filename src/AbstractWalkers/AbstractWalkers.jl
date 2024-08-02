@@ -4,24 +4,25 @@ Module containing abstract definitions for walkers.
 module AbstractWalkers
 
 using AtomsBase
-using Distributions
 using Unitful
 using Random
-using Combinatorics
 using LinearAlgebra
 using Statistics
 using ..Potentials
-using ..EnergyEval
 using ..Hamiltonians
 
+export AbstractWalker
 export AtomWalker, AtomWalkers, LJAtomWalkers
-export LatticeWalkers, LatticeSystem, LatticeWalker  # , LatticeWalkers
+export LatticeWalkers, LatticeSystem, LatticeWalker
+export LatticeGeometry, SquareLattice, TriangularLattice, GenericLattice
 export update_walker!
-export exact_enumeration, nvt_monte_carlo, wang_landau, nested_sampling, nvt_replica_exchange
-export k_B
+
+abstract type AbstractWalker end
 
 include("AtomWalkers.jl")
 
 include("LatticeWalkers.jl")
+
+include("helpers.jl")
 
 end # module AbstractWalkers

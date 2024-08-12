@@ -5,12 +5,14 @@ module Hamiltonians
 
 using Unitful
 
-export LGHamiltonian
+export LatticeGasHamiltonian
+
+abstract type ClassicalHamiltonian end
 
 """
-    struct LGHamiltonian
+    struct LatticeGasHamiltonian <: ClassicalHamiltonian
 
-The `LGHamiltonian` struct represents the parameters for a lattice-gas Hamiltonian.
+The `LatticeGasHamiltonian` struct represents the parameters for a lattice-gas Hamiltonian.
 
 # Fields
 - `adsorption_energy::typeof(1.0u"eV")`: The energy of adsorption on the lattice.
@@ -19,10 +21,17 @@ The `LGHamiltonian` struct represents the parameters for a lattice-gas Hamiltoni
 
 """
 
-struct LGHamiltonian
+struct LatticeGasHamiltonian <: ClassicalHamiltonian
     adsorption_energy::typeof(1.0u"eV")
     nn_interaction_energy::typeof(1.0u"eV")
     nnn_interaction_energy::typeof(1.0u"eV")
+end
+
+function Base.show(io::IO, hamiltonian::LatticeGasHamiltonian)
+    println(io, "LatticeGasHamiltonian:")
+    println(io, "    adsorption_energy:      ", hamiltonian.adsorption_energy)
+    println(io, "    nn_interaction_energy:  ", hamiltonian.nn_interaction_energy)
+    println(io, "    nnn_interaction_energy: ", hamiltonian.nnn_interaction_energy)
 end
 
 end # module Hamiltonians

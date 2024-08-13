@@ -7,7 +7,7 @@ using DataFrames
 using Combinatorics
 using Random
 
-using ..AtomsMCMoves
+using ..MonteCarloMoves
 using ..Potentials
 using ..AbstractWalkers
 using ..AbstractLiveSets

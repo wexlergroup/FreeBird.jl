@@ -7,7 +7,7 @@ using ..Hamiltonians
 
 export AbstractLiveSet
 export AtomWalkers, LatticeWalkers
-export LatticeGasWalkers
+export LJAtomWalkers, LatticeGasWalkers
 
 abstract type AbstractLiveSet end
 

@@ -96,7 +96,7 @@ Sorts the walkers in the liveset by their energy in descending order.
 # Returns
 - `liveset::LJAtomWalkers`: The sorted liveset.
 """
-function sort_by_energy!(liveset::AtomWalkers)
+function sort_by_energy!(liveset::AbstractLiveSet)
     sort!(liveset.walkers, by = x -> x.energy, rev=true)
     # println("after sort ats[1].system_data.energy: ", ats[1].system_data.energy)
     return liveset
@@ -111,7 +111,7 @@ Update the iteration count for each walker in the liveset.
 - `liveset::AtomWalkers`: The set of walkers to update.
 
 """
-function update_iter!(liveset::AtomWalkers)
+function update_iter!(liveset::AbstractLiveSet)
     for at in liveset.walkers
         at.iter += 1
     end
@@ -161,6 +161,36 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         ns_params.fail_count += 1
     end
     adjust_step_size(ns_params, rate)
+    return iter, emax, liveset, ns_params
+end
+
+function nested_sampling_step!(liveset::LatticeGasWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine)
+    sort_by_energy!(liveset)
+    ats = liveset.walkers
+    h = liveset.hamiltonian
+    iter::Union{Missing,Int} = missing
+    emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
+    if mc_routine isa MCRandomWalkMaxE
+        to_walk = deepcopy(ats[1])
+    elseif mc_routine isa MCRandomWalkClone
+        to_walk = deepcopy(rand(ats[2:end]))
+    else
+        error("Unsupported MCRoutine type: $mc_routine")
+    end
+    accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, h, emax)
+    @info "iter: $(liveset.walkers[1].iter), acceptance rate: $rate, emax: $emax, is_accepted: $accept"
+    if accept
+        push!(ats, at)
+        popfirst!(ats)
+        update_iter!(liveset)
+        ns_params.fail_count = 0
+        iter = liveset.walkers[1].iter
+    else
+        @warn "Failed to accept MC move"
+        emax = missing
+        ns_params.fail_count += 1
+    end
+    # adjust_step_size(ns_params, rate)
     return iter, emax, liveset, ns_params
 end
 
@@ -274,6 +304,30 @@ function nested_sampling_loop!(liveset::AtomWalkers,
         end
         write_df_every_n(df, i, save_strategy)
         write_ls_every_n(liveset, i, save_strategy)
+    end
+    return df, liveset, ns_params
+end
+
+function nested_sampling_loop!(liveset::LatticeGasWalkers,
+                                ns_params::NestedSamplingParameters, 
+                                n_steps::Int64, 
+                                mc_routine::MCRoutine,
+                                save_strategy::DataSavingStrategy)
+    df = DataFrame(iter=Int[], emax=Float64[])
+    for i in 1:n_steps
+        # write_walker_every_n(liveset.walkers[1], i, save_strategy)
+        iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+        @debug "n_step $i, iter: $iter, emax: $emax"
+        if ns_params.fail_count >= ns_params.allowed_fail_count
+            @warn "Failed to accept MC move $(ns_params.allowed_fail_count) times in a row. Reset step size!"
+            ns_params.fail_count = 0
+            ns_params.step_size = ns_params.initial_step_size
+        end
+        if !(iter isa typeof(missing))
+            push!(df, (iter, emax.val))
+        end
+        write_df_every_n(df, i, save_strategy)
+        # write_ls_every_n(liveset, i, save_strategy)
     end
     return df, liveset, ns_params
 end

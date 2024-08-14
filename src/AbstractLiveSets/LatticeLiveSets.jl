@@ -1,17 +1,17 @@
 # Lattice walkers
 abstract type LatticeWalkers <: AbstractLiveSet end
 
-function assign_energy!(walker::LatticeWalker, hamiltonian::LatticeGasHamiltonian)
-    walker.energy = interacting_energy(walker.configuration, hamiltonian)
+function assign_energy!(walker::LatticeWalker, hamiltonian::LatticeGasHamiltonian; perturb_energy::Float64=0.0)
+    walker.energy = interacting_energy(walker.configuration, hamiltonian) * (1 + perturb_energy * (round(rand(), sigdigits=1) - 0.5))
     return walker
 end
 
 struct  LatticeGasWalkers <: LatticeWalkers
     walkers::Vector{LatticeWalker}
     hamiltonian::LatticeGasHamiltonian
-    function LatticeGasWalkers(walkers::Vector{LatticeWalker}, hamiltonian::LatticeGasHamiltonian; assign_energy=true)
+    function LatticeGasWalkers(walkers::Vector{LatticeWalker}, hamiltonian::LatticeGasHamiltonian; assign_energy=true, perturb_energy::Float64=0.0)
         if assign_energy
-            [assign_energy!(walker, hamiltonian) for walker in walkers]
+            [assign_energy!(walker, hamiltonian; perturb_energy=perturb_energy) for walker in walkers]
         end
         return new(walkers, hamiltonian)
     end

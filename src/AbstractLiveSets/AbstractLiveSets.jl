@@ -1,5 +1,7 @@
 module AbstractLiveSets
 
+using Unitful
+
 using ..AbstractWalkers
 using ..EnergyEval
 using ..Potentials

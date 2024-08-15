@@ -68,18 +68,39 @@ function MC_random_walk!(
     return accept_this_walker, n_accept/n_steps, at
 end
 
+"""
+    MC_random_walk!(n_steps::Int, lattice::LatticeWalker, h::LatticeGasHamiltonian, emax::Float64; energy_perturb::Float64=0.0)
+
+Perform a Monte Carlo random walk on the lattice system.
+
+# Arguments
+- `n_steps::Int`: The number of Monte Carlo steps to perform.
+- `lattice::LatticeWalker`: The walker to perform the random walk on.
+- `h::LatticeGasHamiltonian`: The lattice gas Hamiltonian.
+- `emax::Float64`: The maximum energy allowed for accepting a move.
+- `energy_perturb::Float64=0.0`: The energy perturbation used to make degenerate configurations distinguishable.
+
+# Returns
+- `accept_this_walker::Bool`: Whether the walker is accepted or not.
+- `accept_rate::Float64`: The acceptance rate of the random walk.
+- `lattice::LatticeWalker`: The updated walker.
+
+"""
 function MC_random_walk!(n_steps::Int,
                          lattice::LatticeWalker,
                          h::LatticeGasHamiltonian,
-                         emax::typeof(0.0u"eV")
+                         emax::Float64;
+                         energy_perturb::Float64=0.0,
                          )
 
     n_accept = 0
     accept_this_walker = false
+    emax = emax * unit(lattice.energy)
+
     for i_mc_step in 1:n_steps
         current_lattice = lattice.configuration
         # select a random site
-        site_index = rand(1:length(current_lattice.occupations))
+        site_index = rand(eachindex(current_lattice.occupations))
         # propose a swap in occupation state (only if it maintains constant N)
         proposed_lattice = deepcopy(current_lattice)
 
@@ -102,9 +123,10 @@ function MC_random_walk!(n_steps::Int,
                 continue
             end
         end
+        perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
+        proposed_energy = interacting_energy(proposed_lattice, h) + perturbation_energy
 
-        proposed_energy = interacting_energy(proposed_lattice, h)
-
+        @debug "proposed_energy = $proposed_energy, perturbed_energy = $(perturbation_energy), emax = $(emax)), accept = $(proposed_energy < emax)"
         if proposed_energy >= emax
             continue
         else
@@ -115,4 +137,37 @@ function MC_random_walk!(n_steps::Int,
         end
     end
     return accept_this_walker, n_accept/n_steps, lattice
+end
+
+function MC_new_sample!(lattice::LatticeWalker,
+                        h::LatticeGasHamiltonian,
+                        emax::Float64;
+                        energy_perturb::Float64=0.0,
+                        )
+
+    accept_this_walker = false
+    emax = emax * unit(lattice.energy)
+
+    current_lattice = lattice.configuration
+    proposed_lattice = deepcopy(current_lattice)
+    current_occupations = deepcopy(current_lattice.occupations)
+    number_occupied_sites = sum(current_lattice.occupations)
+
+    proposed_lattice.occupations = [false for i in eachindex(current_lattice.occupations)]
+    for i in sample(eachindex(proposed_lattice.occupations), number_occupied_sites, replace=false)
+        proposed_lattice.occupations[i] = true
+    end
+
+    perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
+    proposed_energy = interacting_energy(proposed_lattice, h) + perturbation_energy
+
+    @debug "proposed_energy = $proposed_energy, perturbed_energy = $(perturbation_energy), emax = $(emax)), accept = $(proposed_energy < emax)"
+
+    if proposed_energy < emax
+        lattice.configuration = proposed_lattice
+        lattice.energy = proposed_energy
+        accept_this_walker = true
+    end
+
+    return accept_this_walker, lattice
 end

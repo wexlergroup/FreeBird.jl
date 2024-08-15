@@ -17,7 +17,7 @@ using ..AbstractWalkers
 using ..EnergyEval
 
 export periodic_boundary_wrap!
-export MC_random_walk!, MC_nve_walk!
+export MC_random_walk!, MC_nve_walk!, MC_new_sample!
 
 include("helpers.jl")
 

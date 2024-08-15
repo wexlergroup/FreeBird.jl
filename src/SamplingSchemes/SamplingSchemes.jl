@@ -15,10 +15,10 @@ using ..EnergyEval
 using ..FreeBirdIO
 using ..Hamiltonians
 
-export NestedSamplingParameters
+export NestedSamplingParameters, LatticeNestedSamplingParameters
 export sort_by_energy!, nested_sampling_step!
 export nested_sampling_loop!
-export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCDemonWalk, MixedMCRoutine
+export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCDemonWalk, MixedMCRoutine, MCNewSample
 
 export exact_enumeration, nvt_monte_carlo, wang_landau
 

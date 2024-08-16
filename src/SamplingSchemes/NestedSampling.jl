@@ -177,10 +177,29 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     return iter, emax, liveset, ns_params
 end
 
+"""
+    nested_sampling_step!(liveset::LatticeGasWalkers, ns_params::LatticeNestedSamplingParameters, mc_routine::MCRoutine; accept_same_config::Bool=true)
+
+Perform a single step of the nested sampling algorithm.
+
+This function takes a `liveset` of lattice gas walkers, `ns_params` containing the parameters for nested sampling, and `mc_routine` representing the Monte Carlo 
+routine for generating new samples. It performs a single step of the nested sampling algorithm by updating the liveset with a new walker.
+
+## Arguments
+- `liveset::LatticeGasWalkers`: The liveset of lattice gas walkers.
+- `ns_params::LatticeNestedSamplingParameters`: The parameters for nested sampling.
+- `mc_routine::MCRoutine`: The Monte Carlo routine for generating new samples.
+- `accept_same_config::Bool=true`: A flag indicating whether to accept a new sample with the same configuration as an existing one. Default is `true`. Note that 
+if it is set to `false`, the sampling process may take significantly longer to find a new configuration.
+
+## Returns
+- `iter`: The iteration number of the liveset after the step.
+- `emax`: The maximum energy of the liveset after the step.
+"""
 function nested_sampling_step!(liveset::LatticeGasWalkers, 
                                ns_params::LatticeNestedSamplingParameters, 
                                mc_routine::MCRoutine;
-                               accept_same_config::Bool=false)
+                               accept_same_config::Bool=true)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     h = liveset.hamiltonian

@@ -247,6 +247,23 @@ function write_walkers(filename::String, ats::Vector{AtomWalker{C}}) where C
     flex = convert_walker_to_system.(ats)
     save_trajectory(filename::String, flex)
 end
+"""
+    write_walkers(filename::String, ats::Vector{LatticeWalker})
+
+Write a collection of `LatticeWalker` objects to a file.
+
+# Arguments
+- `filename::String`: The name of the file to write the walkers to.
+- `ats::Vector{LatticeWalker}`: The collection of `LatticeWalker` objects to write.
+
+"""
+function write_walkers(filename::String, ats::Vector{LatticeWalker})
+    occupancies = [Int.(at.configuration.occupations) for at in ats]
+    energies = [at.energy.val for at in ats]
+    energy_and_unit = "energy_$(unit(ats[1].energy))"
+    df = DataFrame(energy_and_unit=>energies, "occupations"=>occupancies)
+    CSV.write(filename, df; append=false)
+end
 
 """
     write_single_walker(filename::String, at::AtomWalker, append::Bool)
@@ -424,12 +441,12 @@ end
 Write the liveset `ls` to file every `n` steps, as specified by the `d_strategy`.
 
 # Arguments
-- `ls::AtomWalkers`: The liveset to be written.
+- `ls::AbstractLiveSet`: The liveset to be written.
 - `step::Int`: The current step number.
 - `d_strategy::SaveEveryN`: The save strategy specifying the frequency of writing.
 
 """
-function write_ls_every_n(ls::AtomWalkers, step::Int, d_strategy::SaveEveryN)
+function write_ls_every_n(ls::AbstractLiveSet, step::Int, d_strategy::SaveEveryN)
     if step % d_strategy.n_snap == 0
         write_walkers(d_strategy.ls_filename, ls.walkers)
     end

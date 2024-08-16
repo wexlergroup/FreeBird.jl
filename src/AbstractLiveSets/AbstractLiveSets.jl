@@ -1,6 +1,6 @@
 module AbstractLiveSets
 
-using Unitful
+import Unitful: unit
 
 using ..AbstractWalkers
 using ..EnergyEval

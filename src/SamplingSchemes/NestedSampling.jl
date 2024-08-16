@@ -41,16 +41,20 @@ abstract type MCRoutine end
 
 """
     struct MCRandomWalkMaxE <: MCRoutine
-A type representing a Monte Carlo random walk sampling scheme where the highest-energy walker is used for the walk.
+A type for generating a new walker by performing a random walk for decorrelation on the highest-energy walker.
 """
 struct MCRandomWalkMaxE <: MCRoutine end
 
 """
     struct MCRandomWalkClone <: MCRoutine
-A type representing a Monte Carlo random walk sampling scheme where a random walker is used for the walk.
+A type for generating a new walker by cloning an existing walker and performing a random walk for decorrelation.
 """
 struct MCRandomWalkClone <: MCRoutine end
 
+"""
+    struct MCNewSample <: MCRoutine
+A type for generating a new walker from a random configuration. Currently, it is intended to use this routine for lattice gas systems.
+"""
 struct MCNewSample <: MCRoutine end
 
 """
@@ -211,10 +215,29 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     return iter, emax, liveset, ns_params
 end
 
+"""
+    nested_sampling_step!(liveset::LatticeGasWalkers, ns_params::LatticeNestedSamplingParameters, mc_routine::MCNewSample; accept_same_config::Bool=false)
+
+Perform a single step of the nested sampling algorithm.
+
+This function takes a `liveset` of lattice gas walkers, `ns_params` containing the parameters for nested sampling, and `mc_routine` representing the Monte Carlo routine for generating new samples. It performs a single step of the nested sampling algorithm by updating the liveset with a new walker.
+
+## Arguments
+- `liveset::LatticeGasWalkers`: The liveset of lattice gas walkers.
+- `ns_params::LatticeNestedSamplingParameters`: The parameters for nested sampling.
+- `mc_routine::MCNewSample`: The Monte Carlo routine for generating new samples.
+- `accept_same_config::Bool=true`: A flag indicating whether to accept a new sample with the same configuration as an existing one.
+
+## Returns
+- `iter`: The iteration number of the liveset after the step.
+- `emax`: The maximum energy of the liveset after the step.
+- `liveset::LatticeGasWalkers`: The updated liveset after the step.
+- `ns_params::LatticeNestedSamplingParameters`: The updated nested sampling parameters after the step.
+"""
 function nested_sampling_step!(liveset::LatticeGasWalkers, 
                                ns_params::LatticeNestedSamplingParameters, 
                                mc_routine::MCNewSample;
-                               accept_same_config::Bool=false)
+                               accept_same_config::Bool=true)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     h = liveset.hamiltonian
@@ -223,7 +246,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
 
     to_walk = deepcopy(ats[1])
 
-    accept, at = MC_random_walk!(to_walk, h, emax; energy_perturb=ns_params.energy_perturbation)
+    accept, at = MC_new_sample!(to_walk, h, emax; energy_perturb=ns_params.energy_perturbation)
     configs = [wk.configuration.occupations for wk in ats]
     if (at.configuration.occupations in configs) && !accept_same_config
         @warn "Configuration already exists in the liveset"
@@ -327,9 +350,6 @@ Perform a nested sampling loop for a given number of steps.
 - `n_steps::Int64`: The number of steps to perform.
 - `mc_routine::MCRoutine`: The Monte Carlo routine to use.
 
-# Keyword Arguments
-- `args...`: Additional arguments.
-
 # Returns
 - `df`: A DataFrame containing the iteration number and maximum energy for each step.
 - `liveset`: The updated set of walkers.
@@ -359,6 +379,25 @@ function nested_sampling_loop!(liveset::AtomWalkers,
     return df, liveset, ns_params
 end
 
+"""
+    nested_sampling_loop!(liveset::LatticeGasWalkers, ns_params::LatticeNestedSamplingParameters, n_steps::Int64, mc_routine::MCRoutine; args...)
+
+Perform a nested sampling loop on a lattice gas system for a given number of steps.
+
+# Arguments
+- `liveset::LatticeGasWalkers`: The initial set of walkers.
+- `ns_params::LatticeNestedSamplingParameters`: The parameters for nested sampling.
+- `n_steps::Int64`: The number of steps to perform.
+- `mc_routine::MCRoutine`: The Monte Carlo routine to use.
+
+# Keyword Arguments
+- `args...`: Additional arguments.
+
+# Returns
+- `df`: A DataFrame containing the iteration number and maximum energy for each step.
+- `liveset`: The updated set of walkers.
+- `ns_params`: The updated nested sampling parameters.
+"""
 function nested_sampling_loop!(liveset::LatticeGasWalkers,
                                 ns_params::LatticeNestedSamplingParameters, 
                                 n_steps::Int64, 
@@ -380,7 +419,7 @@ function nested_sampling_loop!(liveset::LatticeGasWalkers,
             push!(df, (iter, emax, config))
         end
         write_df_every_n(df, i, save_strategy)
-        # write_ls_every_n(liveset, i, save_strategy)
+        write_ls_every_n(liveset, i, save_strategy)
     end
     return df, liveset, ns_params
 end

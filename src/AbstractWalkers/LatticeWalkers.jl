@@ -14,8 +14,13 @@ Compute the nearest and next-nearest neighbors for each atom in a 3D lattice.
 
 """
 
-function compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, positions::Matrix{Float64}, periodicity::Tuple{Bool, Bool, Bool}, cutoff_radii::Tuple{Float64, Float64})
-    neighbors = Vector{Tuple{Vector{Int}, Vector{Int}}}(undef, size(positions, 1))
+function compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, 
+                           positions::Matrix{Float64}, 
+                           periodicity::Tuple{Bool, Bool, Bool}, 
+                           cutoff_radii::Vector{Float64}
+                           )
+                           
+    neighbors = Vector{Vector{Vector{Int}}}(undef, size(positions, 1))
     num_atoms = size(positions, 1)
     
     # Compute reciprocal lattice vectors for minimum image convention
@@ -24,12 +29,13 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, positions
     a3 = supercell_lattice_vectors[:, 3]
     reciprocal_lattice_vectors = inv([a1 a2 a3])
 
-    first_nearest_distance = cutoff_radii[1]
-    second_nearest_distance = cutoff_radii[2]
+    layers_of_neighbors = length(cutoff_radii)
 
     for i in 1:num_atoms
-        first_neighbors = Int[]
-        second_neighbors = Int[]
+        nth_neighbors = Vector{Int}[]
+        for _ in 1:layers_of_neighbors
+            push!(nth_neighbors, Int[])
+        end
         pos_i = positions[i, :]
         
         for j in 1:num_atoms
@@ -52,16 +58,19 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, positions
                 dr = supercell_lattice_vectors * fractional_dr
 
                 distance = norm(dr)
-                
-                if distance <= first_nearest_distance
-                    push!(first_neighbors, j)
-                elseif distance <= second_nearest_distance
-                    push!(second_neighbors, j)
+
+                for i in 1:layers_of_neighbors
+                    if distance <= cutoff_radii[i]
+                        push!(nth_neighbors[i], j)
+                        break
+                    end 
                 end
+
+
             end
         end
         
-        neighbors[i] = (first_neighbors, second_neighbors)
+        neighbors[i] = nth_neighbors
     end
     
     return neighbors
@@ -151,7 +160,7 @@ mutable struct LatticeSystem{G}
     supercell_dimensions::Tuple{Int64, Int64, Int64}
     periodicity::Tuple{Bool, Bool, Bool}
     occupations::Vector{Bool}
-    neighbors::Vector{Tuple{Vector{Int}, Vector{Int}}}
+    neighbors::Vector{Vector{Vector{Int}}}
     adsorptions::Vector{Bool}
 
     function LatticeSystem{G}(
@@ -161,7 +170,7 @@ mutable struct LatticeSystem{G}
         periodicity::Tuple{Bool, Bool, Bool},
         occupations::Vector{Bool},
         adsorptions::Vector{Bool},
-        cutoff_radii::Tuple{Float64, Float64},
+        cutoff_radii::Vector{Float64},
     ) where G
         positions = lattice_positions(lattice_vectors, basis, supercell_dimensions)
 

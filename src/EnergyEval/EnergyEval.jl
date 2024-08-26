@@ -333,4 +333,34 @@ function interacting_energy(lattice::LatticeSystem, h::LatticeGasHamiltonian)
     return e_interaction
 end
 
+"""
+    interacting_energy(lattice::LatticeSystem, h::GenericLatticeHamiltonian{N})
+
+Compute the interaction energy of a lattice configuration using the Hamiltonian parameters.
+
+# Arguments
+- `lattice::LatticeSystem`: The lattice configuration.
+- `h::GenericLatticeHamiltonian{N,U}`: The generic lattice Hamiltonian parameters.
+
+# Returns
+- `e_interaction::Float64`: The interaction energy of the lattice configuration.
+
+"""
+function interacting_energy(lattice::LatticeSystem, h::GenericLatticeHamiltonian{N,U}) where {N,U}
+    e_interaction::U = 0.0*unit(h.on_site_interaction)
+    e_adsorption::U = sum(lattice.occupations .& lattice.adsorptions) * h.on_site_interaction
+    for index in 1:length(lattice.occupations)
+        if lattice.occupations[index]
+            for n in 1:N
+                for neighbor in lattice.neighbors[index][n]
+                    if lattice.occupations[neighbor]
+                        e_interaction += h.nth_neighbor_interactions[n] / 2
+                    end
+                end
+            end
+        end
+    end
+    return e_interaction + e_adsorption
+end
+
 end # module EnergyEval

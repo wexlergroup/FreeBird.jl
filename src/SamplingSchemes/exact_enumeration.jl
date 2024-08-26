@@ -15,8 +15,8 @@ Enumerate all possible configurations of a lattice system and compute the energy
 """
 function exact_enumeration(
     lattice::LatticeSystem{G},
-    cutoff_radii::Tuple{Float64, Float64},
-    h::LatticeGasHamiltonian,
+    cutoff_radii::Vector{Float64},
+    h::ClassicalHamiltonian,
     ) where G
 
     primitive_lattice_vectors::Matrix{Float64} = lattice.lattice_vectors

@@ -15,7 +15,7 @@ Assigns energy to the given `walker` based on the `hamiltonian`. If `perturb_ene
 # Returns
 - `walker::LatticeWalker`: The walker with the assigned energy.
 """
-function assign_energy!(walker::LatticeWalker, hamiltonian::LatticeGasHamiltonian; perturb_energy::Float64=0.0)
+function assign_energy!(walker::LatticeWalker, hamiltonian::ClassicalHamiltonian; perturb_energy::Float64=0.0)
     # Assign the energy to the walker, if perturb_energy is non-zero, give all walkers a small random (positive or negative) perturbation
     walker.energy = interacting_energy(walker.configuration, hamiltonian) + perturb_energy * (rand() - 0.5) * unit(walker.energy)
     return walker
@@ -36,8 +36,8 @@ The `LatticeGasWalkers` struct represents a collection of lattice walkers for a 
 """
 struct  LatticeGasWalkers <: LatticeWalkers
     walkers::Vector{LatticeWalker}
-    hamiltonian::LatticeGasHamiltonian
-    function LatticeGasWalkers(walkers::Vector{LatticeWalker}, hamiltonian::LatticeGasHamiltonian; assign_energy=true, perturb_energy::Float64=0.0)
+    hamiltonian::ClassicalHamiltonian
+    function LatticeGasWalkers(walkers::Vector{LatticeWalker}, hamiltonian::ClassicalHamiltonian; assign_energy=true, perturb_energy::Float64=0.0)
         if assign_energy
             [assign_energy!(walker, hamiltonian; perturb_energy=perturb_energy) for walker in walkers]
         end

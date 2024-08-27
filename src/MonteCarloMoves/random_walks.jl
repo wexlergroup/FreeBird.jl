@@ -88,7 +88,7 @@ Perform a Monte Carlo random walk on the lattice system.
 """
 function MC_random_walk!(n_steps::Int,
                          lattice::LatticeWalker,
-                         h::LatticeGasHamiltonian,
+                         h::ClassicalHamiltonian,
                          emax::Float64;
                          energy_perturb::Float64=0.0,
                          )

@@ -10,3 +10,4 @@ include("test-LatticeWalkers.jl")
 
 include("test-EnergyEval.jl")
 
+include("test-Hamiltonians.jl")

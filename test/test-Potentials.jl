@@ -17,4 +17,7 @@
     lj = LJParameters(epsilon=0.1, sigma=2.5, cutoff=4.0, shift=0.5)
 
     @test lj_energy(2.5u"Å", lj) ≈ -0.5u"eV"
+
+    v = [lj, lj, lj, lj, lj, lj, lj, lj, lj]
+    @test CompositeLJParameters(3, v) |> typeof == CompositeLJParameters{3}
 end

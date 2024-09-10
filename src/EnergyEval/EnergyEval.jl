@@ -135,8 +135,8 @@ function frozen_energy(at::AbstractSystem,
     end
     # inter-component interactions
     for i in 1:C
-        for j in (i+1):C
-            if frozen[i] && frozen[j] # both frozen
+        for j in 1:C
+            if frozen[i] && frozen[j] && i != j # both frozen and different
                 # @info "component $i and $j"
                 energy += inter_component_energy(components[i], components[j], ljs.lj_param_sets[i,j])
             end

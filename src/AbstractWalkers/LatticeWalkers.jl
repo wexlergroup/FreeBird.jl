@@ -189,6 +189,39 @@ mutable struct LatticeSystem{G}
     end
 end
 
+function LatticeSystem{SquareLattice}(;lattice_constant::Float64=1.0,
+                                      basis::Vector{Tuple{Float64, Float64, Float64}}=[(0.0, 0.0, 0.0)],
+                                      supercell_dimensions::Tuple{Int64, Int64, Int64}=(4, 4, 4),
+                                      periodicity::Tuple{Bool, Bool, Bool}=(true, true, true),
+                                      cutoff_radii::Vector{Float64}=[1.1, 1.5],
+                                      occupations::Union{Vector{Int}, Symbol}=[1, 2, 3, 4],
+                                      adsorptions::Union{Vector{Int}, Symbol}=:full,
+                                      )
+
+    lattice_vectors = [lattice_constant 0.0 0.0; 0.0 lattice_constant 0.0; 0.0 0.0 1.0]
+    dim = supercell_dimensions[1] * supercell_dimensions[2] * supercell_dimensions[3]
+    lattice_occupations = zeros(Bool, dim*length(basis))
+    lattice_adsorptions = zeros(Bool, dim*length(basis))
+
+    if occupations == :full
+        lattice_occupations = [true for i in 1:dim*length(basis)]
+    else
+        for i in occupations
+            lattice_occupations[i] = true
+        end
+    end
+
+    if adsorptions == :full
+        lattice_adsorptions = [true for i in 1:dim*length(basis)]
+    else
+        for i in adsorptions
+            lattice_adsorptions[i] = true
+        end
+    end
+
+    return LatticeSystem{SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_occupations, lattice_adsorptions, cutoff_radii)
+end
+
 
 
 

@@ -42,7 +42,8 @@
     coor_list3 = [:H => [0.2, 0.2, 0.3], :H => [0.4, 0.4, 0.3], :H => [0.4, 0.4, 0.6], :H => [0.6, 0.6, 0.6], :H => [0.6, 0.6, 0.9], :H => [0.8, 0.8, 0.9]]
     sys3 = periodic_system(coor_list3, box, fractional=true)
     
-    @test EnergyEval.frozen_energy(sys3, lj, [2, 2, 2], [true, false, false]) ≈ -0.09978539310395718u"eV"
+    # Test frozen_energy() function for calculating the frozen energy in a system using the single LJ potential.
+    @test frozen_energy(sys3, lj, [2, 2, 2], [true, false, false]) ≈ -0.09978539310395718u"eV"
 
     ljs1 = [LJParameters(epsilon=e) for e in [11, 21, 31, 12, 22, 32, 13, 23, 33]]
     ljs2 = [LJParameters(epsilon=e) for e in [11, 12, 13, 22, 23, 33]]
@@ -50,8 +51,21 @@
     ljp1 = CompositeLJParameters(3, ljs1)
     ljp2 = CompositeLJParameters(3, ljs2)
 
-    @test EnergyEval.frozen_energy(sys3, ljp1, [2, 2, 2], [true, true, false]) ≈ -0.49376979751528466u"eV"
-    @test EnergyEval.frozen_energy(sys3, ljp2, [2, 2, 2], [true, true, false]) ≈ -0.4292804781822809u"eV"
+    # Test frozen_energy() function for calculating the frozen energy in a system using the composite LJ potential.
+    @test frozen_energy(sys3, ljp1, [2, 2, 2], [true, true, false]) ≈ -0.49376979751528466u"eV"
+    @test frozen_energy(sys3, ljp2, [2, 2, 2], [true, true, false]) ≈ -0.4292804781822809u"eV"
+
+    # Test whether interacting_energy() function is consistent with intra_component_energy() function when the single componenet system is not frozen
+    @test interacting_energy(sys3, lj) == EnergyEval.intra_component_energy(sys3, lj)
+
+    # Test interacting_energy() function for calculating the interacting energy in a system using the single LJ potential.
+    @test interacting_energy(sys3, lj, [2, 2, 2], [true, false, false]) ≈ -0.46572785925144544u"eV"
+
+    # Test interacting_energy() function for calculating the interacting energy in a system using the composite LJ potential.
+    @test interacting_energy(sys3, ljp1, [2, 2, 2], [true, false, false]) ≈ -0.6848119435000306u"eV"
+    @test interacting_energy(sys3, ljp2, [2, 2, 2], [true, false, false]) ≈ -0.6848119435000306u"eV"
+
+    # Test for interacting_energy(lattice::LatticeSystem, h::LatticeGasHamiltonian)
 
 
 end

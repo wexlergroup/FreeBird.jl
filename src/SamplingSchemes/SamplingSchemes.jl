@@ -27,6 +27,12 @@ abstract type SamplingParameters end
 
 include("NestedSampling.jl")
 
-include("LatticeSampling.jl")
+include("exact_enumeration.jl")
+
+include("nvt_monte_carlo.jl")
+
+include("wang_landau.jl")
+
+include("other_samplings.jl")
 
 end # module SamplingSchemes

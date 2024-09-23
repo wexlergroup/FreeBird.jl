@@ -1,9 +1,3 @@
-include("exact_enumeration.jl")
-
-include("nvt_monte_carlo.jl")
-
-include("wang_landau.jl")
-
 """
     rejection_sampling(walker::LatticeSystem, energy_limit::Float64, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64)
 

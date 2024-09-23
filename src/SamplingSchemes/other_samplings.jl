@@ -1,14 +1,12 @@
 """
-    rejection_sampling(walker::LatticeSystem, energy_limit::Float64, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64)
+    rejection_sampling(walker::LatticeSystem, h::ClassicalHamiltonian)
 
 Perform rejection sampling to generate a new configuration with energy below a specified limit.
 
 # Arguments
 - `walker::LatticeSystem`: The walker to sample from.
 - `energy_limit::Float64`: The energy limit.
-- `adsorption_energy::Float64`: The adsorption energy of the particles.
-- `nn_energy::Float64`: The nearest-neighbor interaction energy.
-- `nnn_energy::Float64`: The next-nearest-neighbor interaction energy.
+- `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
 
 # Returns
 - `walker::LatticeSystem`: The updated walker.
@@ -16,15 +14,15 @@ Perform rejection sampling to generate a new configuration with energy below a s
 
 """
 
+k_B = 8.617_333_262e-5
+
 function rejection_sampling(
     walker::LatticeSystem, 
     energy_limit::Float64, 
-    adsorption_energy::Float64, 
-    nn_energy::Float64, 
-    nnn_energy::Float64,
+    h::ClassicalHamiltonian,
     perturbation::Float64
 )
-    current_energy = interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy) + 1 / perturbation
+    current_energy = interacting_energy(walker, h).val + 1 / perturbation
 
     while current_energy > energy_limit
         # Save the current lattice state
@@ -38,7 +36,7 @@ function rejection_sampling(
         end
         
         # Calculate the new energy
-        current_energy = interaction_energy(walker, adsorption_energy, nn_energy, nnn_energy)
+        current_energy = interacting_energy(walker, h).val
         current_energy += perturbation * (rand() - 0.5)
         
         # If the new energy is below the energy limit, we keep this configuration
@@ -53,7 +51,8 @@ function rejection_sampling(
 end
 
 
-function monte_carlo_displacement_step_constant_N!(lattice::LatticeSystem, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, temperature::Float64)
+function monte_carlo_displacement_step_constant_N!(lattice::LatticeSystem, h::ClassicalHamiltonian, temperature::Float64)
+
     # Randomly select any site
     site_index = rand(1:length(lattice.occupations))
     
@@ -64,7 +63,7 @@ function monte_carlo_displacement_step_constant_N!(lattice::LatticeSystem, adsor
         # Current site is occupied, find a vacant site to swap with
         vacant_sites = findall(x -> x == false, proposed_lattice.occupations)
         if isempty(vacant_sites)
-            return interaction_energy(lattice, adsorption_energy, nn_energy, nnn_energy)  # No change possible
+            return interacting_energy(lattice, h).val  # No change possible
         end
         swap_site = rand(vacant_sites)
         proposed_lattice.occupations[site_index] = false
@@ -73,7 +72,7 @@ function monte_carlo_displacement_step_constant_N!(lattice::LatticeSystem, adsor
         # Current site is vacant, find an occupied site to swap with
         occupied_sites = findall(x -> x == true, proposed_lattice.occupations)
         if isempty(occupied_sites)
-            return interaction_energy(lattice, adsorption_energy, nn_energy, nnn_energy)  # No change possible
+            return interacting_energy(lattice, h).val  # No change possible
         end
         swap_site = rand(occupied_sites)
         proposed_lattice.occupations[site_index] = true
@@ -81,8 +80,8 @@ function monte_carlo_displacement_step_constant_N!(lattice::LatticeSystem, adsor
     end
 
     # Calculate energy difference
-    current_energy = interaction_energy(lattice, adsorption_energy, nn_energy, nnn_energy)
-    proposed_energy = interaction_energy(proposed_lattice, adsorption_energy, nn_energy, nnn_energy)
+    current_energy = interacting_energy(lattice, h).val
+    proposed_energy = interacting_energy(proposed_lattice, h).val
     ΔE = proposed_energy - current_energy
 
     # Metropolis criterion
@@ -95,7 +94,8 @@ function monte_carlo_displacement_step_constant_N!(lattice::LatticeSystem, adsor
 end
 
 # Function to attempt swapping configurations between two replicas
-function attempt_swap!(replicas::Vector{LatticeSystem}, energies::Vector{Float64}, temperatures::Vector{Float64}, index1::Int, index2::Int)
+function attempt_swap!(replicas::Vector{L}, energies::Vector{Float64}, temperatures::Vector{Float64}, index1::Int, index2::Int) where L
+
     Δ = (1/(k_B * temperatures[index1]) - 1/(k_B * temperatures[index2])) * (energies[index2] - energies[index1])
     if Δ < 0 || exp(-Δ) > rand()
         replicas[index1], replicas[index2] = replicas[index2], replicas[index1]
@@ -105,9 +105,9 @@ function attempt_swap!(replicas::Vector{LatticeSystem}, energies::Vector{Float64
     return false
 end
 
-function nvt_replica_exchange(replicas::Vector{LatticeSystem}, temperatures::Vector{Float64}, steps::Int, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, swap_fraction::Float64)
+function nvt_replica_exchange(replicas::Vector{L}, temperatures::Vector{Float64}, steps::Int, h::ClassicalHamiltonian, swap_fraction::Float64) where L
     num_replicas = length(replicas)
-    energies = [interaction_energy(replica, adsorption_energy, nn_energy, nnn_energy) for replica in replicas]
+    energies = [interacting_energy(replica, h).val for replica in replicas]
     
     # Initialize array to track which replica is at each temperature
     temperature_indices = collect(1:num_replicas)
@@ -128,7 +128,7 @@ function nvt_replica_exchange(replicas::Vector{LatticeSystem}, temperatures::Vec
                 end
             else
                 # Perform a Monte Carlo displacement step
-                energies[temperature_indices[i]] = monte_carlo_displacement_step_constant_N!(replicas[temperature_indices[i]], adsorption_energy, nn_energy, nnn_energy, temperatures[i])
+                energies[temperature_indices[i]] = monte_carlo_displacement_step_constant_N!(replicas[temperature_indices[i]], h, temperatures[i])
             end
         end
     end

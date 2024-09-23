@@ -6,6 +6,7 @@ using Unitful
 using DataFrames
 using Combinatorics
 using Random
+using Statistics
 
 using ..MonteCarloMoves
 using ..Potentials

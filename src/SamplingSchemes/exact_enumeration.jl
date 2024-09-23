@@ -6,7 +6,7 @@ Enumerate all possible configurations of a lattice system and compute the energy
 # Arguments
 - `lattice::LatticeSystem{G}`: The (starting) lattice system to enumerate. All possible configurations will be generated from this lattice system.
 - `cutoff_radii::Tuple{Float64, Float64}`: The cutoff radii for the first and second nearest neighbors.
-- `h::LatticeGasHamiltonian`: The lattice gas Hamiltonian.
+- `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
 
 # Returns
 - `energies::Vector{typeof(0.0u"eV")}`: An array of energies for each configuration.

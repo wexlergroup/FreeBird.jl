@@ -5,9 +5,7 @@ Perform a Markov chain Monte Carlo simulation of a LatticeSystem in the NVT ense
 
 # Arguments
 - `lattice::LatticeSystem`: The initial lattice configuration.
-- `adsorption_energy::Float64`: The adsorption energy of the particles.
-- `nn_energy::Float64`: The nearest-neighbor interaction energy.
-- `nnn_energy::Float64`: The next-nearest-neighbor interaction energy.
+- `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
 - `temperature::Float64`: The temperature of the system.
 - `num_steps::Int64`: The number of Monte Carlo steps.
 - `random_seed::Int64`: The seed for the random number generator.
@@ -20,9 +18,7 @@ Perform a Markov chain Monte Carlo simulation of a LatticeSystem in the NVT ense
 
 function nvt_monte_carlo(
     lattice::LatticeSystem,
-    adsorption_energy::Float64,
-    nn_energy::Float64,
-    nnn_energy::Float64,
+    h::ClassicalHamiltonian,
     temperature::Float64,
     num_steps::Int64,
     random_seed::Int64
@@ -35,7 +31,7 @@ function nvt_monte_carlo(
     accepted_steps = 0
 
     current_lattice = deepcopy(lattice)
-    current_energy = interaction_energy(current_lattice, adsorption_energy, nn_energy, nnn_energy)
+    current_energy = interacting_energy(current_lattice, h).val
     
     push!(energies, current_energy)
     push!(configurations, deepcopy(current_lattice))
@@ -68,7 +64,7 @@ function nvt_monte_carlo(
         end
 
         # Calculate the proposed energy
-        proposed_energy = interaction_energy(proposed_lattice, adsorption_energy, nn_energy, nnn_energy)
+        proposed_energy = interacting_energy(proposed_lattice, h).val
 
         # Metropolis-Hastings acceptance criterion
         k_B = 8.617_333_262e-5  # eV K-1

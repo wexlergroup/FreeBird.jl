@@ -121,7 +121,15 @@ function lattice_positions(lattice_vectors::Matrix{Float64},
     return positions
 end
 
+"""
+    abstract type LatticeGeometry
 
+The `LatticeGeometry` abstract type represents the geometry of a lattice. It has the following subtypes:
+
+- `SquareLattice`: A square lattice.
+- `TriangularLattice`: A triangular lattice.
+- `GenericLattice`: A generic lattice. Currently used for non-square and non-triangular lattices.
+"""
 abstract type LatticeGeometry end
 
 abstract type SquareLattice <: LatticeGeometry end
@@ -133,9 +141,12 @@ abstract type GenericLattice <: LatticeGeometry end
 
 
 """
-mutable struct LatticeSystem
+mutable struct LatticeSystem{G}
 
-The `LatticeSystem` struct represents a 3D lattice system.
+The `LatticeSystem{G}` struct represents a 3D lattice system.
+
+# Type parameters
+- `G`: The lattice geometry type. Must be a subtype of `LatticeGeometry`. See [`LatticeGeometry`](@ref).
 
 # Fields
 - `lattice_vectors::Matrix{Float64}`: The lattice vectors of the system.
@@ -146,13 +157,48 @@ The `LatticeSystem` struct represents a 3D lattice system.
 - `adsorptions::Vector{Bool}`: A vector of booleans indicating whether each site is adsorbed.
 
 # Constructors
+## Inner constructor
 ```julia
-LatticeSystem(lattice_vectors::Matrix{Float64}, basis::Vector{Tuple{Float64, Float64, Float64}}, supercell_dimensions::Tuple{Int64, Int64, Int64}, occupations::Vector{Bool}, adsorptions::Vector{Bool}, cutoff_radii::Tuple{Float64, Float64}, periodicity::Vector{Bool})
+LatticeSystem{G}(lattice_vectors::Matrix{Float64}, 
+                basis::Vector{Tuple{Float64, Float64, Float64}}, 
+                supercell_dimensions::Tuple{Int64, Int64, Int64}, 
+                occupations::Vector{Bool}, adsorptions::Vector{Bool}, 
+                cutoff_radii::Vector{Float64},
+                periodicity::Vector{Bool})
 ```
 Create a new `LatticeSystem` with the given lattice vectors, basis, supercell dimensions, occupations, adsorptions, cutoff radii, and periodicity.
 
-"""
+## Outer constructor for square lattice
+```julia
+LatticeSystem{SquareLattice}(;lattice_constant::Float64=1.0, 
+                            basis=[(0.0, 0.0, 0.0)], 
+                            supercell_dimensions=(4, 4, 1), 
+                            periodicity=(true, true, true), 
+                            cutoff_radii=[1.1, 1.5],
+                            occupations=[1, 2, 3, 4],
+                            adsorptions=:full)
+```
+Create a new `LatticeSystem` with the given square lattice parameters. The `occupations` and `adsorptions` argument 
+can be a vector of integers or the symbol `:full`; the former specifies the indices of the occupied sites, while the latter specifies that all sites are occupied.
 
+## Outer constructor for triangular lattice
+```julia
+LatticeSystem{TriangularLattice}(;lattice_constant::Float64=1.0, 
+                                basis=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)], 
+                                supercell_dimensions=(4, 2, 1), 
+                                periodicity=(true, true, true), 
+                                cutoff_radii::Vector{Float64}=[1.1, 1.5],
+                                occupations=[1, 2, 3, 4],
+                                adsorptions=:full)
+```
+Create a new `LatticeSystem` with the given triangular lattice parameters. Similar to the square lattice constructor, the `occupations` and `adsorptions` argument can be a vector of integers or the symbol `:full`.
+
+# Examples
+```@repl
+square_lattice  = LatticeSystem{SquareLattice}(;supercell_dimensions=(4,4,1))
+triangular_lattice = LatticeSystem{TriangularLattice}(;occupations=[1,3,5,7])
+```
+"""
 mutable struct LatticeSystem{G}
     lattice_vectors::Matrix{Float64}
     positions::Matrix{Float64}
@@ -191,7 +237,7 @@ end
 
 function LatticeSystem{SquareLattice}(;lattice_constant::Float64=1.0,
                                       basis::Vector{Tuple{Float64, Float64, Float64}}=[(0.0, 0.0, 0.0)],
-                                      supercell_dimensions::Tuple{Int64, Int64, Int64}=(4, 4, 4),
+                                      supercell_dimensions::Tuple{Int64, Int64, Int64}=(4, 4, 1),
                                       periodicity::Tuple{Bool, Bool, Bool}=(true, true, true),
                                       cutoff_radii::Vector{Float64}=[1.1, 1.5],
                                       occupations::Union{Vector{Int}, Symbol}=[1, 2, 3, 4],
@@ -220,6 +266,40 @@ function LatticeSystem{SquareLattice}(;lattice_constant::Float64=1.0,
     end
 
     return LatticeSystem{SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_occupations, lattice_adsorptions, cutoff_radii)
+end
+
+
+function LatticeSystem{TriangularLattice}(;lattice_constant::Float64=1.0,
+                                          basis::Vector{Tuple{Float64, Float64, Float64}}=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)],
+                                          supercell_dimensions::Tuple{Int64, Int64, Int64}=(4, 2, 1),
+                                          periodicity::Tuple{Bool, Bool, Bool}=(true, true, true),
+                                          cutoff_radii::Vector{Float64}=[1.1, 1.5],
+                                          occupations::Union{Vector{Int}, Symbol}=[1, 2, 3, 4],
+                                          adsorptions::Union{Vector{Int}, Symbol}=:full,
+                                          )
+
+    lattice_vectors = [lattice_constant 0.0 0.0; 0.0 sqrt(3)*lattice_constant 0.0; 0.0 0.0 1.0]
+    dim = supercell_dimensions[1] * supercell_dimensions[2] * supercell_dimensions[3]
+    lattice_occupations = zeros(Bool, dim * length(basis))
+    lattice_adsorptions = zeros(Bool, dim * length(basis))
+
+    if occupations == :full
+        lattice_occupations = [true for i in 1:dim*length(basis)]
+    else
+        for i in occupations
+            lattice_occupations[i] = true
+        end
+    end
+
+    if adsorptions == :full
+        lattice_adsorptions = [true for i in 1:dim*length(basis)]
+    else
+        for i in adsorptions
+            lattice_adsorptions[i] = true
+        end
+    end
+
+    return LatticeSystem{TriangularLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_occupations, lattice_adsorptions, cutoff_radii)
 end
 
 

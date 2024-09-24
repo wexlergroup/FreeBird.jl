@@ -28,7 +28,7 @@ function print_layer(io::IO, lattice::LatticeSystem{G}, boolvec::Vector{Bool}) w
     for i in 1:supercell_dimensions[1]
         print(io, "      ")
         if G == TriangularLattice
-            if isodd(i)
+            if iseven(i)
                 print(io, " ")
             end
             for j in 1:supercell_dimensions[2]*length(lattice.basis)

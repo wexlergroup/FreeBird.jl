@@ -1,3 +1,12 @@
+using FreeBird, Distributions, DataFrames, Plots
+
+square_supercell_dimensions = (4, 4, 1)
+square_basis=[(0.0, 0.0, 0.0)]
+
+adsorption_energy = -0.04
+nn_energy = -0.01
+nnn_energy = -0.0025
+
 # Define parameters for Wang-Landau simulation
 num_steps = 100
 flatness_criterion = 0.8
@@ -7,22 +16,15 @@ energy_min = 20.5 * nn_energy + nn_energy / 8
 energy_max = 16 * nn_energy - nn_energy / 8
 num_energy_bins = 100
 energy_bins = collect(range(energy_min, stop=energy_max, length=num_energy_bins))
+random_seed = 1234
 
 # Initialize the lattice
-square_occupations = [false for i in 1:square_supercell_dimensions[1]*square_supercell_dimensions[2]*length(square_basis)]
-for i in sample(1:length(square_occupations), 4, replace=false)
-    square_occupations[i] = true
-end
+occupied_sites = sample(1:length(square_occupations), 4, replace=false)
 
-initial_lattice = LatticeSystem{SquareLattice}(
-           square_primitive_lattice_vectors,
-           square_basis,
-           square_supercell_dimensions,
-           square_periodicity,
-           square_occupations,
-           square_adsorptions,
-           square_cutoff_radii
-       )
+initial_lattice = LatticeSystem{SquareLattice}(;
+           supercell_dimensions = square_supercell_dimensions,
+           occupations=occupied_sites)
+
 h = GenericLatticeHamiltonian(adsorption_energy, [nn_energy, nnn_energy], u"eV")
 
 entropy, histogram, bin_energies, energies, configurations = wang_landau(

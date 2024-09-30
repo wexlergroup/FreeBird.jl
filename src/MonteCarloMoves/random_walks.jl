@@ -139,8 +139,24 @@ function MC_random_walk!(n_steps::Int,
     return accept_this_walker, n_accept/n_steps, lattice
 end
 
+"""
+    MC_new_sample!(lattice::LatticeWalker, h::ClassicalHamiltonian, emax::Float64; energy_perturb::Float64=0.0)
+
+Generate a new sample for the lattice system.
+
+# Arguments
+- `lattice::LatticeWalker`: The walker to generate a new sample for.
+- `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
+- `emax::Float64`: The maximum energy allowed for accepting a move.
+- `energy_perturb::Float64=0.0`: The energy perturbation used to make degenerate configurations distinguishable.
+
+# Returns
+- `accept_this_walker::Bool`: Whether the walker is accepted or not.
+- `lattice::LatticeWalker`: The updated walker.
+
+"""
 function MC_new_sample!(lattice::LatticeWalker,
-                        h::LatticeGasHamiltonian,
+                        h::ClassicalHamiltonian,
                         emax::Float64;
                         energy_perturb::Float64=0.0,
                         )

@@ -345,3 +345,116 @@ function Base.show(io::IO, walker::Vector{LatticeWalker})
         println(io, "[", ind, "] ", w)
     end
 end
+
+
+
+"""
+    mutable struct MLattice{C,G}
+
+A mutable struct representing a lattice with the following fields:
+
+- `lattice_vectors::Matrix{Float64}`: The lattice vectors defining the unit cell.
+- `positions::Matrix{Float64}`: The positions of the lattice points.
+- `basis::Vector{Tuple{Float64, Float64, Float64}}`: The basis vectors within the unit cell.
+- `supercell_dimensions::Tuple{Int64, Int64, Int64}`: The dimensions of the supercell.
+- `periodicity::Tuple{Bool, Bool, Bool}`: The periodicity in each dimension.
+- `components::Vector{Vector{Bool}}`: The components of the lattice.
+- `neighbors::Vector{Vector{Vector{Int}}}`: The neighbors of each lattice point.
+- `adsorptions::Vector{Bool}`: The adsorption sites on the lattice.
+
+# Inner Constructor
+
+    MLattice{C,G}(
+        lattice_vectors::Matrix{Float64},
+        basis::Vector{Tuple{Float64, Float64, Float64}},
+        supercell_dimensions::Tuple{Int64, Int64, Int64},
+        periodicity::Tuple{Bool, Bool, Bool},
+        components::Vector{Vector{Bool}},
+        adsorptions::Vector{Bool},
+        cutoff_radii::Vector{Float64},
+    ) where {C,G}
+
+Creates an `MLattice` instance with the specified parameters. The constructor performs the following steps:
+
+1. Validates that the number of components matches the expected value `C`.
+2. Computes the positions of the lattice points using `lattice_positions`.
+3. Computes the supercell lattice vectors.
+4. Computes the neighbors of each lattice point using `compute_neighbors`.
+
+Throws an `ArgumentError` if the number of components does not match `C`.
+
+# Outer Constructors
+
+    MLattice{2,SquareLattice}(; lattice_constant::Float64=1.0,
+                               basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0)],
+                               supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 4, 1),
+                               periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
+                               cutoff_radii::Vector{Float64}=[1.1, 1.5],
+                               components::Vector{Vector{Bool}}=[[isodd(i) for i in 1:16], [iseven(i) for i in 1:16]],
+                               adsorptions::Union{Vector{Int},Symbol}=:full)
+
+Constructs a 2D square lattice with the specified parameters.
+
+## Returns
+- `MLattice{2,SquareLattice}`: A 2D square lattice object with the specified properties.
+
+"""
+mutable struct MLattice{C,G}
+    lattice_vectors::Matrix{Float64}
+    positions::Matrix{Float64}
+    basis::Vector{Tuple{Float64, Float64, Float64}}
+    supercell_dimensions::Tuple{Int64, Int64, Int64}
+    periodicity::Tuple{Bool, Bool, Bool}
+    components::Vector{Vector{Bool}}
+    neighbors::Vector{Vector{Vector{Int}}}
+    adsorptions::Vector{Bool}
+
+    function MLattice{C,G}(
+        lattice_vectors::Matrix{Float64},
+        basis::Vector{Tuple{Float64, Float64, Float64}},
+        supercell_dimensions::Tuple{Int64, Int64, Int64},
+        periodicity::Tuple{Bool, Bool, Bool},
+        components::Vector{Vector{Bool}},
+        adsorptions::Vector{Bool},
+        cutoff_radii::Vector{Float64},
+    ) where {C,G}
+
+        num_components = length(components)
+
+        if num_components != C
+            throw(ArgumentError("For a $C-component system, got $num_components components!"))
+        end
+
+        positions = lattice_positions(lattice_vectors, basis, supercell_dimensions)
+
+        supercell_lattice_vectors = lattice_vectors * Diagonal([supercell_dimensions[1], supercell_dimensions[2], supercell_dimensions[3]])
+        neighbors = compute_neighbors(supercell_lattice_vectors, positions, periodicity, cutoff_radii)
+        
+        return new{C,G}(lattice_vectors, positions, basis, supercell_dimensions, periodicity, components, neighbors, adsorptions)
+    end
+end
+
+
+function MLattice{2,SquareLattice}(; lattice_constant::Float64=1.0,
+                                    basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0)],
+                                    supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 4, 1),
+                                    periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
+                                    cutoff_radii::Vector{Float64}=[1.1, 1.5],
+                                    components::Vector{Vector{Bool}}=[[isodd(i) for i in 1:16], [iseven(i) for i in 1:16]],
+                                    adsorptions::Union{Vector{Int},Symbol}=:full,
+                                )
+
+    lattice_vectors = [lattice_constant 0.0 0.0; 0.0 lattice_constant 0.0; 0.0 0.0 1.0]
+    dim = supercell_dimensions[1] * supercell_dimensions[2] * supercell_dimensions[3]
+    lattice_adsorptions = zeros(Bool, dim * length(basis))
+
+    if adsorptions == :full
+        lattice_adsorptions = [true for i in 1:dim*length(basis)]
+    else
+        for i in adsorptions
+            lattice_adsorptions[i] = true
+        end
+    end
+
+    return MLattice{2,SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, components, lattice_adsorptions, cutoff_radii)
+end

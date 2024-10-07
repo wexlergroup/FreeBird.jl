@@ -15,6 +15,7 @@ export AbstractWalker
 export AtomWalker
 export LatticeSystem, LatticeWalker
 export LatticeGeometry, SquareLattice, TriangularLattice, GenericLattice
+export MLattice
 export update_walker!
 
 abstract type AbstractWalker end

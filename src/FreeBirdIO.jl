@@ -10,6 +10,7 @@ using AtomsBase, Unitful
 
 using ..AbstractWalkers
 using ..AbstractLiveSets
+using ..EnergyEval
 
 export read_single_config, read_configs, read_single_walker, read_walkers
 export write_single_walker, write_walkers
@@ -247,6 +248,23 @@ function write_walkers(filename::String, ats::Vector{AtomWalker{C}}) where C
     flex = convert_walker_to_system.(ats)
     save_trajectory(filename::String, flex)
 end
+"""
+    write_walkers(filename::String, ats::Vector{LatticeWalker})
+
+Write a collection of `LatticeWalker` objects to a file.
+
+# Arguments
+- `filename::String`: The name of the file to write the walkers to.
+- `ats::Vector{LatticeWalker}`: The collection of `LatticeWalker` objects to write.
+
+"""
+function write_walkers(filename::String, ats::Vector{LatticeWalker})
+    occupancies = [Int.(at.configuration.occupations) for at in ats]
+    energies = [at.energy.val for at in ats]
+    energy_and_unit = "energy_$(unit(ats[1].energy))"
+    df = DataFrame(energy_and_unit=>energies, "occupations"=>occupancies)
+    CSV.write(filename, df; append=false)
+end
 
 """
     write_single_walker(filename::String, at::AtomWalker, append::Bool)
@@ -265,6 +283,35 @@ function write_single_walker(filename::String, at::AtomWalker, append::Bool)
     else
         write_walkers(filename, [at])
     end
+end
+
+"""
+    extract_free_par(walker::AtomWalker)
+
+Extract free particles from existing walker and create new walker conating only the free particles.
+
+# Arguments
+- `walker::AtomWalker`: The AtomWalker object for extraction.
+
+"""
+
+function extract_free_par(walker::AtomWalker)
+    free_part = []
+    free_indices = []
+    components = split_components(walker.configuration, walker.list_num_par)
+    for ind in eachindex(components)
+        if !walker.frozen[ind]
+            push!(free_indices, length(components[ind]))
+            for i in 1:length(components[ind])
+                push!(free_part, components[ind].atomic_symbol[i]=>components[ind].position[i])
+            end
+        end
+    end
+    system = periodic_system(free_part, components[1].bounding_box)
+    flex = FlexibleSystem(system; boundary_conditions=components[1].boundary_conditions)
+    fast = FastSystem(flex)
+    #return AtomWalker{length(components)}(fast; walker.energy - walker.energy_frozen_part, walker.iter,[length(comp) for comp in components], zeros(Bool,length(components)), 0.0u"eV")
+    return AtomWalker{length(free_indices)}(fast;list_num_par = free_indices, energy = walker.energy - walker.energy_frozen_part, iter = walker.iter)
 end
 
 """
@@ -424,12 +471,12 @@ end
 Write the liveset `ls` to file every `n` steps, as specified by the `d_strategy`.
 
 # Arguments
-- `ls::AtomWalkers`: The liveset to be written.
+- `ls::AbstractLiveSet`: The liveset to be written.
 - `step::Int`: The current step number.
 - `d_strategy::SaveEveryN`: The save strategy specifying the frequency of writing.
 
 """
-function write_ls_every_n(ls::AtomWalkers, step::Int, d_strategy::SaveEveryN)
+function write_ls_every_n(ls::AbstractLiveSet, step::Int, d_strategy::SaveEveryN)
     if step % d_strategy.n_snap == 0
         write_walkers(d_strategy.ls_filename, ls.walkers)
     end

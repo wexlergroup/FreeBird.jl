@@ -19,8 +19,8 @@ include("EnergyEval/EnergyEval.jl")
 include("AbstractLiveSets/AbstractLiveSets.jl")
 @reexport using .AbstractLiveSets
 
-include("AtomsMCMoves.jl")
-@reexport using .AtomsMCMoves
+include("MonteCarloMoves/MonteCarloMoves.jl")
+@reexport using .MonteCarloMoves
 
 include("FreeBirdIO.jl")
 @reexport using .FreeBirdIO

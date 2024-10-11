@@ -10,6 +10,7 @@ using AtomsBase, Unitful
 
 using ..AbstractWalkers
 using ..AbstractLiveSets
+using ..EnergyEval
 
 export read_single_config, read_configs, read_single_walker, read_walkers
 export write_single_walker, write_walkers
@@ -282,6 +283,35 @@ function write_single_walker(filename::String, at::AtomWalker, append::Bool)
     else
         write_walkers(filename, [at])
     end
+end
+
+"""
+    extract_free_par(walker::AtomWalker)
+
+Extract free particles from existing walker and create new walker conating only the free particles.
+
+# Arguments
+- `walker::AtomWalker`: The AtomWalker object for extraction.
+
+"""
+
+function extract_free_par(walker::AtomWalker)
+    free_part = []
+    free_indices = []
+    components = split_components(walker.configuration, walker.list_num_par)
+    for ind in eachindex(components)
+        if !walker.frozen[ind]
+            push!(free_indices, length(components[ind]))
+            for i in 1:length(components[ind])
+                push!(free_part, components[ind].atomic_symbol[i]=>components[ind].position[i])
+            end
+        end
+    end
+    system = periodic_system(free_part, components[1].bounding_box)
+    flex = FlexibleSystem(system; boundary_conditions=components[1].boundary_conditions)
+    fast = FastSystem(flex)
+    #return AtomWalker{length(components)}(fast; walker.energy - walker.energy_frozen_part, walker.iter,[length(comp) for comp in components], zeros(Bool,length(components)), 0.0u"eV")
+    return AtomWalker{length(free_indices)}(fast;list_num_par = free_indices, energy = walker.energy - walker.energy_frozen_part, iter = walker.iter)
 end
 
 """

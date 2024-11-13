@@ -138,7 +138,7 @@ abstract type TriangularLattice <: LatticeGeometry end
 
 abstract type GenericLattice <: LatticeGeometry end
 
-
+abstract type AbstractLattice end
 
 """
 mutable struct LatticeSystem{G}
@@ -199,7 +199,7 @@ square_lattice  = LatticeSystem{SquareLattice}(;supercell_dimensions=(4,4,1))
 triangular_lattice = LatticeSystem{TriangularLattice}(;occupations=[1,3,5,7])
 ```
 """
-mutable struct LatticeSystem{G}
+mutable struct LatticeSystem{G} <: AbstractLattice
     lattice_vectors::Matrix{Float64}
     positions::Matrix{Float64}
     basis::Vector{Tuple{Float64, Float64, Float64}}
@@ -324,10 +324,10 @@ Create a new `LatticeWalker` with the given configuration and optional energy an
 """
 
 mutable struct LatticeWalker <: AbstractWalker
-    configuration::LatticeSystem
+    configuration::AbstractLattice
     energy::typeof(0.0u"eV")
     iter::Int64
-    function LatticeWalker(configuration::LatticeSystem; energy=0.0u"eV", iter=0)
+    function LatticeWalker(configuration::AbstractLattice; energy=0.0u"eV", iter=0)
         return new(configuration, energy, iter)
     end
 end
@@ -399,7 +399,7 @@ Constructs a 2D square lattice with the specified parameters.
 - `MLattice{2,SquareLattice}`: A 2D square lattice object with the specified properties.
 
 """
-mutable struct MLattice{C,G}
+mutable struct MLattice{C,G} <: AbstractLattice
     lattice_vectors::Matrix{Float64}
     positions::Matrix{Float64}
     basis::Vector{Tuple{Float64, Float64, Float64}}

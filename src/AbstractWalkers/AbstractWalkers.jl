@@ -12,6 +12,7 @@ using ..Potentials
 using ..Hamiltonians
 
 export AbstractWalker
+export AbstractLattice
 export AtomWalker
 export LatticeSystem, LatticeWalker
 export LatticeGeometry, SquareLattice, TriangularLattice, GenericLattice

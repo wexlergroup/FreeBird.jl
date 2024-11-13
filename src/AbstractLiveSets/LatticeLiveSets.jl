@@ -71,9 +71,16 @@ function Base.show(io::IO, ls::LatticeGasWalkers)
     println(io, ls.hamiltonian)
 end
 
-function print_lattice_walker_in_walkers(io::IO, walkers::LatticeWalker)
+function print_lattice_walker_in_walkers(io::IO, walker::LatticeWalker)
     println(io, "    occupations:")
-    AbstractWalkers.print_lattice(io, walkers.configuration, walkers.configuration.occupations)
-    # println(io, "    adsorptions:")
-    # AbstractWalkers.print_lattice(io, walkers.configuration, walkers.configuration.adsorptions)
+    if walker.configuration isa MLattice
+        # AbstractWalkers.print_lattice(io, walker.configuration, walker.configuration.components)
+        println(io, "      components:")
+        for (i, component) in enumerate(walker.configuration.components)
+            println(io, "        component $i:")
+            println(io, "          ", component)
+        end
+    else
+        AbstractWalkers.print_lattice(io, walker.configuration, walker.configuration.occupations)
+    end
 end

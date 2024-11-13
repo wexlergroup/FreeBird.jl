@@ -20,7 +20,7 @@ function custom_sort(arr::Vector{Int}, period::Int)
     return sorted_arr
 end
 
-function print_layer(io::IO, lattice::LatticeSystem{G}, boolvec::Vector{Bool}) where G
+function print_layer(io::IO, lattice::SLattice{G}, boolvec::Vector{Bool}) where G
     supercell_dimensions = lattice.supercell_dimensions
     # set up zigzag indexing for triangular lattice
     index = custom_sort(collect(1:length(boolvec)), lattice.supercell_dimensions[2]*4)
@@ -52,7 +52,7 @@ function print_layer(io::IO, lattice::LatticeSystem{G}, boolvec::Vector{Bool}) w
     end
 end
 
-function print_lattice(io::IO, lattice::LatticeSystem{G}, boolvec::Vector{Bool}) where G
+function print_lattice(io::IO, lattice::SLattice{G}, boolvec::Vector{Bool}) where G
     if G == GenericLattice
         print(io, boolvec)
         return
@@ -71,7 +71,7 @@ function print_lattice(io::IO, lattice::LatticeSystem{G}, boolvec::Vector{Bool})
     end
 end
 
-function Base.show(io::IO, lattice::LatticeSystem{G}) where G
+function Base.show(io::IO, lattice::SLattice{G}) where G
     println(io, "LatticeSystem{$G}:")
     println(io, "    lattice_vectors      : ", lattice.lattice_vectors)
     println(io, "    positions            : ", lattice.positions)

@@ -309,19 +309,19 @@ The energy is calculated by summing the pairwise interactions between the free p
 interacting_energy(at::AbstractSystem, lj::LJParameters) = intra_component_energy(at, lj)
 
 """
-    interacting_energy(lattice::LatticeSystem, h::LatticeGasHamiltonian)
+    interacting_energy(lattice::SLattice, h::LatticeGasHamiltonian)
 
 Compute the interaction energy of a lattice configuration using the Hamiltonian parameters.
 
 # Arguments
-- `lattice::LatticeSystem`: The lattice configuration.
+- `lattice::SLattice`: The lattice configuration.
 - `h::LatticeGasHamiltonian`: The lattice-gas Hamiltonian parameters.
 
 # Returns
 - `e_interaction::Float64`: The interaction energy of the lattice configuration.
 
 """
-function interacting_energy(lattice::LatticeSystem, h::LatticeGasHamiltonian)
+function interacting_energy(lattice::SLattice, h::LatticeGasHamiltonian)
     e_adsorption = sum(lattice.occupations .& lattice.adsorptions) * h.adsorption_energy
     e_nn = 0.0u"eV"
     e_nnn = 0.0u"eV"
@@ -410,19 +410,19 @@ function inter_component_energy(lattice1::Vector{Bool}, lattice2::Vector{Bool}, 
 end
 
 """
-    interacting_energy(lattice::LatticeSystem, h::GenericLatticeHamiltonian{N})
+    interacting_energy(lattice::SLattice, h::GenericLatticeHamiltonian{N})
 
 Compute the interaction energy of a lattice configuration using the Hamiltonian parameters.
 
 # Arguments
-- `lattice::LatticeSystem`: The lattice configuration.
+- `lattice::SLattice`: The lattice configuration.
 - `h::GenericLatticeHamiltonian{N,U}`: The generic lattice Hamiltonian parameters.
 
 # Returns
 - `e_interaction::Float64`: The interaction energy of the lattice configuration.
 
 """
-function interacting_energy(lattice::LatticeSystem, h::GenericLatticeHamiltonian{N,U}) where {N,U}
+function interacting_energy(lattice::SLattice, h::GenericLatticeHamiltonian{N,U}) where {N,U}
     e_interaction::U = lattice_interaction_energy(lattice.occupations, lattice.neighbors, h)
     e_adsorption::U = sum(lattice.occupations .& lattice.adsorptions) * h.on_site_interaction
     return e_interaction + e_adsorption

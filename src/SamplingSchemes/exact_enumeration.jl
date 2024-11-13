@@ -1,20 +1,20 @@
 """
-    exact_enumeration(lattice::LatticeSystem{G}, cutoff_radii::Tuple{Float64, Float64}, h::LatticeGasHamiltonian) where G
+    exact_enumeration(lattice::SLattice{G}, cutoff_radii::Tuple{Float64, Float64}, h::LatticeGasHamiltonian) where G
 
 Enumerate all possible configurations of a lattice system and compute the energy of each configuration.
 
 # Arguments
-- `lattice::LatticeSystem{G}`: The (starting) lattice system to enumerate. All possible configurations will be generated from this lattice system.
+- `lattice::SLattice{G}`: The (starting) lattice system to enumerate. All possible configurations will be generated from this lattice system.
 - `cutoff_radii::Tuple{Float64, Float64}`: The cutoff radii for the first and second nearest neighbors.
 - `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
 
 # Returns
 - `energies::Vector{typeof(0.0u"eV")}`: An array of energies for each configuration.
-- `configurations::Vector{LatticeSystem{G}}`: An array of lattice system configurations for each configuration.
+- `configurations::Vector{SLattice{G}}`: An array of lattice system configurations for each configuration.
 - `walkers::Vector{LatticeWalker}`: An array of lattice walkers for each configuration.
 """
 function exact_enumeration(
-    lattice::LatticeSystem{G},
+    lattice::SLattice{G},
     cutoff_radii::Vector{Float64},
     h::ClassicalHamiltonian,
     ) where G
@@ -41,8 +41,8 @@ function exact_enumeration(
         push!(all_occupation_vectors, Vector{Bool}(occupations))  # Convert BitVector to Vector{Bool}
     end
 
-    # Generate LatticeSystem objects for each configuration
-    lattices = [LatticeSystem{G}(primitive_lattice_vectors, basis, supercell_dimensions, periodicity, occupations, adsorptions, cutoff_radii) for occupations in all_occupation_vectors]
+    # Generate SLattice objects for each configuration
+    lattices = [SLattice{G}(primitive_lattice_vectors, basis, supercell_dimensions, periodicity, occupations, adsorptions, cutoff_radii) for occupations in all_occupation_vectors]
 
     # Generate LatticeWalker objects for each lattice system
     walkers = [LatticeWalker(lattice) for lattice in lattices]
@@ -55,7 +55,7 @@ function exact_enumeration(
 
     # Extract energies and configurations
     energies = Array{typeof(0.0u"eV")}(undef, length(walkers))
-    configurations = Array{LatticeSystem{G}}(undef, length(walkers))
+    configurations = Array{SLattice{G}}(undef, length(walkers))
 
     for (i, walker) in enumerate(walkers)
         energies[i] = walker.energy

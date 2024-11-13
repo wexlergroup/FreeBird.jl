@@ -141,9 +141,9 @@ abstract type GenericLattice <: LatticeGeometry end
 abstract type AbstractLattice end
 
 """
-mutable struct LatticeSystem{G}
+mutable struct SLattice{G}
 
-The `LatticeSystem{G}` struct represents a 3D lattice system.
+The `SLattice{G}` struct represents a 3D lattice system.
 
 # Type parameters
 - `G`: The lattice geometry type. Must be a subtype of `LatticeGeometry`. See [`LatticeGeometry`](@ref).
@@ -159,18 +159,18 @@ The `LatticeSystem{G}` struct represents a 3D lattice system.
 # Constructors
 ## Inner constructor
 ```julia
-LatticeSystem{G}(lattice_vectors::Matrix{Float64}, 
+SLattice{G}(lattice_vectors::Matrix{Float64}, 
                 basis::Vector{Tuple{Float64, Float64, Float64}}, 
                 supercell_dimensions::Tuple{Int64, Int64, Int64}, 
                 occupations::Vector{Bool}, adsorptions::Vector{Bool}, 
                 cutoff_radii::Vector{Float64},
                 periodicity::Vector{Bool})
 ```
-Create a new `LatticeSystem` with the given lattice vectors, basis, supercell dimensions, occupations, adsorptions, cutoff radii, and periodicity.
+Create a new `SLattice` with the given lattice vectors, basis, supercell dimensions, occupations, adsorptions, cutoff radii, and periodicity.
 
 ## Outer constructor for square lattice
 ```julia
-LatticeSystem{SquareLattice}(;lattice_constant::Float64=1.0, 
+SLattice{SquareLattice}(;lattice_constant::Float64=1.0, 
                             basis=[(0.0, 0.0, 0.0)], 
                             supercell_dimensions=(4, 4, 1), 
                             periodicity=(true, true, true), 
@@ -178,12 +178,12 @@ LatticeSystem{SquareLattice}(;lattice_constant::Float64=1.0,
                             occupations=[1, 2, 3, 4],
                             adsorptions=:full)
 ```
-Create a new `LatticeSystem` with the given square lattice parameters. The `occupations` and `adsorptions` argument 
+Create a new `SLattice` with the given square lattice parameters. The `occupations` and `adsorptions` argument 
 can be a vector of integers or the symbol `:full`; the former specifies the indices of the occupied sites, while the latter specifies that all sites are occupied.
 
 ## Outer constructor for triangular lattice
 ```julia
-LatticeSystem{TriangularLattice}(;lattice_constant::Float64=1.0, 
+SLattice{TriangularLattice}(;lattice_constant::Float64=1.0, 
                                 basis=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)], 
                                 supercell_dimensions=(4, 2, 1), 
                                 periodicity=(true, true, true), 
@@ -191,15 +191,15 @@ LatticeSystem{TriangularLattice}(;lattice_constant::Float64=1.0,
                                 occupations=[1, 2, 3, 4],
                                 adsorptions=:full)
 ```
-Create a new `LatticeSystem` with the given triangular lattice parameters. Similar to the square lattice constructor, the `occupations` and `adsorptions` argument can be a vector of integers or the symbol `:full`.
+Create a new `SLattice` with the given triangular lattice parameters. Similar to the square lattice constructor, the `occupations` and `adsorptions` argument can be a vector of integers or the symbol `:full`.
 
 # Examples
 ```@repl
-square_lattice  = LatticeSystem{SquareLattice}(;supercell_dimensions=(4,4,1))
-triangular_lattice = LatticeSystem{TriangularLattice}(;occupations=[1,3,5,7])
+square_lattice  = SLattice{SquareLattice}(;supercell_dimensions=(4,4,1))
+triangular_lattice = SLattice{TriangularLattice}(;occupations=[1,3,5,7])
 ```
 """
-mutable struct LatticeSystem{G} <: AbstractLattice
+mutable struct SLattice{G} <: AbstractLattice
     lattice_vectors::Matrix{Float64}
     positions::Matrix{Float64}
     basis::Vector{Tuple{Float64, Float64, Float64}}
@@ -209,7 +209,7 @@ mutable struct LatticeSystem{G} <: AbstractLattice
     neighbors::Vector{Vector{Vector{Int}}}
     adsorptions::Vector{Bool}
 
-    function LatticeSystem{G}(
+    function SLattice{G}(
         lattice_vectors::Matrix{Float64},
         basis::Vector{Tuple{Float64, Float64, Float64}},
         supercell_dimensions::Tuple{Int64, Int64, Int64},
@@ -235,7 +235,7 @@ mutable struct LatticeSystem{G} <: AbstractLattice
     end
 end
 
-function LatticeSystem{SquareLattice}(;lattice_constant::Float64=1.0,
+function SLattice{SquareLattice}(;lattice_constant::Float64=1.0,
                                       basis::Vector{Tuple{Float64, Float64, Float64}}=[(0.0, 0.0, 0.0)],
                                       supercell_dimensions::Tuple{Int64, Int64, Int64}=(4, 4, 1),
                                       periodicity::Tuple{Bool, Bool, Bool}=(true, true, true),
@@ -265,11 +265,11 @@ function LatticeSystem{SquareLattice}(;lattice_constant::Float64=1.0,
         end
     end
 
-    return LatticeSystem{SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_occupations, lattice_adsorptions, cutoff_radii)
+    return SLattice{SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_occupations, lattice_adsorptions, cutoff_radii)
 end
 
 
-function LatticeSystem{TriangularLattice}(;lattice_constant::Float64=1.0,
+function SLattice{TriangularLattice}(;lattice_constant::Float64=1.0,
                                           basis::Vector{Tuple{Float64, Float64, Float64}}=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)],
                                           supercell_dimensions::Tuple{Int64, Int64, Int64}=(4, 2, 1),
                                           periodicity::Tuple{Bool, Bool, Bool}=(true, true, true),
@@ -299,52 +299,13 @@ function LatticeSystem{TriangularLattice}(;lattice_constant::Float64=1.0,
         end
     end
 
-    return LatticeSystem{TriangularLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_occupations, lattice_adsorptions, cutoff_radii)
+    return SLattice{TriangularLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_occupations, lattice_adsorptions, cutoff_radii)
 end
 
 
 
 
-"""
-    mutable struct LatticeWalker
 
-The `LatticeWalker` struct represents a walker on a 3D lattice.
-
-# Fields
-- `configuration::LatticeSystem`: The configuration of the walker.
-- `energy::Float64`: The energy of the walker.
-- `iter::Int64`: The current iteration number of the walker.
-
-# Constructor
-```julia
-LatticeWalker(configuration::LatticeSystem; energy=0.0, iter=0)
-```
-Create a new `LatticeWalker` with the given configuration and optional energy and iteration number.
-
-"""
-
-mutable struct LatticeWalker <: AbstractWalker
-    configuration::AbstractLattice
-    energy::typeof(0.0u"eV")
-    iter::Int64
-    function LatticeWalker(configuration::AbstractLattice; energy=0.0u"eV", iter=0)
-        return new(configuration, energy, iter)
-    end
-end
-
-function Base.show(io::IO, walker::LatticeWalker)
-    println(io, "LatticeWalker(")
-    println(io, "    configuration: ", walker.configuration)
-    println(io, "    energy: ", walker.energy)
-    println(io, "    iter: ", walker.iter, ")")
-end
-
-function Base.show(io::IO, walker::Vector{LatticeWalker})
-    println(io, "Vector{LatticeWalker}(", length(walker), "):")
-    for (ind, w) in enumerate(walker)
-        println(io, "[", ind, "] ", w)
-    end
-end
 
 
 
@@ -457,4 +418,57 @@ function MLattice{2,SquareLattice}(; lattice_constant::Float64=1.0,
     end
 
     return MLattice{2,SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, components, lattice_adsorptions, cutoff_radii)
+end
+
+"""
+    mutable struct LatticeWalker
+
+The `LatticeWalker` struct represents a walker on a 3D lattice.
+
+# Fields
+- `configuration::AbstractLattice`: The configuration of the walker.
+- `energy::Float64`: The energy of the walker.
+- `iter::Int64`: The current iteration number of the walker.
+
+# Constructor
+```julia
+LatticeWalker(configuration::AbstractLattice; energy=0.0, iter=0)
+```
+Create a new `LatticeWalker` with the given configuration and optional energy and iteration number.
+
+"""
+
+
+function number_of_lattice_components(lattice::AbstractLattice)
+    if lattice isa SLattice
+        return 1
+    elseif lattice isa MLattice{C,G} where {C,G}
+        return C
+    else
+        throw(ArgumentError("Unsupported lattice type"))
+    end
+end
+
+mutable struct LatticeWalker{C} <: AbstractWalker
+    configuration::AbstractLattice
+    energy::typeof(0.0u"eV")
+    iter::Int64
+    function LatticeWalker(configuration::AbstractLattice; energy=0.0u"eV", iter=0)
+        C = number_of_lattice_components(configuration)
+        return new{C}(configuration, energy, iter)
+    end
+end
+
+function Base.show(io::IO, walker::LatticeWalker)
+    println(io, "LatticeWalker(")
+    println(io, "    configuration: ", walker.configuration)
+    println(io, "    energy: ", walker.energy)
+    println(io, "    iter: ", walker.iter, ")")
+end
+
+function Base.show(io::IO, walker::Vector{LatticeWalker})
+    println(io, "Vector{LatticeWalker}(", length(walker), "):")
+    for (ind, w) in enumerate(walker)
+        println(io, "[", ind, "] ", w)
+    end
 end

@@ -2,6 +2,7 @@ using FreeBird, Distributions, DataFrames, Plots
 
 square_supercell_dimensions = (4, 4, 1)
 square_basis=[(0.0, 0.0, 0.0)]
+square_occupations = [false for i in 1:square_supercell_dimensions[1]*square_supercell_dimensions[2]*length(square_basis)]
 
 adsorption_energy = -0.04
 nn_energy = -0.01
@@ -21,7 +22,7 @@ random_seed = 1234
 # Initialize the lattice
 occupied_sites = sample(1:length(square_occupations), 4, replace=false)
 
-initial_lattice = LatticeSystem{SquareLattice}(;
+initial_lattice = SLattice{SquareLattice}(;
            supercell_dimensions = square_supercell_dimensions,
            occupations=occupied_sites)
 

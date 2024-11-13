@@ -72,7 +72,7 @@ function print_lattice(io::IO, lattice::SLattice{G}, boolvec::Vector{Bool}) wher
 end
 
 function Base.show(io::IO, lattice::SLattice{G}) where G
-    println(io, "LatticeSystem{$G}:")
+    println(io, typeof(lattice))
     println(io, "    lattice_vectors      : ", lattice.lattice_vectors)
     println(io, "    positions            : ", lattice.positions)
     println(io, "    supercell_dimensions : ", lattice.supercell_dimensions)

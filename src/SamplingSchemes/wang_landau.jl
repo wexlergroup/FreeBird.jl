@@ -1,12 +1,12 @@
 """
-    wang_landau(lattice::LatticeSystem, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, 
+    wang_landau(lattice::SLattice, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, 
                 num_steps::Int64, flatness_criterion::Float64, f_initial::Float64, 
                 f_min::Float64, energy_bins::Vector{Float64}, random_seed::Int64)
 
-Perform the Wang-Landau algorithm to compute the density of states for a LatticeSystem.
+Perform the Wang-Landau algorithm to compute the density of states for a SLattice.
 
 # Arguments
-- `lattice::LatticeSystem`: The initial lattice configuration.
+- `lattice::SLattice`: The initial lattice configuration.
 - `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
 - `num_steps::Int64`: The number of Monte Carlo steps.
 - `flatness_criterion::Float64`: The criterion for flatness of the histogram.
@@ -19,11 +19,11 @@ Perform the Wang-Landau algorithm to compute the density of states for a Lattice
 - `density_of_states::Vector{Float64}`: The estimated density of states.
 - `histogram::Vector{Int64}`: The histogram of visited energy states.
 - `energies::Vector{Float64}`: The energies of the system at each step.
-- `configurations::Vector{LatticeSystem}`: The configurations of the system at each step.
+- `configurations::Vector{SLattice}`: The configurations of the system at each step.
 """
 
 function wang_landau(
-    lattice::LatticeSystem,
+    lattice::SLattice,
     h::ClassicalHamiltonian,
     num_steps::Int64,
     flatness_criterion::Float64,
@@ -43,7 +43,7 @@ function wang_landau(
     H = zeros(Int64, energy_bins_count)
 
     energies = Float64[]
-    configurations = Vector{LatticeSystem}()
+    configurations = Vector{SLattice}()
     
     # Choose a modification factor
     f = f_initial

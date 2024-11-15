@@ -346,18 +346,20 @@ Throws an `ArgumentError` if the number of components does not match `C`.
 
 # Outer Constructors
 
-    MLattice{2,SquareLattice}(; lattice_constant::Float64=1.0,
+    MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
                                basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0)],
                                supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 4, 1),
                                periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
                                cutoff_radii::Vector{Float64}=[1.1, 1.5],
-                               components::Vector{Vector{Bool}}=[[isodd(i) for i in 1:16], [iseven(i) for i in 1:16]],
+                               components::Union{Vector{Int},Symbol}=:equal,
                                adsorptions::Union{Vector{Int},Symbol}=:full)
 
-Constructs a 2D square lattice with the specified parameters.
+Constructs a square lattice with the specified parameters. The `components` and `adsorptions` arguments can be a vector of integers specifying
+the indices of the occupied sites, or a symbol. If `components` is `:equal`, the lattice is divided into `C` equal components when possible, or 
+nearest to equal components otherwise. If `adsorptions` is `:full`, all sites are classified as adsorption sites.
 
 ## Returns
-- `MLattice{2,SquareLattice}`: A 2D square lattice object with the specified properties.
+- `MLattice{C,SquareLattice}`: A square lattice object with `C` components.
 
 """
 mutable struct MLattice{C,G} <: AbstractLattice
@@ -395,18 +397,35 @@ mutable struct MLattice{C,G} <: AbstractLattice
     end
 end
 
+function split_into_subarrays(arr::AbstractVector, N::Int)
+    n = length(arr)  # Total number of elements
+    base_size = div(n, N)  # Base size of each subarray
+    remainder = mod(n, N)  # Remaining elements to distribute
 
-function MLattice{2,SquareLattice}(; lattice_constant::Float64=1.0,
+    subarrays = Vector{Vector{eltype(arr)}}()
+    idx = 1
+
+    for i in 1:N
+        # Determine the size of the current subarray
+        current_size = base_size + (i <= remainder ? 1 : 0)
+        push!(subarrays, arr[idx:idx + current_size - 1])
+        idx += current_size
+    end
+
+    return subarrays
+end
+
+function MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
                                     basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0)],
                                     supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 4, 1),
                                     periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
                                     cutoff_radii::Vector{Float64}=[1.1, 1.5],
-                                    components::Vector{Vector{Bool}}=[[isodd(i) for i in 1:16], [iseven(i) for i in 1:16]],
+                                    components::Union{Vector{Int},Symbol}=:equal,
                                     adsorptions::Union{Vector{Int},Symbol}=:full,
-                                )
+                                ) where C
 
     lattice_vectors = [lattice_constant 0.0 0.0; 0.0 lattice_constant 0.0; 0.0 0.0 1.0]
-    dim = supercell_dimensions[1] * supercell_dimensions[2] * supercell_dimensions[3]
+    dim = prod(supercell_dimensions)
     lattice_adsorptions = zeros(Bool, dim * length(basis))
 
     if adsorptions == :full
@@ -417,7 +436,23 @@ function MLattice{2,SquareLattice}(; lattice_constant::Float64=1.0,
         end
     end
 
-    return MLattice{2,SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, components, lattice_adsorptions, cutoff_radii)
+    
+    if components == :equal
+        lattice_comp = Vector{Vector{Bool}}(undef, C)
+        comps = split_into_subarrays(1:dim, C)
+        for i in 1:C
+            lattice_comp[i] = [false for i in 1:dim]
+            for j in comps[i]
+                lattice_comp[i][j] = true
+            end
+        end
+    else
+        lattice_comp = components
+    end
+
+
+
+    return MLattice{C,SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_comp, lattice_adsorptions, cutoff_radii)
 end
 
 """
@@ -439,23 +474,17 @@ Create a new `LatticeWalker` with the given configuration and optional energy an
 """
 
 
-function number_of_lattice_components(lattice::AbstractLattice)
-    if lattice isa SLattice
-        return 1
-    elseif lattice isa MLattice{C,G} where {C,G}
-        return C
-    else
-        throw(ArgumentError("Unsupported lattice type"))
-    end
-end
+number_of_lattice_components(lattice::SLattice) = 1
+
+number_of_lattice_components(lattice::MLattice{C,G}) where {C,G} = C
 
 mutable struct LatticeWalker{C} <: AbstractWalker
     configuration::AbstractLattice
     energy::typeof(0.0u"eV")
     iter::Int64
     function LatticeWalker(configuration::AbstractLattice; energy=0.0u"eV", iter=0)
-        C = number_of_lattice_components(configuration)
-        return new{C}(configuration, energy, iter)
+        num_comp = number_of_lattice_components(configuration)
+        return new{num_comp}(configuration, energy, iter)
     end
 end
 

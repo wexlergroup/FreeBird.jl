@@ -143,24 +143,18 @@ Generate a new sample for the lattice system.
 - `lattice::LatticeWalker`: The updated walker.
 
 """
-function MC_new_sample!(lattice::LatticeWalker{1},
+function MC_new_sample!(lattice::LatticeWalker{C},
                         h::ClassicalHamiltonian,
                         emax::Float64;
                         energy_perturb::Float64=0.0,
-                        )
+                        ) where C
 
     accept_this_walker = false
     emax = emax * unit(lattice.energy)
 
     current_lattice = lattice.configuration
     proposed_lattice = deepcopy(current_lattice)
-    current_occupations = deepcopy(current_lattice.occupations)
-    number_occupied_sites = sum(current_lattice.occupations)
-
-    proposed_lattice.occupations = [false for i in eachindex(current_lattice.occupations)]
-    for i in sample(eachindex(proposed_lattice.occupations), number_occupied_sites, replace=false)
-        proposed_lattice.occupations[i] = true
-    end
+    generate_random_new_lattice_sample!(proposed_lattice)
 
     perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
     proposed_energy = interacting_energy(proposed_lattice, h) + perturbation_energy
@@ -174,4 +168,48 @@ function MC_new_sample!(lattice::LatticeWalker{1},
     end
 
     return accept_this_walker, lattice
+end
+
+function num_sites(lattice::AbstractLattice)
+    return prod(lattice.supercell_dimensions)
+end
+
+function occupied_site_count(MLattice::MLattice{C}) where C
+    occupancy = Array{Int}(undef, C)
+    for i in eachindex(MLattice.components)
+        occupancy[i] = sum(MLattice.components[i])
+    end
+    return occupancy
+end
+
+# function works, but allocates memory, not ideal
+function generate_random_new_lattice_sample!(lattice::MLattice{C}) where C
+    occupancy = occupied_site_count(lattice)
+    # flush occupancy
+    for i in eachindex(lattice.components)
+        for j in eachindex(lattice.components[i])
+            lattice.components[i][j] = false
+        end
+    end
+    unoccupied = collect(1:num_sites(lattice))
+    for i in eachindex(lattice.components)
+        samples = sample(unoccupied, occupancy[i], replace=false, ordered=true)
+        for j in samples
+            lattice.components[i][j] = true
+            deleteat!(unoccupied, findfirst(isequal(j), unoccupied))
+        end
+    end
+    return lattice
+end
+
+function generate_random_new_lattice_sample!(lattice::SLattice)
+    number_occupied_sites = sum(lattice.occupations)
+    # flush occupancy
+    for i in eachindex(lattice.occupations)
+        lattice.occupations[i] = false
+    end
+    for i in sample(eachindex(lattice.occupations), number_occupied_sites, replace=false)
+        lattice.occupations[i] = true
+    end
+    return lattice
 end

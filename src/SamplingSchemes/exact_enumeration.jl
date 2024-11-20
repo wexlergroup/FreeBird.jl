@@ -15,7 +15,6 @@ Enumerate all possible configurations of a lattice system and compute the energy
 """
 function exact_enumeration(
     lattice::SLattice{G},
-    cutoff_radii::Vector{Float64},
     h::ClassicalHamiltonian,
     ) where G
 
@@ -24,6 +23,7 @@ function exact_enumeration(
     supercell_dimensions::Tuple{Int64, Int64, Int64} = lattice.supercell_dimensions
     periodicity::Tuple{Bool, Bool, Bool} = lattice.periodicity 
     adsorptions::Vector{Bool} = lattice.adsorptions
+    cutoff_radii::Vector{Float64} = lattice.cutoff_radii
     number_occupied_sites::Int64 = sum(lattice.occupations)
 
     K, L, M = supercell_dimensions

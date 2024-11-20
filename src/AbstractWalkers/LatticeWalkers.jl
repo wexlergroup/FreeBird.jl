@@ -206,6 +206,7 @@ mutable struct SLattice{G} <: AbstractLattice
     supercell_dimensions::Tuple{Int64, Int64, Int64}
     periodicity::Tuple{Bool, Bool, Bool}
     occupations::Vector{Bool}
+    cutoff_radii::Vector{Float64}
     neighbors::Vector{Vector{Vector{Int}}}
     adsorptions::Vector{Bool}
 
@@ -231,7 +232,7 @@ mutable struct SLattice{G} <: AbstractLattice
         supercell_lattice_vectors = lattice_vectors * Diagonal([supercell_dimensions[1], supercell_dimensions[2], supercell_dimensions[3]])
         neighbors = compute_neighbors(supercell_lattice_vectors, positions, periodicity, cutoff_radii)
         
-        return new{G}(lattice_vectors, positions, basis, supercell_dimensions, periodicity, occupations, neighbors, adsorptions)
+        return new{G}(lattice_vectors, positions, basis, supercell_dimensions, periodicity, occupations, cutoff_radii, neighbors, adsorptions)
     end
 end
 

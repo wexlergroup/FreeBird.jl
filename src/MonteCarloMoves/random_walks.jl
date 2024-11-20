@@ -182,7 +182,18 @@ function occupied_site_count(MLattice::MLattice{C}) where C
     return occupancy
 end
 
-# function works, but allocates memory, not ideal
+"""
+    generate_random_new_lattice_sample!(lattice::MLattice{C}) where C
+
+Generate a new random sample for the multi-component lattice system.
+
+# Arguments
+- `lattice::MLattice{C}`: The lattice system to generate a new sample for.
+
+# Returns
+- `lattice::MLattice{C}`: The updated lattice system.
+
+"""
 function generate_random_new_lattice_sample!(lattice::MLattice{C}) where C
     occupancy = occupied_site_count(lattice)
     # flush occupancy
@@ -191,6 +202,8 @@ function generate_random_new_lattice_sample!(lattice::MLattice{C}) where C
             lattice.components[i][j] = false
         end
     end
+    # generate a "look-up" table of unoccupied sites with elements get deleted as sites are occupied
+    # faster than shuffling a list of components
     unoccupied = collect(1:num_sites(lattice))
     for i in eachindex(lattice.components)
         samples = sample(unoccupied, occupancy[i], replace=false, ordered=true)

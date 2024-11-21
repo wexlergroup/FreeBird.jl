@@ -5,18 +5,13 @@ Enumerate all possible configurations of a lattice system and compute the energy
 
 # Arguments
 - `lattice::SLattice{G}`: The (starting) lattice system to enumerate. All possible configurations will be generated from this lattice system.
-- `cutoff_radii::Tuple{Float64, Float64}`: The cutoff radii for the first and second nearest neighbors.
 - `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
 
 # Returns
-- `energies::Vector{typeof(0.0u"eV")}`: An array of energies for each configuration.
-- `configurations::Vector{SLattice{G}}`: An array of lattice system configurations for each configuration.
-- `walkers::Vector{LatticeWalker}`: An array of lattice walkers for each configuration.
+- `DataFrame`: A DataFrame containing the energy and configuration of each configuration.
+- `LatticeGasWalkers`: A collection of lattice walkers for each configuration.
 """
-function exact_enumeration(
-    lattice::SLattice{G},
-    h::ClassicalHamiltonian,
-    ) where G
+function exact_enumeration(lattice::SLattice{G}, h::ClassicalHamiltonian) where G
 
     number_occupied_sites::Int64 = sum(lattice.occupations)
     total_sites = length(lattice.basis) * prod(lattice.supercell_dimensions)
@@ -36,7 +31,11 @@ function exact_enumeration(
 
     # Extract energies and configurations
     energies = [wk.energy for wk in ls.walkers]
-    configurations = [wk.configuration for wk in ls.walkers]
+    configurations = [wk.configuration.occupations for wk in ls.walkers]
 
-    return energies, configurations, ls
+    df = DataFrame()
+    df.energy = energies
+    df.config = configurations
+
+    return df, ls
 end

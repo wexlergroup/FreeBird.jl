@@ -18,49 +18,25 @@ function exact_enumeration(
     h::ClassicalHamiltonian,
     ) where G
 
-    primitive_lattice_vectors::Matrix{Float64} = lattice.lattice_vectors
-    basis::Vector{Tuple{Float64, Float64, Float64}} = lattice.basis
-    supercell_dimensions::Tuple{Int64, Int64, Int64} = lattice.supercell_dimensions
-    periodicity::Tuple{Bool, Bool, Bool} = lattice.periodicity 
-    adsorptions::Vector{Bool} = lattice.adsorptions
-    cutoff_radii::Vector{Float64} = lattice.cutoff_radii
     number_occupied_sites::Int64 = sum(lattice.occupations)
-
-    K, L, M = supercell_dimensions
-    num_basis_sites = length(basis)
-    total_sites = K * L * M * num_basis_sites
+    total_sites = length(lattice.basis) * prod(lattice.supercell_dimensions)
 
     # Generate all possible occupation configurations
-    all_configs = collect(combinations(1:total_sites, number_occupied_sites))
+    all_configs = combinations(1:total_sites, number_occupied_sites)
 
     # Generate occupation vectors from configurations
-    all_occupation_vectors = Vector{Vector{Bool}}()
-    for config in all_configs
-        occupations = falses(total_sites)
+    lattices = [deepcopy(lattice) for _ in 1:length(all_configs)]
+
+    for (ind, config) in enumerate(all_configs)
+        occupations = lattices[ind].occupations
         occupations[config] .= true
-        push!(all_occupation_vectors, Vector{Bool}(occupations))  # Convert BitVector to Vector{Bool}
     end
 
-    # Generate SLattice objects for each configuration
-    lattices = [SLattice{G}(primitive_lattice_vectors, basis, supercell_dimensions, periodicity, occupations, adsorptions, cutoff_radii) for occupations in all_occupation_vectors]
-
-    # Generate LatticeWalker objects for each lattice system
-    walkers = [LatticeWalker(lattice) for lattice in lattices]
-
-    # Compute energies for each walker
-    for walker in walkers
-        e_interaction = interacting_energy(walker.configuration, h)
-        walker.energy = e_interaction
-    end
+    ls = LatticeGasWalkers(LatticeWalker.(lattices), h)
 
     # Extract energies and configurations
-    energies = Array{typeof(0.0u"eV")}(undef, length(walkers))
-    configurations = Array{SLattice{G}}(undef, length(walkers))
+    energies = [wk.energy for wk in ls.walkers]
+    configurations = [wk.configuration for wk in ls.walkers]
 
-    for (i, walker) in enumerate(walkers)
-        energies[i] = walker.energy
-        configurations[i] = walker.configuration
-    end
-
-    return energies, configurations, walkers
+    return energies, configurations, ls
 end

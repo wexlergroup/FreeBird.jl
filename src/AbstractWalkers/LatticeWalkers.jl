@@ -479,6 +479,18 @@ number_of_lattice_components(lattice::SLattice) = 1
 
 number_of_lattice_components(lattice::MLattice{C,G}) where {C,G} = C
 
+function num_sites(lattice::AbstractLattice)
+    return prod(lattice.supercell_dimensions) * length(lattice.basis)
+end
+
+function occupied_site_count(MLattice::MLattice{C}) where C
+    occupancy = Array{Int}(undef, C)
+    for i in eachindex(MLattice.components)
+        occupancy[i] = sum(MLattice.components[i])
+    end
+    return occupancy
+end
+
 mutable struct LatticeWalker{C} <: AbstractWalker
     configuration::AbstractLattice
     energy::typeof(0.0u"eV")

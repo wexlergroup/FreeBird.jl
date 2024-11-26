@@ -18,6 +18,7 @@ export SLattice, LatticeWalker
 export LatticeGeometry, SquareLattice, TriangularLattice, GenericLattice
 export MLattice
 export update_walker!
+export num_sites, occupied_site_count
 
 abstract type AbstractWalker end
 

@@ -24,13 +24,14 @@ for N in Ns
         square_occupations[i] = true
     end
 
-    initial_lattice = SLattice{SquareLattice}(;
+    initial_lattice = MLattice{2,SquareLattice}(;
         basis=square_basis,
         supercell_dimensions = square_supercell_dimensions,
-    )   
-    initial_lattice.occupations = square_occupations
+    )
+    initial_lattice.components[1][1:6] .= false
+    initial_lattice.components[2][11:16] .= false
 
-    h = GenericLatticeHamiltonian(adsorption_energy, [nn_energy, nnn_energy], u"eV")
+    h = MLatticeHamiltonian(2,[GenericLatticeHamiltonian(adsorption_energy, [nn_energy*i^2, nnn_energy], u"eV") for i in 1:3])
 
     for temp in temperatures
         println("T = $temp")

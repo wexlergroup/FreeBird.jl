@@ -101,7 +101,7 @@ end
 
 
 function merge_components(lattice::MLattice{C}) where C
-    new_lattice = zeros(Int, prod(lattice.supercell_dimensions))
+    new_lattice = zeros(Int, prod(lattice.supercell_dimensions)*length(lattice.basis))
     for i in 1:C
         new_lattice += lattice.components[i] * i
     end

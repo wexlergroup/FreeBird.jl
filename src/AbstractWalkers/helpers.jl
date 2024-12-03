@@ -52,6 +52,8 @@ function print_layer(io::IO, lattice::SLattice{G}, boolvec::Vector{Bool}) where 
     end
 end
 
+
+
 function print_lattice(io::IO, lattice::SLattice{G}, boolvec::Vector{Bool}) where G
     if G == GenericLattice
         print(io, boolvec)
@@ -91,11 +93,11 @@ function Base.show(io::IO, lattice::MLattice{C,G}) where {C,G}
     println(io, "    supercell_dimensions : ", lattice.supercell_dimensions)
     println(io, "    basis                : ", lattice.basis)
     println(io, "    occupations          : ")
-    print_lattice(io, lattice)
+    print_occupation(io, lattice)
     if prod(lattice.adsorptions) == true
         println(io, "    adsorptions          : full adsorption")
     else
-        println(io, "    adsorptions          : "), print_lattice(io, lattice, lattice.adsorptions)
+        println(io, "    adsorptions          : "), print_adsorption(io, lattice, lattice.adsorptions)
     end
 end
 
@@ -124,7 +126,7 @@ function print_layer(io::IO, lattice::MLattice{C,G}, vec::Vector{Int}) where {C,
             end
             for j in 1:supercell_dimensions[2]*length(lattice.basis)
                 if 0 < vec[index[ind]] <= 10
-                    print(io, symlist[index[ind]]*" ")
+                    print(io, symlist[vec[index[ind]]]*" ")
                 elseif vec[index[ind]] > 10
                     print(io, "● ")
                 else
@@ -147,7 +149,39 @@ function print_layer(io::IO, lattice::MLattice{C,G}, vec::Vector{Int}) where {C,
     end
 end
 
-function print_lattice(io::IO, lattice::MLattice{C,G}) where {C,G}
+function print_layer(io::IO, lattice::MLattice{C,G}, boolvec::Vector{Bool}) where {C,G}
+    supercell_dimensions = lattice.supercell_dimensions
+    # set up zigzag indexing for triangular lattice
+    index = custom_sort(collect(1:length(boolvec)), lattice.supercell_dimensions[2]*4)
+    ind = 1
+    for i in 1:supercell_dimensions[1]
+        print(io, "      ")
+        if G == TriangularLattice
+            if iseven(i)
+                print(io, " ")
+            end
+            for j in 1:supercell_dimensions[2]*length(lattice.basis)
+                if boolvec[index[ind]]
+                    print(io, "● ")
+                else
+                    print(io, "○ ")
+                end
+                ind += 1
+            end
+        elseif G == SquareLattice
+            for j in 1:supercell_dimensions[2]*length(lattice.basis)
+                if boolvec[(i-1)*supercell_dimensions[2]*length(lattice.basis) + j]
+                    print(io, "● ")
+                else
+                    print(io, "○ ")
+                end
+            end
+        end
+        println(io)
+    end
+end
+
+function print_occupation(io::IO, lattice::MLattice{C,G}) where {C,G}
     if G == GenericLattice
         print(io, merge_components(lattice))
         return
@@ -164,6 +198,26 @@ function print_lattice(io::IO, lattice::MLattice{C,G}) where {C,G}
             klayer = vec[sec]
             println(io, "     Layer ", k, ":")
             print_layer(io, lattice, klayer)
+        end
+    end
+end
+
+
+function print_adsorption(io::IO, lattice::MLattice{C,G}, boolvec::Vector{Bool}) where {C,G}
+    if G == GenericLattice
+        print(io, boolvec)
+        return
+    end
+    supercell_dimensions = lattice.supercell_dimensions
+    if supercell_dimensions[3] == 1
+        print_layer(io, lattice, boolvec)
+    else
+        for k in 1:supercell_dimensions[3]
+            # slices the boolvec into layers
+            l = supercell_dimensions[1]*supercell_dimensions[2]*length(lattice.basis)
+            sec = ((k-1)*l+1):(k*l)
+            println(io, "      Layer ", k)
+            print_layer(io, lattice, boolvec[sec])
         end
     end
 end

@@ -162,7 +162,8 @@ The `SLattice{G}` struct represents a 3D lattice system.
 SLattice{G}(lattice_vectors::Matrix{Float64}, 
                 basis::Vector{Tuple{Float64, Float64, Float64}}, 
                 supercell_dimensions::Tuple{Int64, Int64, Int64}, 
-                occupations::Vector{Bool}, adsorptions::Vector{Bool}, 
+                occupations::Vector{Bool}, 
+                adsorptions::Vector{Bool}, 
                 cutoff_radii::Vector{Float64},
                 periodicity::Vector{Bool})
 ```
@@ -236,35 +237,53 @@ mutable struct SLattice{G} <: AbstractLattice
     end
 end
 
+function slattice_setup(basis::Vector{Tuple{Float64, Float64, Float64}},
+                        supercell_dimensions::Tuple{Int64, Int64, Int64},
+                        occupations::Union{Vector{Int}, Vector{Bool}, Symbol},
+                        adsorptions::Union{Vector{Int}, Vector{Bool}, Symbol})
+
+    dim = prod(supercell_dimensions)*length(basis)
+    lattice_occupations = zeros(Bool, dim)
+    lattice_adsorptions = zeros(Bool, dim)
+
+    if occupations == :full
+        lattice_occupations = [true for i in 1:dim]
+    elseif occupations isa Vector{Int}
+        for i in occupations
+            lattice_occupations[i] = true
+        end
+    elseif occupations isa Vector{Bool}
+        lattice_occupations = occupations
+    else
+        throw(ArgumentError("Occupations must be a vector of integers/booleans, or a supported symbol!"))
+    end
+
+    if adsorptions == :full
+        lattice_adsorptions = [true for i in 1:dim]
+    elseif adsorptions isa Vector{Int}
+        for i in adsorptions
+            lattice_adsorptions[i] = true
+        end
+    elseif adsorptions isa Vector{Bool}
+        lattice_adsorptions = adsorptions
+    else
+        throw(ArgumentError("Adsorptions must be a vector of integers/booleans, or a supported symbol!"))
+    end
+
+    return lattice_occupations, lattice_adsorptions
+end
+
 function SLattice{SquareLattice}(;lattice_constant::Float64=1.0,
                                       basis::Vector{Tuple{Float64, Float64, Float64}}=[(0.0, 0.0, 0.0)],
                                       supercell_dimensions::Tuple{Int64, Int64, Int64}=(4, 4, 1),
                                       periodicity::Tuple{Bool, Bool, Bool}=(true, true, true),
                                       cutoff_radii::Vector{Float64}=[1.1, 1.5],
-                                      occupations::Union{Vector{Int}, Symbol}=[1, 2, 3, 4],
-                                      adsorptions::Union{Vector{Int}, Symbol}=:full,
+                                      occupations::Union{Vector{Int}, Vector{Bool}, Symbol}=[1, 2, 3, 4],
+                                      adsorptions::Union{Vector{Int}, Vector{Bool}, Symbol}=:full,
                                       )
 
     lattice_vectors = [lattice_constant 0.0 0.0; 0.0 lattice_constant 0.0; 0.0 0.0 1.0]
-    dim = supercell_dimensions[1] * supercell_dimensions[2] * supercell_dimensions[3]
-    lattice_occupations = zeros(Bool, dim*length(basis))
-    lattice_adsorptions = zeros(Bool, dim*length(basis))
-
-    if occupations == :full
-        lattice_occupations = [true for i in 1:dim*length(basis)]
-    else
-        for i in occupations
-            lattice_occupations[i] = true
-        end
-    end
-
-    if adsorptions == :full
-        lattice_adsorptions = [true for i in 1:dim*length(basis)]
-    else
-        for i in adsorptions
-            lattice_adsorptions[i] = true
-        end
-    end
+    lattice_occupations, lattice_adsorptions = slattice_setup(basis, supercell_dimensions, occupations, adsorptions)
 
     return SLattice{SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_occupations, lattice_adsorptions, cutoff_radii)
 end
@@ -275,38 +294,15 @@ function SLattice{TriangularLattice}(;lattice_constant::Float64=1.0,
                                           supercell_dimensions::Tuple{Int64, Int64, Int64}=(4, 2, 1),
                                           periodicity::Tuple{Bool, Bool, Bool}=(true, true, true),
                                           cutoff_radii::Vector{Float64}=[1.1, 1.5],
-                                          occupations::Union{Vector{Int}, Symbol}=[1, 2, 3, 4],
-                                          adsorptions::Union{Vector{Int}, Symbol}=:full,
+                                          occupations::Union{Vector{Int}, Vector{Bool}, Symbol}=[1, 2, 3, 4],
+                                          adsorptions::Union{Vector{Int}, Vector{Bool}, Symbol}=:full,
                                           )
 
     lattice_vectors = [lattice_constant 0.0 0.0; 0.0 sqrt(3)*lattice_constant 0.0; 0.0 0.0 1.0]
-    dim = supercell_dimensions[1] * supercell_dimensions[2] * supercell_dimensions[3]
-    lattice_occupations = zeros(Bool, dim * length(basis))
-    lattice_adsorptions = zeros(Bool, dim * length(basis))
-
-    if occupations == :full
-        lattice_occupations = [true for i in 1:dim*length(basis)]
-    else
-        for i in occupations
-            lattice_occupations[i] = true
-        end
-    end
-
-    if adsorptions == :full
-        lattice_adsorptions = [true for i in 1:dim*length(basis)]
-    else
-        for i in adsorptions
-            lattice_adsorptions[i] = true
-        end
-    end
+    lattice_occupations, lattice_adsorptions = slattice_setup(basis, supercell_dimensions, occupations, adsorptions)
 
     return SLattice{TriangularLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_occupations, lattice_adsorptions, cutoff_radii)
 end
-
-
-
-
-
 
 
 
@@ -352,7 +348,7 @@ Throws an `ArgumentError` if the number of components does not match `C`.
                                supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 4, 1),
                                periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
                                cutoff_radii::Vector{Float64}=[1.1, 1.5],
-                               components::Union{Vector{Int},Symbol}=:equal,
+                               components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
                                adsorptions::Union{Vector{Int},Symbol}=:full)
 
 Constructs a square lattice with the specified parameters. The `components` and `adsorptions` arguments can be a vector of integers specifying
@@ -416,25 +412,24 @@ function split_into_subarrays(arr::AbstractVector, N::Int)
     return subarrays
 end
 
-function MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
-                                    basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0)],
-                                    supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 4, 1),
-                                    periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
-                                    cutoff_radii::Vector{Float64}=[1.1, 1.5],
-                                    components::Union{Vector{Int},Symbol}=:equal,
-                                    adsorptions::Union{Vector{Int},Symbol}=:full,
-                                ) where C
-
-    lattice_vectors = [lattice_constant 0.0 0.0; 0.0 lattice_constant 0.0; 0.0 0.0 1.0]
-    dim = prod(supercell_dimensions)
-    lattice_adsorptions = zeros(Bool, dim * length(basis))
+function mlattice_setup(C::Int, 
+                        basis::Vector{Tuple{Float64, Float64, Float64}},
+                        supercell_dimensions::Tuple{Int64, Int64, Int64},
+                        components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol},
+                        adsorptions::Union{Vector{Int}, Vector{Bool}, Symbol})
+    dim = prod(supercell_dimensions) * length(basis)
+    lattice_adsorptions = zeros(Bool, dim)
 
     if adsorptions == :full
-        lattice_adsorptions = [true for i in 1:dim*length(basis)]
-    else
+        lattice_adsorptions = [true for i in 1:dim]
+    elseif adsorptions isa Vector{Int}
         for i in adsorptions
             lattice_adsorptions[i] = true
         end
+    elseif adsorptions isa Vector{Bool}
+        lattice_adsorptions = adsorptions
+    else
+        throw(ArgumentError("Adsorptions must be a vector of integers/booleans, or a supported symbol!"))
     end
 
     
@@ -447,13 +442,52 @@ function MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
                 lattice_comp[i][j] = true
             end
         end
-    else
+    elseif components isa Vector{Vector{Int}}
+        lattice_comp = Vector{Vector{Bool}}(undef, C)
+        for i in 1:C
+            lattice_comp[i] = [false for i in 1:dim]
+            for j in components[i]
+                lattice_comp[i][j] = true
+            end
+        end
+    elseif components isa Vector{Vector{Bool}}
         lattice_comp = components
+    else
+        throw(ArgumentError("components must be a vector of integers/booleans, or a supported symbol!"))
     end
 
+    return lattice_comp, lattice_adsorptions
+end
 
+function MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
+                                    basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0)],
+                                    supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 4, 1),
+                                    periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
+                                    cutoff_radii::Vector{Float64}=[1.1, 1.5],
+                                    components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
+                                    adsorptions::Union{Vector{Int},Symbol}=:full,
+                                ) where C
+
+    lattice_vectors = [lattice_constant 0.0 0.0; 0.0 lattice_constant 0.0; 0.0 0.0 1.0]
+    lattice_comp, lattice_adsorptions = mlattice_setup(C, basis, supercell_dimensions, components, adsorptions)
 
     return MLattice{C,SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_comp, lattice_adsorptions, cutoff_radii)
+end
+
+function MLattice{C,TriangularLattice}(; lattice_constant::Float64=1.0,
+                                        basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)],
+                                        supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 2, 1),
+                                        periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
+                                        cutoff_radii::Vector{Float64}=[1.1, 1.5],
+                                        components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
+                                        adsorptions::Union{Vector{Int},Symbol}=:full,
+                                    ) where C
+
+    lattice_vectors = [lattice_constant 0.0 0.0; 0.0 sqrt(3)*lattice_constant 0.0; 0.0 0.0 1.0]
+    lattice_comp, lattice_adsorptions = mlattice_setup(C, basis, supercell_dimensions, components, adsorptions)
+
+    return MLattice{C,TriangularLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_comp, lattice_adsorptions, cutoff_radii)
+    
 end
 
 """

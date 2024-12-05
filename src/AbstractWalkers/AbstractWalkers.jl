@@ -14,9 +14,9 @@ using ..Hamiltonians
 export AbstractWalker
 export AbstractLattice
 export AtomWalker
-export SLattice, LatticeWalker
+export LatticeWalker
 export LatticeGeometry, SquareLattice, TriangularLattice, GenericLattice
-export MLattice
+export MLattice, SLattice, GLattice
 export update_walker!
 export num_sites, occupied_site_count
 

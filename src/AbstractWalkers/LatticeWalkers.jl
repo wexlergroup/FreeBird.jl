@@ -365,6 +365,7 @@ mutable struct MLattice{C,G} <: AbstractLattice
     basis::Vector{Tuple{Float64, Float64, Float64}}
     supercell_dimensions::Tuple{Int64, Int64, Int64}
     periodicity::Tuple{Bool, Bool, Bool}
+    cutoff_radii::Vector{Float64}
     components::Vector{Vector{Bool}}
     neighbors::Vector{Vector{Vector{Int}}}
     adsorptions::Vector{Bool}
@@ -374,9 +375,9 @@ mutable struct MLattice{C,G} <: AbstractLattice
         basis::Vector{Tuple{Float64, Float64, Float64}},
         supercell_dimensions::Tuple{Int64, Int64, Int64},
         periodicity::Tuple{Bool, Bool, Bool},
+        cutoff_radii::Vector{Float64},
         components::Vector{Vector{Bool}},
         adsorptions::Vector{Bool},
-        cutoff_radii::Vector{Float64},
     ) where {C,G}
 
         num_components = length(components)
@@ -390,7 +391,7 @@ mutable struct MLattice{C,G} <: AbstractLattice
         supercell_lattice_vectors = lattice_vectors * Diagonal([supercell_dimensions[1], supercell_dimensions[2], supercell_dimensions[3]])
         neighbors = compute_neighbors(supercell_lattice_vectors, positions, periodicity, cutoff_radii)
         
-        return new{C,G}(lattice_vectors, positions, basis, supercell_dimensions, periodicity, components, neighbors, adsorptions)
+        return new{C,G}(lattice_vectors, positions, basis, supercell_dimensions, periodicity, cutoff_radii, components, neighbors, adsorptions)
     end
 end
 
@@ -471,7 +472,7 @@ function MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
     lattice_vectors = [lattice_constant 0.0 0.0; 0.0 lattice_constant 0.0; 0.0 0.0 1.0]
     lattice_comp, lattice_adsorptions = mlattice_setup(C, basis, supercell_dimensions, components, adsorptions)
 
-    return MLattice{C,SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_comp, lattice_adsorptions, cutoff_radii)
+    return MLattice{C,SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, cutoff_radii, lattice_comp, lattice_adsorptions)
 end
 
 function MLattice{C,TriangularLattice}(; lattice_constant::Float64=1.0,
@@ -486,7 +487,7 @@ function MLattice{C,TriangularLattice}(; lattice_constant::Float64=1.0,
     lattice_vectors = [lattice_constant 0.0 0.0; 0.0 sqrt(3)*lattice_constant 0.0; 0.0 0.0 1.0]
     lattice_comp, lattice_adsorptions = mlattice_setup(C, basis, supercell_dimensions, components, adsorptions)
 
-    return MLattice{C,TriangularLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_comp, lattice_adsorptions, cutoff_radii)
+    return MLattice{C,TriangularLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, cutoff_radii, lattice_comp, lattice_adsorptions)
     
 end
 

@@ -89,9 +89,11 @@ end
 function Base.show(io::IO, lattice::MLattice{C,G}) where {C,G}
     println(io, typeof(lattice))
     println(io, "    lattice_vectors      : ", lattice.lattice_vectors)
-    println(io, "    positions            : ", lattice.positions)
+    println(io, "    positions            : ", length(lattice.positions), " grid points")
     println(io, "    supercell_dimensions : ", lattice.supercell_dimensions)
     println(io, "    basis                : ", lattice.basis)
+    println(io, "    periodicity          : ", lattice.periodicity)
+    println(io, "    cutoff radii         : ", length(lattice.cutoff_radii), " nearest neighbors at cutoffs ", lattice.cutoff_radii)
     println(io, "    occupations          : ")
     print_occupation(io, lattice)
     if prod(lattice.adsorptions) == true
@@ -101,13 +103,17 @@ function Base.show(io::IO, lattice::MLattice{C,G}) where {C,G}
     end
 end
 
-
+"""
+    merge_components(lattice::MLattice{C}) where C
+    
+Merges the boolvec of components into a single vector of integers, where each integer represents the component number.
+"""
 function merge_components(lattice::MLattice{C}) where C
-    new_lattice = zeros(Int, prod(lattice.supercell_dimensions)*length(lattice.basis))
+    comp_rep = zeros(Int, prod(lattice.supercell_dimensions)*length(lattice.basis))
     for i in 1:C
-        new_lattice += lattice.components[i] * i
+        comp_rep += lattice.components[i] * i
     end
-    return new_lattice
+    return comp_rep
 end
 
 function print_layer(io::IO, lattice::MLattice{C,G}, vec::Union{Vector{Int},Vector{Bool}}) where {C,G}

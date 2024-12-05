@@ -11,37 +11,37 @@ Enumerate all possible configurations of a lattice system and compute the energy
 - `DataFrame`: A DataFrame containing the energy and configuration of each configuration.
 - `LatticeGasWalkers`: A collection of lattice walkers for each configuration.
 """
-function exact_enumeration(lattice::SLattice{G}, h::ClassicalHamiltonian) where G
+# function exact_enumeration(lattice::SLattice{G}, h::ClassicalHamiltonian) where G
 
-    number_occupied_sites::Int64 = sum(lattice.occupations)
-    total_sites = length(lattice.basis) * prod(lattice.supercell_dimensions)
+#     number_occupied_sites::Int64 = sum(lattice.occupations)
+#     total_sites = length(lattice.basis) * prod(lattice.supercell_dimensions)
 
-    # Generate all possible occupation configurations
-    all_configs = combinations(1:total_sites, number_occupied_sites)
+#     # Generate all possible occupation configurations
+#     all_configs = combinations(1:total_sites, number_occupied_sites)
 
-    # flush occupancy
-    lattice.occupations .= false
+#     # flush occupancy
+#     lattice.occupations .= false
 
-    # Generate occupation vectors from configurations
-    lattices = [deepcopy(lattice) for _ in 1:length(all_configs)]
+#     # Generate occupation vectors from configurations
+#     lattices = [deepcopy(lattice) for _ in 1:length(all_configs)]
 
-    Threads.@threads for (ind, config) in collect(enumerate(all_configs))
-        occupations = lattices[ind].occupations
-        occupations[config] .= true
-    end
+#     Threads.@threads for (ind, config) in collect(enumerate(all_configs))
+#         occupations = lattices[ind].occupations
+#         occupations[config] .= true
+#     end
 
-    ls = LatticeGasWalkers(LatticeWalker.(lattices), h)
+#     ls = LatticeGasWalkers(LatticeWalker.(lattices), h)
 
-    # Extract energies and configurations
-    energies = [wk.energy for wk in ls.walkers]
-    configurations = [wk.configuration.occupations for wk in ls.walkers]
+#     # Extract energies and configurations
+#     energies = [wk.energy for wk in ls.walkers]
+#     configurations = [wk.configuration.occupations for wk in ls.walkers]
 
-    df = DataFrame()
-    df.energy = energies
-    df.config = configurations
+#     df = DataFrame()
+#     df.energy = energies
+#     df.config = configurations
 
-    return df, ls
-end
+#     return df, ls
+# end
 
 # recursive function to generate all unique permutations of a list
 # https://stackoverflow.com/questions/65051953/julia-generate-all-non-repeating-permutations-in-set-with-duplicates
@@ -89,8 +89,15 @@ function exact_enumeration(lattice::MLattice{C,G}, h::ClassicalHamiltonian) wher
     ls = LatticeGasWalkers(LatticeWalker.(lattices), h)
 
     # Extract energies and configurations
-    energies = [wk.energy for wk in ls.walkers]
-    configurations = [wk.configuration.components for wk in ls.walkers]
+    energies = Vector{typeof(ls.walkers[1].energy)}(undef, length(ls.walkers))
+    Threads.@threads for i in 1:length(ls.walkers)
+        energies[i] = ls.walkers[i].energy
+    end
+    
+    configurations = Vector{Vector{Vector{Bool}}}(undef, length(ls.walkers))
+    Threads.@threads for i in 1:length(ls.walkers)
+        configurations[i] = ls.walkers[i].configuration.components
+    end
 
     df = DataFrame()
     df.energy = energies

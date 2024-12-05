@@ -205,13 +205,11 @@ function generate_random_new_lattice_sample!(lattice::MLattice{C}) where C
 end
 
 function generate_random_new_lattice_sample!(lattice::SLattice)
-    number_occupied_sites = sum(lattice.occupations)
+    number_occupied_sites = sum(lattice.components[1])
     # flush occupancy
-    for i in eachindex(lattice.occupations)
-        lattice.occupations[i] = false
-    end
-    for i in sample(eachindex(lattice.occupations), number_occupied_sites, replace=false)
-        lattice.occupations[i] = true
+    lattice.components[1] .= false
+    for i in sample(eachindex(lattice.components[1]), number_occupied_sites, replace=false)
+        lattice.components[1][i] = true
     end
     return lattice
 end

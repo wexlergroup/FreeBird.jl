@@ -535,7 +535,7 @@ mutable struct LatticeWalker{C} <: AbstractWalker
     energy::typeof(0.0u"eV")
     iter::Int64
     function LatticeWalker(configuration::AbstractLattice; energy=0.0u"eV", iter=0)
-        num_comp = number_of_lattice_components(configuration)
+        num_comp = num_lattice_components(configuration)
         return new{num_comp}(configuration, energy, iter)
     end
 end

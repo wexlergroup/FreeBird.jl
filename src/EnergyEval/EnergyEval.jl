@@ -423,8 +423,15 @@ Compute the interaction energy of a lattice configuration using the Hamiltonian 
 
 """
 function interacting_energy(lattice::SLattice, h::GenericLatticeHamiltonian{N,U}) where {N,U}
-    e_interaction::U = lattice_interaction_energy(lattice.occupations, lattice.neighbors, h)
-    e_adsorption::U = sum(lattice.occupations .& lattice.adsorptions) * h.on_site_interaction
+    e_interaction::U = lattice_interaction_energy(lattice.components[1], lattice.neighbors, h)
+    e_adsorption::U = sum(lattice.components[1] .& lattice.adsorptions) * h.on_site_interaction
+    return e_interaction + e_adsorption
+end
+
+function interacting_energy(lattice::SLattice, h::MLatticeHamiltonian{C,N,U}) where {C,N,U}
+    ham = h.Hamiltonians[1,1]
+    e_interaction::U = lattice_interaction_energy(lattice.components[1], lattice.neighbors, ham)
+    e_adsorption::U = sum(lattice.components[1] .& lattice.adsorptions) * ham.on_site_interaction
     return e_interaction + e_adsorption
 end
 

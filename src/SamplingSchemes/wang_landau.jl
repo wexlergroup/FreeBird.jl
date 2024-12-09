@@ -1,12 +1,12 @@
 """
-    wang_landau(lattice::LatticeSystem, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, 
+    wang_landau(lattice::SLattice, adsorption_energy::Float64, nn_energy::Float64, nnn_energy::Float64, 
                 num_steps::Int64, flatness_criterion::Float64, f_initial::Float64, 
                 f_min::Float64, energy_bins::Vector{Float64}, random_seed::Int64)
 
-Perform the Wang-Landau algorithm to compute the density of states for a LatticeSystem.
+Perform the Wang-Landau algorithm to compute the density of states for a SLattice.
 
 # Arguments
-- `lattice::LatticeSystem`: The initial lattice configuration.
+- `lattice::SLattice`: The initial lattice configuration.
 - `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
 - `num_steps::Int64`: The number of Monte Carlo steps.
 - `flatness_criterion::Float64`: The criterion for flatness of the histogram.
@@ -19,11 +19,11 @@ Perform the Wang-Landau algorithm to compute the density of states for a Lattice
 - `density_of_states::Vector{Float64}`: The estimated density of states.
 - `histogram::Vector{Int64}`: The histogram of visited energy states.
 - `energies::Vector{Float64}`: The energies of the system at each step.
-- `configurations::Vector{LatticeSystem}`: The configurations of the system at each step.
+- `configurations::Vector{SLattice}`: The configurations of the system at each step.
 """
 
 function wang_landau(
-    lattice::LatticeSystem,
+    lattice::AbstractLattice,
     h::ClassicalHamiltonian,
     num_steps::Int64,
     flatness_criterion::Float64,
@@ -43,7 +43,7 @@ function wang_landau(
     H = zeros(Int64, energy_bins_count)
 
     energies = Float64[]
-    configurations = Vector{LatticeSystem}()
+    configurations = Vector{typeof(lattice)}()
     
     # Choose a modification factor
     f = f_initial
@@ -53,45 +53,37 @@ function wang_landau(
     
     push!(energies, current_energy)
     push!(configurations, deepcopy(current_lattice))
-    
-    # Function to determine the bin index for a given energy
-    function get_bin_index(energy::Float64, bins::Vector{Float64})
-        for i in 1:length(bins)-1
-            if energy >= bins[i] && energy < bins[i+1]
-                return i
-            end
-        end
-        return length(bins)
-    end
 
     while f > f_min
         for _ in 1:num_steps
 
-            # Choose a site
-            site_index = rand(1:length(current_lattice.occupations))
+            # # Choose a site
+            # site_index = rand(1:length(current_lattice.occupations))
             
             # Propose a swap in occupation state (only if it maintains constant N)
             proposed_lattice = deepcopy(current_lattice)
             
-            if proposed_lattice.occupations[site_index] == 1
-                vacant_sites = findall(x -> x == 0, proposed_lattice.occupations)
-                if length(vacant_sites) > 0
-                    swap_site = rand(vacant_sites)
-                    proposed_lattice.occupations[site_index] = 0
-                    proposed_lattice.occupations[swap_site] = 1
-                else
-                    continue
-                end
-            else
-                occupied_sites = findall(x -> x == 1, proposed_lattice.occupations)
-                if length(occupied_sites) > 0
-                    swap_site = rand(occupied_sites)
-                    proposed_lattice.occupations[site_index] = 1
-                    proposed_lattice.occupations[swap_site] = 0
-                else
-                    continue
-                end
-            end
+            # if proposed_lattice.occupations[site_index] == 1
+            #     vacant_sites = findall(x -> x == 0, proposed_lattice.occupations)
+            #     if length(vacant_sites) > 0
+            #         swap_site = rand(vacant_sites)
+            #         proposed_lattice.occupations[site_index] = 0
+            #         proposed_lattice.occupations[swap_site] = 1
+            #     else
+            #         continue
+            #     end
+            # else
+            #     occupied_sites = findall(x -> x == 1, proposed_lattice.occupations)
+            #     if length(occupied_sites) > 0
+            #         swap_site = rand(occupied_sites)
+            #         proposed_lattice.occupations[site_index] = 1
+            #         proposed_lattice.occupations[swap_site] = 0
+            #     else
+            #         continue
+            #     end
+            # end
+
+            generate_random_new_lattice_sample!(proposed_lattice)
 
             # Calculate the proposed energy
             proposed_energy = interacting_energy(proposed_lattice, h).val
@@ -134,4 +126,14 @@ function wang_landau(
     end
 
     return S, H, energy_bins, energies, configurations
+end
+
+# Function to determine the bin index for a given energy
+function get_bin_index(energy::Float64, bins::Vector{Float64})
+    for i in 1:length(bins)-1
+        if energy >= bins[i] && energy < bins[i+1]
+            return i
+        end
+    end
+    return length(bins)
 end

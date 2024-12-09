@@ -22,11 +22,15 @@ random_seed = 1234
 # Initialize the lattice
 occupied_sites = sample(1:length(square_occupations), 4, replace=false)
 
-initial_lattice = SLattice{SquareLattice}(;
-           supercell_dimensions = square_supercell_dimensions,
-           occupations=occupied_sites)
+# initial_lattice = SLattice{SquareLattice}(;
+#            supercell_dimensions = square_supercell_dimensions,
+#            occupations=occupied_sites)
 
-h = GenericLatticeHamiltonian(adsorption_energy, [nn_energy, nnn_energy], u"eV")
+initial_lattice = MLattice{2,SquareLattice}()
+initial_lattice.components[1][1:6] .= false
+initial_lattice.components[2][11:16] .= false
+
+h = MLatticeHamiltonian(2,[GenericLatticeHamiltonian(adsorption_energy, [nn_energy*i^2, nnn_energy], u"eV") for i in 1:3])
 
 entropy, histogram, bin_energies, energies, configurations = wang_landau(
                     initial_lattice,

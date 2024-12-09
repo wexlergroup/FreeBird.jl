@@ -91,21 +91,6 @@ function inter_component_energy_threaded(at1::AbstractSystem, at2::AbstractSyste
     return sum(energy)
 end
 
-function inter_component_energy_threaded(at1::AbstractSystem, at2::AbstractSystem, lj::LJParameters)
-    # build pairs of particles
-    pairs = [(i, j) for i in 1:length(at1), j in 1:length(at2)]
-    # @show pairs # DEBUG
-    energy = Array{typeof(0.0u"eV"), 1}(undef, length(pairs))
-    Threads.@threads for k in eachindex(pairs)
-        # @show i,j # DEBUG
-        (i, j) = pairs[k]
-        r = pbc_dist(position(at1, i), position(at2, j), at1)
-        energy[k] = lj_energy(r,lj)
-    end
-    # energy = energy*u"eV"
-    return sum(energy)
-end
-
 """
     intra_component_energy(at::AbstractSystem, lj::LJParameters)
 

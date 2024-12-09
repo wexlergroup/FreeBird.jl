@@ -24,6 +24,8 @@ U = [internal_energy(b, ωi, Ei) for b in β]
 # Calculate the heat capacities as a function of temperature
 cvs = cv(df, β, dof, 640)
 
-# Plot the heat capacities
+# Plot the heat capacities with Plots.jl (make sure to have it installed)
 using Plots
 plot(Ts, cvs, label="\$C_V\$", xlabel="\$T(K)\$", ylabel="Heat Capacity", title="LJ(111) 4x4 θ=8/16")
+# You should see a plot of the heat capacities as a function of temperature,
+# which should show two peaks around 400 K and 1000 K.

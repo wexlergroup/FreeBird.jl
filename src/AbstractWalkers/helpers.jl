@@ -241,19 +241,6 @@ function print_adsorption(io::IO, lattice::MLattice{C,G}, boolvec::Vector{Bool})
     end
 end
 
-function Base.show(io::IO, lattice::LatticeSystem{G}) where G
-    println(io, "LatticeSystem{$G}:")
-    println(io, "    lattice_vectors      : ", lattice.lattice_vectors)
-    println(io, "    positions            : ", lattice.positions)
-    println(io, "    supercell_dimensions : ", lattice.supercell_dimensions)
-    println(io, "    occupations          : "), print_lattice(io, lattice, lattice.occupations)
-    if prod(lattice.adsorptions) == true
-        println(io, "    adsorptions          : full adsorption")
-    else
-        println(io, "    adsorptions          : "), print_lattice(io, lattice, lattice.adsorptions)
-    end
-end
-
 # convenience functions for handling atomistic walkers
 
 """

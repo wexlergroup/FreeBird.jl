@@ -10,9 +10,9 @@ nnn_energy = -0.0025
 # Initialize the lattice
 occupied_sites = sample(1:16, 4, replace=false)
 
-initial_lattice = LatticeSystem{SquareLattice}(;
+initial_lattice = SLattice{SquareLattice}(;
            supercell_dimensions = square_supercell_dimensions,
-           occupations=occupied_sites)
+           components=[occupied_sites])
 
 h = GenericLatticeHamiltonian(adsorption_energy, [nn_energy, nnn_energy], u"eV")
 
@@ -20,13 +20,13 @@ h = GenericLatticeHamiltonian(adsorption_energy, [nn_energy, nnn_energy], u"eV")
 walkers = [deepcopy(initial_lattice) for i in 1:2000]
 
 for walker in walkers
-    walker.occupations = [false for i in 1:length(walker.occupations)]
-    for i in sample(1:length(walker.occupations), 4, replace=false)
-        walker.occupations[i] = true
+    walker.components[1] = [false for i in 1:length(walker.components[1])]
+    for i in sample(1:length(walker.components[1]), 4, replace=false)
+        walker.components[1][i] = true
     end
 end
 
-unique!(x -> x.occupations, walkers) # remove duplicates
+unique!(x -> x.components[1], walkers) # remove duplicates
 
 # h = LatticeGasHamiltonian([-0.04,-0.01,-0.0025].*u"eV"...)
 # h = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
@@ -151,17 +151,15 @@ plot!(p, Ts, Cv, xlabel="Temperature (K)", ylabel="Heat Capacity (k_B)", label="
 
 # Exact enumeration
 
-cutoff_radii = [1.1, 1.5]  # Angstrom
-
-energies, configurations, walkers = exact_enumeration(
+exact_df, exact_ls = exact_enumeration(
                           initial_lattice,
-                          cutoff_radii,
                           h)
 
                                 # Define temperature range and corresponding beta values
 Ts = collect(1.0:0.1:200.0)  # Temperatures in K
 βs = 1.0 ./ (k_B * Ts)  # 1/eV
 
+energies = df.energy
 # Prepare energy values for Cv calculation
 ωis = ones(length(energies))
 Eis = [ustrip(energy) for energy in energies]

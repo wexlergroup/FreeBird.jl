@@ -30,13 +30,6 @@ mutable struct LatticeNestedSamplingParameters <: SamplingParameters
     allowed_fail_count::Int64
 end
 
-mutable struct LatticeNestedSamplingParameters <: SamplingParameters
-    mc_steps::Int64
-    energy_perturbation::Float64
-    fail_count::Int64
-    allowed_fail_count::Int64
-end
-
 
 
 """
@@ -49,22 +42,14 @@ abstract type MCRoutine end
 """
     struct MCRandomWalkMaxE <: MCRoutine
 A type for generating a new walker by performing a random walk for decorrelation on the highest-energy walker.
-A type for generating a new walker by performing a random walk for decorrelation on the highest-energy walker.
 """
 struct MCRandomWalkMaxE <: MCRoutine end
 
 """
     struct MCRandomWalkClone <: MCRoutine
 A type for generating a new walker by cloning an existing walker and performing a random walk for decorrelation.
-A type for generating a new walker by cloning an existing walker and performing a random walk for decorrelation.
 """
 struct MCRandomWalkClone <: MCRoutine end
-
-"""
-    struct MCNewSample <: MCRoutine
-A type for generating a new walker from a random configuration. Currently, it is intended to use this routine for lattice gas systems.
-"""
-struct MCNewSample <: MCRoutine end
 
 """
     struct MCNewSample <: MCRoutine
@@ -125,7 +110,6 @@ Sorts the walkers in the liveset by their energy in descending order.
 - `liveset::LJAtomWalkers`: The sorted liveset.
 """
 function sort_by_energy!(liveset::AbstractLiveSet)
-function sort_by_energy!(liveset::AbstractLiveSet)
     sort!(liveset.walkers, by = x -> x.energy, rev=true)
     # println("after sort ats[1].system_data.energy: ", ats[1].system_data.energy)
     return liveset
@@ -140,7 +124,6 @@ Update the iteration count for each walker in the liveset.
 - `liveset::AtomWalkers`: The set of walkers to update.
 
 """
-function update_iter!(liveset::AbstractLiveSet)
 function update_iter!(liveset::AbstractLiveSet)
     for at in liveset.walkers
         at.iter += 1

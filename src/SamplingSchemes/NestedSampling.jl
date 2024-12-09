@@ -426,12 +426,9 @@ function nested_sampling_loop!(liveset::LatticeGasWalkers,
     df = DataFrame(iter=Int[], emax=Float64[], config=Any[])
     for i in 1:n_steps
         # write_walker_every_n(liveset.walkers[1], i, save_strategy)
-        if liveset.walkers[1].configuration isa SLattice
-            config = liveset.walkers[1].configuration.occupations
-        else
-            config = liveset.walkers[1].configuration.components
-        end
-        # config = liveset.walkers[1].configuration.occupations
+        
+        config = liveset.walkers[1].configuration.components
+
         iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine; accept_same_config=accept_same_config)
         @debug "n_step $i, iter: $iter, emax: $emax"
         if ns_params.fail_count >= ns_params.allowed_fail_count

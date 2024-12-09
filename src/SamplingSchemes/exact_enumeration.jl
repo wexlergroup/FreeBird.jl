@@ -15,16 +15,18 @@ function unique_permutations(x::T, prefix=T()) where T
     end
 end
 
-function enumerate_lattices(lattice::MLattice{C,G}) where {C,G}
-    total_sites = length(lattice.basis) * prod(lattice.supercell_dimensions)
+function enumerate_lattices(init_lattice::MLattice{C,G}) where {C,G}
+    total_sites = length(init_lattice.basis) * prod(init_lattice.supercell_dimensions)
 
     # setup a vector of all components
     comp_list = zeros(Int, total_sites)
     for i in 1:C
-        comp_list += lattice.components[i] * i
+        comp_list += init_lattice.components[i] * i
     end
     # Generate all possible occupation configurations
     all_configs = unique_permutations(comp_list)
+
+    lattice = deepcopy(init_lattice)
 
     # flush occupancy
     for i in 1:C
@@ -62,10 +64,22 @@ function enumerate_lattices(init_lattice::SLattice{G}) where {G}
 
     # Generate occupation vectors from configurations
     lattices = Vector{typeof(lattice)}(undef, length(all_configs))
-    Threads.@threads for (ind, config) in collect(enumerate(all_configs))
-        lattice.components[1] .= false # flush occupancy
-        lattice.components[1][config] .= true
-        lattices[ind] = deepcopy(lattice)
+
+    # non-threaded version - debug purposes only
+    # for (ind, config) in collect(enumerate(all_configs))
+    #     lattice.components[1] .= false # flush occupancy
+    #     lattice.components[1][config] .= true
+    #     lattices[ind] = deepcopy(lattice)
+    # end
+
+    all_configs = collect(all_configs)
+    
+    Threads.@threads for ind in eachindex(all_configs)
+        new_lattice = deepcopy(lattice)
+        new_lattice.components[1] .= false # flush occupancy
+        new_lattice.components[1][all_configs[ind]] .= true
+        # lattice.components[1][config] .= true
+        lattices[ind] = new_lattice
     end
 
     return lattices

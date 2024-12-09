@@ -1,15 +1,15 @@
 """
-    rejection_sampling(walker::LatticeSystem, h::ClassicalHamiltonian)
+    rejection_sampling(walker::SLattice, h::ClassicalHamiltonian)
 
 Perform rejection sampling to generate a new configuration with energy below a specified limit.
 
 # Arguments
-- `walker::LatticeSystem`: The walker to sample from.
+- `walker::SLattice`: The walker to sample from.
 - `energy_limit::Float64`: The energy limit.
 - `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
 
 # Returns
-- `walker::LatticeSystem`: The updated walker.
+- `walker::SLattice`: The updated walker.
 - `current_energy::Float64`: The energy of the updated walker.
 
 """
@@ -17,7 +17,7 @@ Perform rejection sampling to generate a new configuration with energy below a s
 k_B = 8.617_333_262e-5
 
 function rejection_sampling(
-    walker::LatticeSystem, 
+    walker::SLattice, 
     energy_limit::Float64, 
     h::ClassicalHamiltonian,
     perturbation::Float64
@@ -51,7 +51,7 @@ function rejection_sampling(
 end
 
 
-function monte_carlo_displacement_step_constant_N!(lattice::LatticeSystem, h::ClassicalHamiltonian, temperature::Float64)
+function monte_carlo_displacement_step_constant_N!(lattice::SLattice, h::ClassicalHamiltonian, temperature::Float64)
 
     # Randomly select any site
     site_index = rand(1:length(lattice.occupations))

@@ -87,7 +87,7 @@ Perform a Monte Carlo random walk on the lattice system.
 
 """
 function MC_random_walk!(n_steps::Int,
-                         lattice::LatticeWalker,
+                         lattice::LatticeWalker{1},
                          h::ClassicalHamiltonian,
                          emax::Float64;
                          energy_perturb::Float64=0.0,
@@ -99,30 +99,18 @@ function MC_random_walk!(n_steps::Int,
 
     for i_mc_step in 1:n_steps
         current_lattice = lattice.configuration
-        # select a random site
-        site_index = rand(eachindex(current_lattice.occupations))
+        # select a random site to hop from
+        hop_from = rand(eachindex(current_lattice.occupations))
+        # select a random site to hop to (can be the same as hop_from)
+        hop_to = rand(eachindex(current_lattice.occupations))
         # propose a swap in occupation state (only if it maintains constant N)
         proposed_lattice = deepcopy(current_lattice)
 
-        if proposed_lattice.occupations[site_index] == 1
-            vacant_sites = findall(x -> x == 0, proposed_lattice.occupations)
-            if length(vacant_sites) > 0
-                swap_site = rand(vacant_sites)
-                proposed_lattice.occupations[site_index] = 0
-                proposed_lattice.occupations[swap_site] = 1
-            else
-                continue
-            end
-        else
-            occupied_sites = findall(x -> x == 1, proposed_lattice.occupations)
-            if length(occupied_sites) > 0
-                swap_site = rand(occupied_sites)
-                proposed_lattice.occupations[site_index] = 1
-                proposed_lattice.occupations[swap_site] = 0
-            else
-                continue
-            end
+        if proposed_lattice.occupations[hop_from] != proposed_lattice.occupations[hop_to]
+            proposed_lattice.occupations[hop_from], proposed_lattice.occupations[hop_to] = 
+            proposed_lattice.occupations[hop_to], proposed_lattice.occupations[hop_from]
         end
+        
         perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
         proposed_energy = interacting_energy(proposed_lattice, h) + perturbation_energy
 
@@ -155,24 +143,18 @@ Generate a new sample for the lattice system.
 - `lattice::LatticeWalker`: The updated walker.
 
 """
-function MC_new_sample!(lattice::LatticeWalker,
+function MC_new_sample!(lattice::LatticeWalker{C},
                         h::ClassicalHamiltonian,
                         emax::Float64;
                         energy_perturb::Float64=0.0,
-                        )
+                        ) where C
 
     accept_this_walker = false
     emax = emax * unit(lattice.energy)
 
     current_lattice = lattice.configuration
     proposed_lattice = deepcopy(current_lattice)
-    current_occupations = deepcopy(current_lattice.occupations)
-    number_occupied_sites = sum(current_lattice.occupations)
-
-    proposed_lattice.occupations = [false for i in eachindex(current_lattice.occupations)]
-    for i in sample(eachindex(proposed_lattice.occupations), number_occupied_sites, replace=false)
-        proposed_lattice.occupations[i] = true
-    end
+    generate_random_new_lattice_sample!(proposed_lattice)
 
     perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
     proposed_energy = interacting_energy(proposed_lattice, h) + perturbation_energy
@@ -186,4 +168,48 @@ function MC_new_sample!(lattice::LatticeWalker,
     end
 
     return accept_this_walker, lattice
+end
+
+
+"""
+    generate_random_new_lattice_sample!(lattice::MLattice{C}) where C
+
+Generate a new random sample for the multi-component lattice system.
+
+# Arguments
+- `lattice::MLattice{C}`: The lattice system to generate a new sample for.
+
+# Returns
+- `lattice::MLattice{C}`: The updated lattice system.
+
+"""
+function generate_random_new_lattice_sample!(lattice::MLattice{C}) where C
+    occupancy = occupied_site_count(lattice)
+    # flush occupancy
+    for i in eachindex(lattice.components)
+        for j in eachindex(lattice.components[i])
+            lattice.components[i][j] = false
+        end
+    end
+    # generate a "look-up" table of unoccupied sites with elements get deleted as sites are occupied
+    # faster than shuffling a list of components
+    unoccupied = collect(1:num_sites(lattice))
+    for i in eachindex(lattice.components)
+        samples = sample(unoccupied, occupancy[i], replace=false, ordered=true)
+        for j in samples
+            lattice.components[i][j] = true
+            deleteat!(unoccupied, findfirst(isequal(j), unoccupied))
+        end
+    end
+    return lattice
+end
+
+function generate_random_new_lattice_sample!(lattice::SLattice)
+    number_occupied_sites = sum(lattice.components[1])
+    # flush occupancy
+    lattice.components[1] .= false
+    for i in sample(eachindex(lattice.components[1]), number_occupied_sites, replace=false)
+        lattice.components[1][i] = true
+    end
+    return lattice
 end

@@ -138,172 +138,358 @@ abstract type TriangularLattice <: LatticeGeometry end
 
 abstract type GenericLattice <: LatticeGeometry end
 
+abstract type AbstractLattice end
+
+# """
+# mutable struct SLattice{G}
+
+# The `SLattice{G}` struct represents a 3D lattice system.
+
+# # Type parameters
+# - `G`: The lattice geometry type. Must be a subtype of `LatticeGeometry`. See [`LatticeGeometry`](@ref).
+
+# # Fields
+# - `lattice_vectors::Matrix{Float64}`: The lattice vectors of the system.
+# - `positions::Matrix{Float64}`: The positions of the atoms in the system.
+# - `supercell_dimensions::Tuple{Int64, Int64, Int64}`: The dimensions of the supercell.
+# - `occupations::Vector{Bool}`: A vector of booleans indicating whether each site is occupied.
+# - `neighbors::Vector{Tuple{Vector{Int}, Vector{Int}}}`: A vector of tuples containing the indices of the first and second nearest neighbors for each atom.
+# - `adsorptions::Vector{Bool}`: A vector of booleans indicating whether each site is adsorbed.
+
+# # Constructors
+# ## Inner constructor
+# ```julia
+# SLattice{G}(lattice_vectors::Matrix{Float64}, 
+#                 basis::Vector{Tuple{Float64, Float64, Float64}}, 
+#                 supercell_dimensions::Tuple{Int64, Int64, Int64}, 
+#                 occupations::Vector{Bool}, 
+#                 adsorptions::Vector{Bool}, 
+#                 cutoff_radii::Vector{Float64},
+#                 periodicity::Vector{Bool})
+# ```
+# Create a new `SLattice` with the given lattice vectors, basis, supercell dimensions, occupations, adsorptions, cutoff radii, and periodicity.
+
+# ## Outer constructor for square lattice
+# ```julia
+# SLattice{SquareLattice}(;lattice_constant::Float64=1.0, 
+#                             basis=[(0.0, 0.0, 0.0)], 
+#                             supercell_dimensions=(4, 4, 1), 
+#                             periodicity=(true, true, true), 
+#                             cutoff_radii=[1.1, 1.5],
+#                             occupations=[1, 2, 3, 4],
+#                             adsorptions=:full)
+# ```
+# Create a new `SLattice` with the given square lattice parameters. The `occupations` and `adsorptions` argument 
+# can be a vector of integers or the symbol `:full`; the former specifies the indices of the occupied sites, while the latter specifies that all sites are occupied.
+
+# ## Outer constructor for triangular lattice
+# ```julia
+# SLattice{TriangularLattice}(;lattice_constant::Float64=1.0, 
+#                                 basis=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)], 
+#                                 supercell_dimensions=(4, 2, 1), 
+#                                 periodicity=(true, true, true), 
+#                                 cutoff_radii::Vector{Float64}=[1.1, 1.5],
+#                                 occupations=[1, 2, 3, 4],
+#                                 adsorptions=:full)
+# ```
+# Create a new `SLattice` with the given triangular lattice parameters. Similar to the square lattice constructor, the `occupations` and `adsorptions` argument can be a vector of integers or the symbol `:full`.
+
+# # Examples
+# ```@repl
+# square_lattice  = SLattice{SquareLattice}(;supercell_dimensions=(4,4,1))
+# triangular_lattice = SLattice{TriangularLattice}(;occupations=[1,3,5,7])
+# ```
+# """
+# mutable struct SLattice{G} <: AbstractLattice
+#     lattice_vectors::Matrix{Float64}
+#     positions::Matrix{Float64}
+#     basis::Vector{Tuple{Float64, Float64, Float64}}
+#     supercell_dimensions::Tuple{Int64, Int64, Int64}
+#     periodicity::Tuple{Bool, Bool, Bool}
+#     occupations::Vector{Bool}
+#     cutoff_radii::Vector{Float64}
+#     neighbors::Vector{Vector{Vector{Int}}}
+#     adsorptions::Vector{Bool}
+
+#     function SLattice{G}(
+#         lattice_vectors::Matrix{Float64},
+#         basis::Vector{Tuple{Float64, Float64, Float64}},
+#         supercell_dimensions::Tuple{Int64, Int64, Int64},
+#         periodicity::Tuple{Bool, Bool, Bool},
+#         occupations::Vector{Bool},
+#         adsorptions::Vector{Bool},
+#         cutoff_radii::Vector{Float64},
+#     ) where G
+#         positions = lattice_positions(lattice_vectors, basis, supercell_dimensions)
+
+#         if length(occupations) != size(positions, 1)
+#             throw(ArgumentError("Length of occupations vector must match the number of lattice sites"))
+#         end
+
+#         if length(adsorptions) != size(positions, 1)
+#             throw(ArgumentError("Length of adsorptions vector must match the number of lattice sites"))
+#         end
+
+#         supercell_lattice_vectors = lattice_vectors * Diagonal([supercell_dimensions[1], supercell_dimensions[2], supercell_dimensions[3]])
+#         neighbors = compute_neighbors(supercell_lattice_vectors, positions, periodicity, cutoff_radii)
+        
+#         return new{G}(lattice_vectors, positions, basis, supercell_dimensions, periodicity, occupations, cutoff_radii, neighbors, adsorptions)
+#     end
+# end
+
+# function slattice_setup(basis::Vector{Tuple{Float64, Float64, Float64}},
+#                         supercell_dimensions::Tuple{Int64, Int64, Int64},
+#                         occupations::Union{Vector{Int}, Vector{Bool}, Symbol},
+#                         adsorptions::Union{Vector{Int}, Vector{Bool}, Symbol})
+
+#     dim = prod(supercell_dimensions)*length(basis)
+#     lattice_occupations = zeros(Bool, dim)
+#     lattice_adsorptions = zeros(Bool, dim)
+
+#     if occupations == :full
+#         lattice_occupations = [true for i in 1:dim]
+#     elseif occupations isa Vector{Int}
+#         for i in occupations
+#             lattice_occupations[i] = true
+#         end
+#     elseif occupations isa Vector{Bool}
+#         lattice_occupations = occupations
+#     else
+#         throw(ArgumentError("Occupations must be a vector of integers/booleans, or a supported symbol!"))
+#     end
+
+#     if adsorptions == :full
+#         lattice_adsorptions = [true for i in 1:dim]
+#     elseif adsorptions isa Vector{Int}
+#         for i in adsorptions
+#             lattice_adsorptions[i] = true
+#         end
+#     elseif adsorptions isa Vector{Bool}
+#         lattice_adsorptions = adsorptions
+#     else
+#         throw(ArgumentError("Adsorptions must be a vector of integers/booleans, or a supported symbol!"))
+#     end
+
+#     return lattice_occupations, lattice_adsorptions
+# end
+
+# function SLattice{SquareLattice}(;lattice_constant::Float64=1.0,
+#                                       basis::Vector{Tuple{Float64, Float64, Float64}}=[(0.0, 0.0, 0.0)],
+#                                       supercell_dimensions::Tuple{Int64, Int64, Int64}=(4, 4, 1),
+#                                       periodicity::Tuple{Bool, Bool, Bool}=(true, true, true),
+#                                       cutoff_radii::Vector{Float64}=[1.1, 1.5],
+#                                       occupations::Union{Vector{Int}, Vector{Bool}, Symbol}=[1, 2, 3, 4],
+#                                       adsorptions::Union{Vector{Int}, Vector{Bool}, Symbol}=:full,
+#                                       )
+
+#     lattice_vectors = [lattice_constant 0.0 0.0; 0.0 lattice_constant 0.0; 0.0 0.0 1.0]
+#     lattice_occupations, lattice_adsorptions = slattice_setup(basis, supercell_dimensions, occupations, adsorptions)
+
+#     return SLattice{SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_occupations, lattice_adsorptions, cutoff_radii)
+# end
+
+
+# function SLattice{TriangularLattice}(;lattice_constant::Float64=1.0,
+#                                           basis::Vector{Tuple{Float64, Float64, Float64}}=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)],
+#                                           supercell_dimensions::Tuple{Int64, Int64, Int64}=(4, 2, 1),
+#                                           periodicity::Tuple{Bool, Bool, Bool}=(true, true, true),
+#                                           cutoff_radii::Vector{Float64}=[1.1, 1.5],
+#                                           occupations::Union{Vector{Int}, Vector{Bool}, Symbol}=[1, 2, 3, 4],
+#                                           adsorptions::Union{Vector{Int}, Vector{Bool}, Symbol}=:full,
+#                                           )
+
+#     lattice_vectors = [lattice_constant 0.0 0.0; 0.0 sqrt(3)*lattice_constant 0.0; 0.0 0.0 1.0]
+#     lattice_occupations, lattice_adsorptions = slattice_setup(basis, supercell_dimensions, occupations, adsorptions)
+
+#     return SLattice{TriangularLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_occupations, lattice_adsorptions, cutoff_radii)
+# end
+
 
 
 """
-mutable struct LatticeSystem{G}
+    mutable struct MLattice{C,G}
 
-The `LatticeSystem{G}` struct represents a 3D lattice system.
+A mutable struct representing a lattice with the following fields:
 
-# Type parameters
-- `G`: The lattice geometry type. Must be a subtype of `LatticeGeometry`. See [`LatticeGeometry`](@ref).
-
-# Fields
-- `lattice_vectors::Matrix{Float64}`: The lattice vectors of the system.
-- `positions::Matrix{Float64}`: The positions of the atoms in the system.
+- `lattice_vectors::Matrix{Float64}`: The lattice vectors defining the unit cell.
+- `positions::Matrix{Float64}`: The positions of the lattice points.
+- `basis::Vector{Tuple{Float64, Float64, Float64}}`: The basis vectors within the unit cell.
 - `supercell_dimensions::Tuple{Int64, Int64, Int64}`: The dimensions of the supercell.
-- `occupations::Vector{Bool}`: A vector of booleans indicating whether each site is occupied.
-- `neighbors::Vector{Tuple{Vector{Int}, Vector{Int}}}`: A vector of tuples containing the indices of the first and second nearest neighbors for each atom.
-- `adsorptions::Vector{Bool}`: A vector of booleans indicating whether each site is adsorbed.
+- `periodicity::Tuple{Bool, Bool, Bool}`: The periodicity in each dimension.
+- `components::Vector{Vector{Bool}}`: The components of the lattice.
+- `neighbors::Vector{Vector{Vector{Int}}}`: The neighbors of each lattice point.
+- `adsorptions::Vector{Bool}`: The adsorption sites on the lattice.
 
-# Constructors
-## Inner constructor
-```julia
-LatticeSystem{G}(lattice_vectors::Matrix{Float64}, 
-                basis::Vector{Tuple{Float64, Float64, Float64}}, 
-                supercell_dimensions::Tuple{Int64, Int64, Int64}, 
-                occupations::Vector{Bool}, adsorptions::Vector{Bool}, 
-                cutoff_radii::Vector{Float64},
-                periodicity::Vector{Bool})
-```
-Create a new `LatticeSystem` with the given lattice vectors, basis, supercell dimensions, occupations, adsorptions, cutoff radii, and periodicity.
+# Inner Constructor
 
-## Outer constructor for square lattice
-```julia
-LatticeSystem{SquareLattice}(;lattice_constant::Float64=1.0, 
-                            basis=[(0.0, 0.0, 0.0)], 
-                            supercell_dimensions=(4, 4, 1), 
-                            periodicity=(true, true, true), 
-                            cutoff_radii=[1.1, 1.5],
-                            occupations=[1, 2, 3, 4],
-                            adsorptions=:full)
-```
-Create a new `LatticeSystem` with the given square lattice parameters. The `occupations` and `adsorptions` argument 
-can be a vector of integers or the symbol `:full`; the former specifies the indices of the occupied sites, while the latter specifies that all sites are occupied.
+    MLattice{C,G}(
+        lattice_vectors::Matrix{Float64},
+        basis::Vector{Tuple{Float64, Float64, Float64}},
+        supercell_dimensions::Tuple{Int64, Int64, Int64},
+        periodicity::Tuple{Bool, Bool, Bool},
+        components::Vector{Vector{Bool}},
+        adsorptions::Vector{Bool},
+        cutoff_radii::Vector{Float64},
+    ) where {C,G}
 
-## Outer constructor for triangular lattice
-```julia
-LatticeSystem{TriangularLattice}(;lattice_constant::Float64=1.0, 
-                                basis=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)], 
-                                supercell_dimensions=(4, 2, 1), 
-                                periodicity=(true, true, true), 
-                                cutoff_radii::Vector{Float64}=[1.1, 1.5],
-                                occupations=[1, 2, 3, 4],
-                                adsorptions=:full)
-```
-Create a new `LatticeSystem` with the given triangular lattice parameters. Similar to the square lattice constructor, the `occupations` and `adsorptions` argument can be a vector of integers or the symbol `:full`.
+Creates an `MLattice` instance with the specified parameters. The constructor performs the following steps:
 
-# Examples
-```@repl
-square_lattice  = LatticeSystem{SquareLattice}(;supercell_dimensions=(4,4,1))
-triangular_lattice = LatticeSystem{TriangularLattice}(;occupations=[1,3,5,7])
-```
+1. Validates that the number of components matches the expected value `C`.
+2. Computes the positions of the lattice points using `lattice_positions`.
+3. Computes the supercell lattice vectors.
+4. Computes the neighbors of each lattice point using `compute_neighbors`.
+
+Throws an `ArgumentError` if the number of components does not match `C`.
+
+# Outer Constructors
+
+    MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
+                               basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0)],
+                               supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 4, 1),
+                               periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
+                               cutoff_radii::Vector{Float64}=[1.1, 1.5],
+                               components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
+                               adsorptions::Union{Vector{Int},Symbol}=:full)
+
+Constructs a square lattice with the specified parameters. The `components` and `adsorptions` arguments can be a vector of integers specifying
+the indices of the occupied sites, or a symbol. If `components` is `:equal`, the lattice is divided into `C` equal components when possible, or 
+nearest to equal components otherwise. If `adsorptions` is `:full`, all sites are classified as adsorption sites.
+
+## Returns
+- `MLattice{C,SquareLattice}`: A square lattice object with `C` components.
+
 """
-mutable struct LatticeSystem{G}
+mutable struct MLattice{C,G} <: AbstractLattice
     lattice_vectors::Matrix{Float64}
     positions::Matrix{Float64}
     basis::Vector{Tuple{Float64, Float64, Float64}}
     supercell_dimensions::Tuple{Int64, Int64, Int64}
     periodicity::Tuple{Bool, Bool, Bool}
-    occupations::Vector{Bool}
+    cutoff_radii::Vector{Float64}
+    components::Vector{Vector{Bool}}
     neighbors::Vector{Vector{Vector{Int}}}
     adsorptions::Vector{Bool}
 
-    function LatticeSystem{G}(
+    function MLattice{C,G}(
         lattice_vectors::Matrix{Float64},
         basis::Vector{Tuple{Float64, Float64, Float64}},
         supercell_dimensions::Tuple{Int64, Int64, Int64},
         periodicity::Tuple{Bool, Bool, Bool},
-        occupations::Vector{Bool},
-        adsorptions::Vector{Bool},
         cutoff_radii::Vector{Float64},
-    ) where G
+        components::Vector{Vector{Bool}},
+        adsorptions::Vector{Bool},
+    ) where {C,G}
+
+        num_components = length(components)
+
+        if num_components != C
+            throw(ArgumentError("For a $C-component system, got $num_components components!"))
+        end
+
         positions = lattice_positions(lattice_vectors, basis, supercell_dimensions)
-
-        if length(occupations) != size(positions, 1)
-            throw(ArgumentError("Length of occupations vector must match the number of lattice sites"))
-        end
-
-        if length(adsorptions) != size(positions, 1)
-            throw(ArgumentError("Length of adsorptions vector must match the number of lattice sites"))
-        end
 
         supercell_lattice_vectors = lattice_vectors * Diagonal([supercell_dimensions[1], supercell_dimensions[2], supercell_dimensions[3]])
         neighbors = compute_neighbors(supercell_lattice_vectors, positions, periodicity, cutoff_radii)
         
-        return new{G}(lattice_vectors, positions, basis, supercell_dimensions, periodicity, occupations, neighbors, adsorptions)
+        return new{C,G}(lattice_vectors, positions, basis, supercell_dimensions, periodicity, cutoff_radii, components, neighbors, adsorptions)
     end
 end
 
-function LatticeSystem{SquareLattice}(;lattice_constant::Float64=1.0,
-                                      basis::Vector{Tuple{Float64, Float64, Float64}}=[(0.0, 0.0, 0.0)],
-                                      supercell_dimensions::Tuple{Int64, Int64, Int64}=(4, 4, 1),
-                                      periodicity::Tuple{Bool, Bool, Bool}=(true, true, true),
-                                      cutoff_radii::Vector{Float64}=[1.1, 1.5],
-                                      occupations::Union{Vector{Int}, Symbol}=[1, 2, 3, 4],
-                                      adsorptions::Union{Vector{Int}, Symbol}=:full,
-                                      )
+function split_into_subarrays(arr::AbstractVector, N::Int)
+    n = length(arr)  # Total number of elements
+    base_size = div(n, N)  # Base size of each subarray
+    remainder = mod(n, N)  # Remaining elements to distribute
+
+    subarrays = Vector{Vector{eltype(arr)}}()
+    idx = 1
+
+    for i in 1:N
+        # Determine the size of the current subarray
+        current_size = base_size + (i <= remainder ? 1 : 0)
+        push!(subarrays, arr[idx:idx + current_size - 1])
+        idx += current_size
+    end
+
+    return subarrays
+end
+
+function mlattice_setup(C::Int, 
+                        basis::Vector{Tuple{Float64, Float64, Float64}},
+                        supercell_dimensions::Tuple{Int64, Int64, Int64},
+                        components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol},
+                        adsorptions::Union{Vector{Int}, Vector{Bool}, Symbol})
+    dim = prod(supercell_dimensions) * length(basis)
+    lattice_adsorptions = zeros(Bool, dim)
+
+    if adsorptions == :full
+        lattice_adsorptions = [true for i in 1:dim]
+    elseif adsorptions isa Vector{Int}
+        for i in adsorptions
+            lattice_adsorptions[i] = true
+        end
+    elseif adsorptions isa Vector{Bool}
+        lattice_adsorptions = adsorptions
+    else
+        throw(ArgumentError("Adsorptions must be a vector of integers/booleans, or a supported symbol!"))
+    end
+
+    
+    if components == :equal
+        lattice_comp = Vector{Vector{Bool}}(undef, C)
+        comps = split_into_subarrays(1:dim, C)
+        for i in 1:C
+            lattice_comp[i] = [false for i in 1:dim]
+            for j in comps[i]
+                lattice_comp[i][j] = true
+            end
+        end
+    elseif components isa Vector{Vector{Int}}
+        lattice_comp = Vector{Vector{Bool}}(undef, C)
+        for i in 1:C
+            lattice_comp[i] = [false for i in 1:dim]
+            for j in components[i]
+                lattice_comp[i][j] = true
+            end
+        end
+    elseif components isa Vector{Vector{Bool}}
+        lattice_comp = components
+    else
+        throw(ArgumentError("components must be a vector of integers/booleans, or a supported symbol!"))
+    end
+
+    return lattice_comp, lattice_adsorptions
+end
+
+function MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
+                                    basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0)],
+                                    supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 4, 1),
+                                    periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
+                                    cutoff_radii::Vector{Float64}=[1.1, 1.5],
+                                    components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
+                                    adsorptions::Union{Vector{Int},Symbol}=:full,
+                                ) where C
 
     lattice_vectors = [lattice_constant 0.0 0.0; 0.0 lattice_constant 0.0; 0.0 0.0 1.0]
-    dim = supercell_dimensions[1] * supercell_dimensions[2] * supercell_dimensions[3]
-    lattice_occupations = zeros(Bool, dim*length(basis))
-    lattice_adsorptions = zeros(Bool, dim*length(basis))
+    lattice_comp, lattice_adsorptions = mlattice_setup(C, basis, supercell_dimensions, components, adsorptions)
 
-    if occupations == :full
-        lattice_occupations = [true for i in 1:dim*length(basis)]
-    else
-        for i in occupations
-            lattice_occupations[i] = true
-        end
-    end
-
-    if adsorptions == :full
-        lattice_adsorptions = [true for i in 1:dim*length(basis)]
-    else
-        for i in adsorptions
-            lattice_adsorptions[i] = true
-        end
-    end
-
-    return LatticeSystem{SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_occupations, lattice_adsorptions, cutoff_radii)
+    return MLattice{C,SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, cutoff_radii, lattice_comp, lattice_adsorptions)
 end
 
-
-function LatticeSystem{TriangularLattice}(;lattice_constant::Float64=1.0,
-                                          basis::Vector{Tuple{Float64, Float64, Float64}}=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)],
-                                          supercell_dimensions::Tuple{Int64, Int64, Int64}=(4, 2, 1),
-                                          periodicity::Tuple{Bool, Bool, Bool}=(true, true, true),
-                                          cutoff_radii::Vector{Float64}=[1.1, 1.5],
-                                          occupations::Union{Vector{Int}, Symbol}=[1, 2, 3, 4],
-                                          adsorptions::Union{Vector{Int}, Symbol}=:full,
-                                          )
+function MLattice{C,TriangularLattice}(; lattice_constant::Float64=1.0,
+                                        basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)],
+                                        supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 2, 1),
+                                        periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
+                                        cutoff_radii::Vector{Float64}=[1.1, 1.5],
+                                        components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
+                                        adsorptions::Union{Vector{Int},Symbol}=:full,
+                                    ) where C
 
     lattice_vectors = [lattice_constant 0.0 0.0; 0.0 sqrt(3)*lattice_constant 0.0; 0.0 0.0 1.0]
-    dim = supercell_dimensions[1] * supercell_dimensions[2] * supercell_dimensions[3]
-    lattice_occupations = zeros(Bool, dim * length(basis))
-    lattice_adsorptions = zeros(Bool, dim * length(basis))
+    lattice_comp, lattice_adsorptions = mlattice_setup(C, basis, supercell_dimensions, components, adsorptions)
 
-    if occupations == :full
-        lattice_occupations = [true for i in 1:dim*length(basis)]
-    else
-        for i in occupations
-            lattice_occupations[i] = true
-        end
-    end
-
-    if adsorptions == :full
-        lattice_adsorptions = [true for i in 1:dim*length(basis)]
-    else
-        for i in adsorptions
-            lattice_adsorptions[i] = true
-        end
-    end
-
-    return LatticeSystem{TriangularLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, lattice_occupations, lattice_adsorptions, cutoff_radii)
+    return MLattice{C,TriangularLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, cutoff_radii, lattice_comp, lattice_adsorptions)
+    
 end
-
-
-
 
 """
     mutable struct LatticeWalker
@@ -311,24 +497,46 @@ end
 The `LatticeWalker` struct represents a walker on a 3D lattice.
 
 # Fields
-- `configuration::LatticeSystem`: The configuration of the walker.
+- `configuration::AbstractLattice`: The configuration of the walker.
 - `energy::Float64`: The energy of the walker.
 - `iter::Int64`: The current iteration number of the walker.
 
 # Constructor
 ```julia
-LatticeWalker(configuration::LatticeSystem; energy=0.0, iter=0)
+LatticeWalker(configuration::AbstractLattice; energy=0.0, iter=0)
 ```
 Create a new `LatticeWalker` with the given configuration and optional energy and iteration number.
 
 """
 
-mutable struct LatticeWalker <: AbstractWalker
-    configuration::LatticeSystem
+
+# number_of_lattice_components(lattice::SLattice) = 1
+
+const SLattice{G} = MLattice{1,G} # alias for single-component lattices
+
+const GLattice{C} = MLattice{C,GenericLattice} # alias for generic lattices
+
+num_lattice_components(lattice::MLattice{C,G}) where {C,G} = C
+
+function num_sites(lattice::AbstractLattice)
+    return prod(lattice.supercell_dimensions) * length(lattice.basis)
+end
+
+function occupied_site_count(MLattice::MLattice{C}) where C
+    occupancy = Array{Int}(undef, C)
+    for i in eachindex(MLattice.components)
+        occupancy[i] = sum(MLattice.components[i])
+    end
+    return occupancy
+end
+
+mutable struct LatticeWalker{C} <: AbstractWalker
+    configuration::AbstractLattice
     energy::typeof(0.0u"eV")
     iter::Int64
-    function LatticeWalker(configuration::LatticeSystem; energy=0.0u"eV", iter=0)
-        return new(configuration, energy, iter)
+    function LatticeWalker(configuration::AbstractLattice; energy=0.0u"eV", iter=0)
+        num_comp = num_lattice_components(configuration)
+        return new{num_comp}(configuration, energy, iter)
     end
 end
 

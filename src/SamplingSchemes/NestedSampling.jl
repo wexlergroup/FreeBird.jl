@@ -266,11 +266,11 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     to_walk = deepcopy(ats[1])
 
     accept, at = MC_new_sample!(to_walk, h, emax; energy_perturb=ns_params.energy_perturbation)
-    configs = [wk.configuration.occupations for wk in ats]
-    if (at.configuration.occupations in configs) && !accept_same_config
-        @warn "Configuration already exists in the liveset"
-        accept = false
-    end
+    # configs = [wk.configuration.occupations for wk in ats]
+    # if (at.configuration.occupations in configs) && !accept_same_config
+    #     @warn "Configuration already exists in the liveset"
+    #     accept = false
+    # end
     @info "iter: $(liveset.walkers[1].iter), emax: $emax, is_accepted: $accept"
     if accept
         push!(ats, at)
@@ -423,10 +423,12 @@ function nested_sampling_loop!(liveset::LatticeGasWalkers,
                                 mc_routine::MCRoutine,
                                 save_strategy::DataSavingStrategy;
                                 accept_same_config::Bool=false)
-    df = DataFrame(iter=Int[], emax=Float64[], config=Vector{Bool}[])
+    df = DataFrame(iter=Int[], emax=Float64[], config=Any[])
     for i in 1:n_steps
         # write_walker_every_n(liveset.walkers[1], i, save_strategy)
-        config = liveset.walkers[1].configuration.occupations
+        
+        config = liveset.walkers[1].configuration.components
+
         iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine; accept_same_config=accept_same_config)
         @debug "n_step $i, iter: $iter, emax: $emax"
         if ns_params.fail_count >= ns_params.allowed_fail_count

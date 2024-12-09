@@ -18,6 +18,7 @@ using ..EnergyEval
 
 export periodic_boundary_wrap!
 export MC_random_walk!, MC_nve_walk!, MC_new_sample!
+export generate_random_new_lattice_sample!
 
 include("helpers.jl")
 

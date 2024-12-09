@@ -5,9 +5,10 @@ module Hamiltonians
 
 using Unitful
 using StaticArrays
+using StaticArrays
 
 export ClassicalHamiltonian
-export LatticeGasHamiltonian, GenericLatticeHamiltonian
+export LatticeGasHamiltonian, GenericLatticeHamiltonian, MLatticeHamiltonian
 
 abstract type ClassicalHamiltonian end
 
@@ -90,6 +91,65 @@ function Base.show(io::IO, hamiltonian::GenericLatticeHamiltonian{N,U}) where {N
     println(io, "GenericLatticeHamiltonian{$N,$U}:")
     println(io, "    on_site_interaction:      ", hamiltonian.on_site_interaction)
     println(io, "    nth_neighbor_interactions: ", [hamiltonian.nth_neighbor_interactions[i].val for i in 1:N], " ", unit(U))
+end
+    
+    """
+        struct MLatticeHamiltonian{C,N,U} <: ClassicalHamiltonian
+
+The `MLatticeHamiltonian` struct represents a multi-component lattice Hamiltonian.
+It has a matrix of `GenericLatticeHamiltonian{N,U}`.
+
+# Fields
+- `Hamiltonians::Matrix{GenericLatticeHamiltonian{N,U}}`: The matrix of `GenericLatticeHamiltonian{N,U}`.
+
+# Constructors
+```julia
+MLatticeHamiltonian(Hamiltonians::Vector{GenericLatticeHamiltonian{N,U}})
+```
+## Examples
+```jldoctest
+julia> hams = [GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV") for i in 1:4]
+julia> mlham = MLatticeHamiltonian(hams)
+```    
+"""
+struct MLatticeHamiltonian{C,N,U} <: ClassicalHamiltonian
+    Hamiltonians::Matrix{GenericLatticeHamiltonian{N,U}}
+
+    function MLatticeHamiltonian{C,N,U}(Hamiltonians::Matrix{GenericLatticeHamiltonian{N,U}}) where {C,N,U}
+        if size(Hamiltonians) != (C, C)
+            throw(ArgumentError("the size of the matrix is not compatible with the number of components."))
+        end
+        return new(Hamiltonians)
+    end
+end
+
+function MLatticeHamiltonian(c::Int, hams::Vector{GenericLatticeHamiltonian{N,U}}) where {N,U}
+    if length(hams) == c^2
+        return MLatticeHamiltonian{c,N,U}(reshape(hams, c, c))
+    elseif length(hams) == c*(c+1)/2
+        ham_matrix = Matrix{GenericLatticeHamiltonian{N,U}}(undef, c, c)
+        k = 1
+        for i in 1:c
+            for j in i:c
+                ham_matrix[i,j] = hams[k]
+                ham_matrix[j,i] = hams[k]
+                k += 1
+            end
+        end
+        return MLatticeHamiltonian{c,N,U}(ham_matrix)
+    else
+        throw(ArgumentError("the number of elements in the vector must be equal to c^2 or c*(c+1)/2."))
+    end
+    
+end
+
+function Base.show(io::IO, hamiltonian::MLatticeHamiltonian{C,N,U}) where {C,N,U}
+    println(io, "MLatticeHamiltonian{$C,$N,$U}:")
+    for i in 1:C
+       for j in 1:C
+           println(io, "    Hamiltonians[$i, $j]: ", hamiltonian.Hamiltonians[i,j])
+       end
+    end
 end
 
 end # module Hamiltonians

@@ -1,66 +1,123 @@
+# recursive function to generate all unique permutations of a list
+# https://stackoverflow.com/questions/65051953/julia-generate-all-non-repeating-permutations-in-set-with-duplicates
+function unique_permutations(x::T, prefix=T()) where T
+    if length(x) == 1
+        return [[prefix; x]]
+    else
+        t = T[]
+        for i in eachindex(x)
+            if i > firstindex(x) && x[i] == x[i-1]
+                continue
+            end
+            append!(t, unique_permutations([x[begin:i-1];x[i+1:end]], [prefix; x[i]]))
+        end
+        return t
+    end
+end
+
+function enumerate_lattices(init_lattice::MLattice{C,G}) where {C,G}
+    total_sites = length(init_lattice.basis) * prod(init_lattice.supercell_dimensions)
+
+    # setup a vector of all components
+    comp_list = zeros(Int, total_sites)
+    for i in 1:C
+        comp_list += init_lattice.components[i] * i
+    end
+    # Generate all possible occupation configurations
+    all_configs = unique_permutations(comp_list)
+
+    lattice = deepcopy(init_lattice)
+
+    # flush occupancy
+    for i in 1:C
+        lattice.components[i].= false
+    end
+
+    # Generate occupation vectors from configurations
+    lattices = [deepcopy(lattice) for _ in eachindex(all_configs)]
+
+    Threads.@threads for (ind, config) in collect(enumerate(all_configs))
+        for i in 1:C
+            lattices[ind].components[i] = config .== i
+        end
+    end
+
+    return lattices
+end
+
+
+function enumerate_lattices(init_lattice::SLattice{G}) where {G}
+    
+    # @debug "SLattice routine called"
+
+    lattice = deepcopy(init_lattice)
+
+    number_occupied_sites::Int64 = sum(lattice.components[1])
+    total_sites = length(lattice.basis) * prod(lattice.supercell_dimensions)
+
+    # Generate all possible occupation configurations
+    # 3X faster than using unique_permutations for SLattice
+    all_configs = combinations(1:total_sites, number_occupied_sites)
+
+    # flush occupancy
+    # lattice.components[1] .= false
+
+    # Generate occupation vectors from configurations
+    lattices = Vector{typeof(lattice)}(undef, length(all_configs))
+
+    # non-threaded version - debug purposes only
+    # for (ind, config) in collect(enumerate(all_configs))
+    #     lattice.components[1] .= false # flush occupancy
+    #     lattice.components[1][config] .= true
+    #     lattices[ind] = deepcopy(lattice)
+    # end
+
+    all_configs = collect(all_configs)
+    
+    Threads.@threads for ind in eachindex(all_configs)
+        new_lattice = deepcopy(lattice)
+        new_lattice.components[1] .= false # flush occupancy
+        new_lattice.components[1][all_configs[ind]] .= true
+        # lattice.components[1][config] .= true
+        lattices[ind] = new_lattice
+    end
+
+    return lattices
+end
+
 """
-    exact_enumeration(lattice::LatticeSystem{G}, cutoff_radii::Tuple{Float64, Float64}, h::LatticeGasHamiltonian) where G
+    exact_enumeration(lattice::SLattice{G}, cutoff_radii::Tuple{Float64, Float64}, h::LatticeGasHamiltonian) where G
 
 Enumerate all possible configurations of a lattice system and compute the energy of each configuration.
 
 # Arguments
-- `lattice::LatticeSystem{G}`: The (starting) lattice system to enumerate. All possible configurations will be generated from this lattice system.
-- `cutoff_radii::Tuple{Float64, Float64}`: The cutoff radii for the first and second nearest neighbors.
+- `lattice::SLattice{G}`: The (starting) lattice system to enumerate. All possible configurations will be generated from this lattice system.
 - `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
 
 # Returns
-- `energies::Vector{typeof(0.0u"eV")}`: An array of energies for each configuration.
-- `configurations::Vector{LatticeSystem{G}}`: An array of lattice system configurations for each configuration.
-- `walkers::Vector{LatticeWalker}`: An array of lattice walkers for each configuration.
+- `DataFrame`: A DataFrame containing the energy and configuration of each configuration.
+- `LatticeGasWalkers`: A collection of lattice walkers for each configuration.
 """
-function exact_enumeration(
-    lattice::LatticeSystem{G},
-    cutoff_radii::Vector{Float64},
-    h::ClassicalHamiltonian,
-    ) where G
+function exact_enumeration(lattice::MLattice{C,G}, h::ClassicalHamiltonian) where {C,G}
 
-    primitive_lattice_vectors::Matrix{Float64} = lattice.lattice_vectors
-    basis::Vector{Tuple{Float64, Float64, Float64}} = lattice.basis
-    supercell_dimensions::Tuple{Int64, Int64, Int64} = lattice.supercell_dimensions
-    periodicity::Tuple{Bool, Bool, Bool} = lattice.periodicity 
-    adsorptions::Vector{Bool} = lattice.adsorptions
-    number_occupied_sites::Int64 = sum(lattice.occupations)
+    lattices = enumerate_lattices(lattice)
 
-    K, L, M = supercell_dimensions
-    num_basis_sites = length(basis)
-    total_sites = K * L * M * num_basis_sites
-
-    # Generate all possible occupation configurations
-    all_configs = collect(combinations(1:total_sites, number_occupied_sites))
-
-    # Generate occupation vectors from configurations
-    all_occupation_vectors = Vector{Vector{Bool}}()
-    for config in all_configs
-        occupations = falses(total_sites)
-        occupations[config] .= true
-        push!(all_occupation_vectors, Vector{Bool}(occupations))  # Convert BitVector to Vector{Bool}
-    end
-
-    # Generate LatticeSystem objects for each configuration
-    lattices = [LatticeSystem{G}(primitive_lattice_vectors, basis, supercell_dimensions, periodicity, occupations, adsorptions, cutoff_radii) for occupations in all_occupation_vectors]
-
-    # Generate LatticeWalker objects for each lattice system
-    walkers = [LatticeWalker(lattice) for lattice in lattices]
-
-    # Compute energies for each walker
-    for walker in walkers
-        e_interaction = interacting_energy(walker.configuration, h)
-        walker.energy = e_interaction
-    end
+    ls = LatticeGasWalkers(LatticeWalker.(lattices), h)
 
     # Extract energies and configurations
-    energies = Array{typeof(0.0u"eV")}(undef, length(walkers))
-    configurations = Array{LatticeSystem{G}}(undef, length(walkers))
+    energies = Vector{typeof(ls.walkers[1].energy)}(undef, length(ls.walkers))
+    configurations = Vector{Vector{Vector{Bool}}}(undef, length(ls.walkers))
 
-    for (i, walker) in enumerate(walkers)
-        energies[i] = walker.energy
-        configurations[i] = walker.configuration
+    Threads.@threads for i in eachindex(ls.walkers)
+        energies[i] = ls.walkers[i].energy
+        configurations[i] = ls.walkers[i].configuration.components
     end
 
-    return energies, configurations, walkers
+    df = DataFrame()
+    df.energy = energies
+    df.config = configurations
+
+    return df, ls
 end
+
+

@@ -5,9 +5,11 @@ makedocs(;
     pages=[
             "FreeBird.jl" => "index.md",
             "Potentials" => "Potentials.md",
+            "Hamiltonians" => "Hamiltonians.md",
             "EnergyEval" => "EnergyEval.md",
+            "AbstractLiveSets" => "AbstractLiveSets.md",
             "AbstractWalkers" => "AbstractWalkers.md",
-            "AtomsMCMoves" => "AtomsMCMoves.md",
+            "MonteCarloMoves" => "MonteCarloMoves.md",
             "SamplingSchemes" => "SamplingSchemes.md",
             "FreeBirdIO" => "FreeBirdIO.md",
             "AnalysisTools" => "AnalysisTools.md",

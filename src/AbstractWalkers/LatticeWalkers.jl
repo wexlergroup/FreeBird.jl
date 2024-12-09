@@ -21,6 +21,13 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
                            )
                            
     neighbors = Vector{Vector{Vector{Int}}}(undef, size(positions, 1))
+function compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, 
+                           positions::Matrix{Float64}, 
+                           periodicity::Tuple{Bool, Bool, Bool}, 
+                           cutoff_radii::Vector{Float64}
+                           )
+                           
+    neighbors = Vector{Vector{Vector{Int}}}(undef, size(positions, 1))
     num_atoms = size(positions, 1)
     
     # Compute reciprocal lattice vectors for minimum image convention
@@ -30,8 +37,13 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
     reciprocal_lattice_vectors = inv([a1 a2 a3])
 
     layers_of_neighbors = length(cutoff_radii)
+    layers_of_neighbors = length(cutoff_radii)
 
     for i in 1:num_atoms
+        nth_neighbors = Vector{Int}[]
+        for _ in 1:layers_of_neighbors
+            push!(nth_neighbors, Int[])
+        end
         nth_neighbors = Vector{Int}[]
         for _ in 1:layers_of_neighbors
             push!(nth_neighbors, Int[])
@@ -64,12 +76,21 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
                         push!(nth_neighbors[i], j)
                         break
                     end 
+
+                for i in 1:layers_of_neighbors
+                    if distance <= cutoff_radii[i]
+                        push!(nth_neighbors[i], j)
+                        break
+                    end 
                 end
+
+
 
 
             end
         end
         
+        neighbors[i] = nth_neighbors
         neighbors[i] = nth_neighbors
     end
     
@@ -125,7 +146,15 @@ end
     abstract type LatticeGeometry
 
 The `LatticeGeometry` abstract type represents the geometry of a lattice. It has the following subtypes:
+"""
+    abstract type LatticeGeometry
 
+The `LatticeGeometry` abstract type represents the geometry of a lattice. It has the following subtypes:
+
+- `SquareLattice`: A square lattice.
+- `TriangularLattice`: A triangular lattice.
+- `GenericLattice`: A generic lattice. Currently used for non-square and non-triangular lattices.
+"""
 - `SquareLattice`: A square lattice.
 - `TriangularLattice`: A triangular lattice.
 - `GenericLattice`: A generic lattice. Currently used for non-square and non-triangular lattices.
@@ -358,6 +387,36 @@ nearest to equal components otherwise. If `adsorptions` is `:full`, all sites ar
 ## Returns
 - `MLattice{C,SquareLattice}`: A square lattice object with `C` components.
 
+## Outer constructor for square lattice
+```julia
+LatticeSystem{SquareLattice}(;lattice_constant::Float64=1.0, 
+                            basis=[(0.0, 0.0, 0.0)], 
+                            supercell_dimensions=(4, 4, 1), 
+                            periodicity=(true, true, true), 
+                            cutoff_radii=[1.1, 1.5],
+                            occupations=[1, 2, 3, 4],
+                            adsorptions=:full)
+```
+Create a new `LatticeSystem` with the given square lattice parameters. The `occupations` and `adsorptions` argument 
+can be a vector of integers or the symbol `:full`; the former specifies the indices of the occupied sites, while the latter specifies that all sites are occupied.
+
+## Outer constructor for triangular lattice
+```julia
+LatticeSystem{TriangularLattice}(;lattice_constant::Float64=1.0, 
+                                basis=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)], 
+                                supercell_dimensions=(4, 2, 1), 
+                                periodicity=(true, true, true), 
+                                cutoff_radii::Vector{Float64}=[1.1, 1.5],
+                                occupations=[1, 2, 3, 4],
+                                adsorptions=:full)
+```
+Create a new `LatticeSystem` with the given triangular lattice parameters. Similar to the square lattice constructor, the `occupations` and `adsorptions` argument can be a vector of integers or the symbol `:full`.
+
+# Examples
+```@repl
+square_lattice  = LatticeSystem{SquareLattice}(;supercell_dimensions=(4,4,1))
+triangular_lattice = LatticeSystem{TriangularLattice}(;occupations=[1,3,5,7])
+```
 """
 mutable struct MLattice{C,G} <: AbstractLattice
     lattice_vectors::Matrix{Float64}

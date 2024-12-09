@@ -5,6 +5,7 @@ module Hamiltonians
 
 using Unitful
 using StaticArrays
+using StaticArrays
 
 export ClassicalHamiltonian
 export LatticeGasHamiltonian, GenericLatticeHamiltonian, MLatticeHamiltonian

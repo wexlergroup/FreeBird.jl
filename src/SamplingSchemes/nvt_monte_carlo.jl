@@ -32,6 +32,7 @@ function nvt_monte_carlo(
 
     current_lattice = deepcopy(lattice)
     current_energy = interacting_energy(current_lattice, h).val
+    current_energy = interacting_energy(current_lattice, h).val
     
     push!(energies, current_energy)
     push!(configurations, deepcopy(current_lattice))
@@ -66,6 +67,7 @@ function nvt_monte_carlo(
         generate_random_new_lattice_sample!(proposed_lattice)
 
         # Calculate the proposed energy
+        proposed_energy = interacting_energy(proposed_lattice, h).val
         proposed_energy = interacting_energy(proposed_lattice, h).val
 
         # Metropolis-Hastings acceptance criterion

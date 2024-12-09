@@ -91,6 +91,21 @@ function inter_component_energy_threaded(at1::AbstractSystem, at2::AbstractSyste
     return sum(energy)
 end
 
+function inter_component_energy_threaded(at1::AbstractSystem, at2::AbstractSystem, lj::LJParameters)
+    # build pairs of particles
+    pairs = [(i, j) for i in 1:length(at1), j in 1:length(at2)]
+    # @show pairs # DEBUG
+    energy = Array{typeof(0.0u"eV"), 1}(undef, length(pairs))
+    Threads.@threads for k in eachindex(pairs)
+        # @show i,j # DEBUG
+        (i, j) = pairs[k]
+        r = pbc_dist(position(at1, i), position(at2, j), at1)
+        energy[k] = lj_energy(r,lj)
+    end
+    # energy = energy*u"eV"
+    return sum(energy)
+end
+
 """
     intra_component_energy(at::AbstractSystem, lj::LJParameters)
 
@@ -150,8 +165,8 @@ function frozen_energy(at::AbstractSystem,
     end
     # inter-component interactions
     for i in 1:C
-        for j in (i+1):C
-            if frozen[i] && frozen[j] # both frozen
+        for j in 1:C
+            if frozen[i] && frozen[j] && i != j # both frozen and different
                 # @info "component $i and $j"
                 energy += inter_component_energy(components[i], components[j], ljs.lj_param_sets[i,j])
             end

@@ -12,10 +12,13 @@ using ..Potentials
 using ..Hamiltonians
 
 export AbstractWalker
-export AtomWalker, AtomWalkers, LJAtomWalkers
-export LatticeWalkers, LatticeSystem, LatticeWalker
+export AbstractLattice
+export AtomWalker
+export LatticeWalker
 export LatticeGeometry, SquareLattice, TriangularLattice, GenericLattice
+export MLattice, SLattice, GLattice
 export update_walker!
+export num_sites, occupied_site_count
 
 abstract type AbstractWalker end
 

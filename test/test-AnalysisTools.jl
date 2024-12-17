@@ -80,10 +80,15 @@ end
         @test_throws MethodError partition_function(0, [1.0], [0.0])
         @test_throws MethodError partition_function(1, [-1.0], [0.0])
         @test_throws MethodError partition_function(1, [1.0], [-1.0])
+        @test_throws DimensionMismatch partition_function(1.0, [0.5, 0.5], [0.0, 1.0, 10.0])
+        @test_throws DimensionMismatch partition_function(1.0, [0.3, 0.3, 0.4], [0.0, 1.0])
+
         @test_throws MethodError internal_energy(1.0, 1.0, 0.0)
         @test_throws MethodError internal_energy(0, [1.0], [0.0])
         @test_throws MethodError internal_energy(1, [-1.0], [0.0])
         @test_throws MethodError internal_energy(1, [1.0], [-1.0])
+        @test_throws DimensionMismatch internal_energy(1.0, [0.5, 0.5], [0.0, 1.0, 10.0])
+        @test_throws DimensionMismatch internal_energy(1.0, [0.3, 0.3, 0.4], [0.0, 1.0])
 
 
         # Correct single-term case

@@ -1,13 +1,16 @@
 """
-compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, positions::Matrix{Float64}, cutoff_radii::Tuple{Float64, Float64}, periodicity::Vector{Bool})
+compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, 
+                  positions::Matrix{Float64}, 
+                  cutoff_radii::Vector{Float64}, 
+                  periodicity::Tuple{Bool, Bool, Bool})
 
 Compute the nearest and next-nearest neighbors for each atom in a 3D lattice.
 
 # Arguments
 - `supercell_lattice_vectors::Matrix{Float64}`: The lattice vectors of the supercell.
 - `positions::Matrix{Float64}`: The positions of the atoms in the supercell.
-- `periodicity::Vector{Bool}`: A Boolean vector of length three indicating periodicity in each dimension (true for periodic, false for non-periodic).
-- `cutoff_radii::Tuple{Float64, Float64}`: The cutoff radii for the first and second nearest neighbors.
+- `periodicity::Tuple{Bool, Bool, Bool}`: A Boolean tuple of length three indicating periodicity in each dimension (true for periodic, false for non-periodic).
+- `cutoff_radii::Vector{Float64}`: The cutoff radii for the *index*-th nearest neighbors.
 
 # Returns
 - `neighbors::Vector{Tuple{Vector{Int}, Vector{Int}}}`: A vector of tuples containing the indices of the first and second nearest neighbors for each atom.
@@ -187,12 +190,20 @@ Throws an `ArgumentError` if the number of components does not match `C`.
                                components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
                                adsorptions::Union{Vector{Int},Symbol}=:full)
 
-Constructs a square lattice with the specified parameters. The `components` and `adsorptions` arguments can be a vector of integers specifying
+    MLattice{C,TriangularLattice}(; lattice_constant::Float64=1.0,
+                                  basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)],
+                                  supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 2, 1),
+                                  periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
+                                  cutoff_radii::Vector{Float64}=[1.1, 1.5],
+                                  components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
+                                  adsorptions::Union{Vector{Int},Symbol}=:full)
+
+Constructs a square/triangular lattice with the specified parameters. The `components` and `adsorptions` arguments can be a vector of integers specifying
 the indices of the occupied sites, or a symbol. If `components` is `:equal`, the lattice is divided into `C` equal components when possible, or 
 nearest to equal components otherwise. If `adsorptions` is `:full`, all sites are classified as adsorption sites.
 
 ## Returns
-- `MLattice{C,SquareLattice}`: A square lattice object with `C` components.
+- `MLattice{C,G}`: A square/triangular lattice object with `C` components.
 
 """
 mutable struct MLattice{C,G} <: AbstractLattice
@@ -231,6 +242,19 @@ mutable struct MLattice{C,G} <: AbstractLattice
     end
 end
 
+"""
+    split_into_subarrays(arr::AbstractVector, N::Int)
+
+Split an array into `N` subarrays of approximately equal size.
+
+# Arguments
+- `arr::AbstractVector`: The array to split.
+- `N::Int`: The number of subarrays to create.
+
+# Returns
+- `subarrays::Vector{Vector{eltype(arr)}}`: A vector of subarrays.
+
+"""
 function split_into_subarrays(arr::AbstractVector, N::Int)
     n = length(arr)  # Total number of elements
     base_size = div(n, N)  # Base size of each subarray
@@ -249,11 +273,32 @@ function split_into_subarrays(arr::AbstractVector, N::Int)
     return subarrays
 end
 
+"""
+    mlattice_setup(C::Int, 
+                     basis::Vector{Tuple{Float64, Float64, Float64}},
+                     supercell_dimensions::Tuple{Int64, Int64, Int64},
+                     components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol},
+                     adsorptions::Union{Vector{Int}, Vector{Bool}, Symbol})
+
+Setup the components and adsorptions for a lattice.
+
+# Arguments
+- `C::Int`: The number of components.
+- `basis::Vector{Tuple{Float64, Float64, Float64}}`: The basis of the lattice.
+- `supercell_dimensions::Tuple{Int64, Int64, Int64}`: The dimensions of the supercell.
+- `components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}`: The components of the lattice.
+- `adsorptions::Union{Vector{Int}, Vector{Bool}, Symbol}`: The adsorption sites on the lattice.
+
+# Returns
+- `lattice_comp::Vector{Vector{Bool}}`: The components of the lattice.
+- `lattice_adsorptions::Vector{Bool}`: The adsorption sites on the lattice.
+
+"""
 function mlattice_setup(C::Int, 
-                        basis::Vector{Tuple{Float64, Float64, Float64}},
-                        supercell_dimensions::Tuple{Int64, Int64, Int64},
+                        basis::Vector{Tuple{Float64,Float64,Float64}},
+                        supercell_dimensions::Tuple{Int64,Int64,Int64},
                         components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol},
-                        adsorptions::Union{Vector{Int}, Vector{Bool}, Symbol})
+                        adsorptions::Union{Vector{Int},Vector{Bool},Symbol})
     dim = prod(supercell_dimensions) * length(basis)
     lattice_adsorptions = zeros(Bool, dim)
 
@@ -327,6 +372,38 @@ function MLattice{C,TriangularLattice}(; lattice_constant::Float64=1.0,
     
 end
 
+
+
+
+
+const SLattice{G} = MLattice{1,G} # alias for single-component lattices
+
+const GLattice{C} = MLattice{C,GenericLattice} # alias for generic lattices
+
+num_lattice_components(lattice::MLattice{C,G}) where {C,G} = C
+
+"""
+    num_sites(lattice::AbstractLattice)
+
+Returns the total number of sites in a lattice given a `AbstractLattice` object. Returns the total number of sites.
+"""
+function num_sites(lattice::AbstractLattice)
+    return prod(lattice.supercell_dimensions) * length(lattice.basis)
+end
+
+"""
+    occupied_site_count(MLattice::MLattice{C})
+
+Returns the number of occupied sites in each component of a lattice in an array.
+"""
+function occupied_site_count(MLattice::MLattice{C}) where C
+    occupancy = Array{Int}(undef, C)
+    for i in eachindex(MLattice.components)
+        occupancy[i] = sum(MLattice.components[i])
+    end
+    return occupancy
+end
+
 """
     mutable struct LatticeWalker
 
@@ -343,29 +420,7 @@ LatticeWalker(configuration::AbstractLattice; energy=0.0, iter=0)
 ```
 Create a new `LatticeWalker` with the given configuration and optional energy and iteration number.
 
-"""
-
-
-# number_of_lattice_components(lattice::SLattice) = 1
-
-const SLattice{G} = MLattice{1,G} # alias for single-component lattices
-
-const GLattice{C} = MLattice{C,GenericLattice} # alias for generic lattices
-
-num_lattice_components(lattice::MLattice{C,G}) where {C,G} = C
-
-function num_sites(lattice::AbstractLattice)
-    return prod(lattice.supercell_dimensions) * length(lattice.basis)
-end
-
-function occupied_site_count(MLattice::MLattice{C}) where C
-    occupancy = Array{Int}(undef, C)
-    for i in eachindex(MLattice.components)
-        occupancy[i] = sum(MLattice.components[i])
-    end
-    return occupancy
-end
-
+"""  
 mutable struct LatticeWalker{C} <: AbstractWalker
     configuration::AbstractLattice
     energy::typeof(0.0u"eV")

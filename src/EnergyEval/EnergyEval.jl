@@ -64,19 +64,6 @@ Compute the energy between two components of a system using the Lennard-Jones po
 
 """
 function inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, lj::LJParameters)
-    energy = 0.0u"eV"
-    # build pairs of particles
-    pairs = [(i, j) for i in 1:length(at1), j in 1:length(at2)]
-    # @show pairs # DEBUG
-    for (i, j) in pairs
-        # @show i,j # DEBUG
-        r = pbc_dist(position(at1, i), position(at2, j), at1)
-        energy += lj_energy(r,lj)
-    end
-    return energy
-end
-
-function inter_component_energy_threaded(at1::AbstractSystem, at2::AbstractSystem, lj::LJParameters)
     # build pairs of particles
     pairs = [(i, j) for i in 1:length(at1), j in 1:length(at2)]
     # @show pairs # DEBUG
@@ -423,12 +410,14 @@ Compute the interaction energy of a lattice configuration using the Hamiltonian 
 
 """
 function interacting_energy(lattice::SLattice, h::GenericLatticeHamiltonian{N,U}) where {N,U}
+    # for SLattice with a single-component Hamiltonian
     e_interaction::U = lattice_interaction_energy(lattice.components[1], lattice.neighbors, h)
     e_adsorption::U = sum(lattice.components[1] .& lattice.adsorptions) * h.on_site_interaction
     return e_interaction + e_adsorption
 end
 
 function interacting_energy(lattice::SLattice, h::MLatticeHamiltonian{C,N,U}) where {C,N,U}
+    # for SLattice with a multi-component Hamiltonian, taking the first element of the Hamiltonian matrix
     ham = h.Hamiltonians[1,1]
     e_interaction::U = lattice_interaction_energy(lattice.components[1], lattice.neighbors, ham)
     e_adsorption::U = sum(lattice.components[1] .& lattice.adsorptions) * ham.on_site_interaction
@@ -449,6 +438,7 @@ Compute the interaction energy of a multi-component lattice configuration using 
 
 """
 function interacting_energy(lattice::MLattice{C,G}, h::MLatticeHamiltonian{C,N,U}) where {C,G,N,U}
+    # for MLattice with a multi-component Hamiltonian
     adsorption_energy = 0.0*unit(h.Hamiltonians[1,1].on_site_interaction)
     interaction_energy = 0.0*unit(h.Hamiltonians[1,1].on_site_interaction)
     for i in 1:C

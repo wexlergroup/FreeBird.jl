@@ -212,10 +212,7 @@ end
 Append an `AtomWalker` object to a file.
 """
 function append_walker(filename::String, at::AtomWalker{C}) where C
-    # ats = read_walkers(filename)
     sys = convert_walker_to_system(at)
-    # push!(ats, at)
-    # write_walkers(filename, ats)
     write_frame(filename, ExtXYZ.write_dict(Atoms(sys)), append=true)
 end
 

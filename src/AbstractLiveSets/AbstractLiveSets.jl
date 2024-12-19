@@ -13,7 +13,6 @@ export LJAtomWalkers, LatticeGasWalkers
 
 abstract type AbstractLiveSet end
 
-# Base.eltype(::AbstractLiveSet{T}) where {T} = T
 
 include("AtomLiveSets.jl")
 

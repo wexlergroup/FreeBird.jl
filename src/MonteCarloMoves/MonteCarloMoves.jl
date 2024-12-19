@@ -26,13 +26,4 @@ include("random_walks.jl")
 
 include("nve_walks.jl")
 
-
-
-
-
-
-
-
-
-
 end # module MonteCarloMoves

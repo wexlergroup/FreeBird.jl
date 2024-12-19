@@ -204,6 +204,11 @@ function generate_random_new_lattice_sample!(lattice::MLattice{C}) where C
     return lattice
 end
 
+"""
+    generate_random_new_lattice_sample!(lattice::SLattice)
+
+Generate a new random sample for the single-component lattice system.
+"""
 function generate_random_new_lattice_sample!(lattice::SLattice)
     number_occupied_sites = sum(lattice.components[1])
     # flush occupancy

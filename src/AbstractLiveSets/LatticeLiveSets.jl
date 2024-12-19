@@ -16,7 +16,7 @@ Assigns energy to the given `walker` based on the `hamiltonian`. If `perturb_ene
 - `walker::LatticeWalker{C}`: The walker with the assigned energy.
 """
 function assign_energy!(walker::LatticeWalker{C}, hamiltonian::ClassicalHamiltonian; perturb_energy::Float64=0.0) where C
-    # Assign the energy to the walker, if perturb_energy is non-zero, give all walkers a small random (positive or negative) perturbation
+    # Assign the energy to the walker and, if perturb_energy is non-zero, give all walkers a small random (positive or negative) perturbation
     walker.energy = interacting_energy(walker.configuration, hamiltonian) + perturb_energy * (rand() - 0.5) * unit(walker.energy)
     return walker
 end

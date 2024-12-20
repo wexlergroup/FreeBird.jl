@@ -39,8 +39,8 @@ where \$N\$ is the number of walkers and \$i\$ is the iteration number.
 - A vector of \$\\omega\$ factors.
 """
 function ωᵢ(iters::Vector{Int}, n_walkers::Int)
-    ω_i = (1/(n_walkers+1))*(n_walkers/(n_walkers+1)).^iters
-    return ω_i
+    ωi = (1/(n_walkers+1))*(n_walkers/(n_walkers+1)).^iters
+    return ωi
 end
 
 """
@@ -113,10 +113,10 @@ where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann cons
 # Returns
 - The constant-volume heat capacity.
 """
-function cv(β::Float64, 
+function cv(β::Float64,
             ωi::Vector{Float64}, 
             Ei::Vector{Float64},
-            dof::Int)
+            dof::Int64)
     z = partition_function(β, ωi, Ei)
     u = internal_energy(β, ωi, Ei)
     kb = 8.617333262e-5 # eV/K

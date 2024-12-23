@@ -1,6 +1,7 @@
 using FreeBird
 using Test
 
+using DataFrames
 using Unitful
 using AtomsBase
 

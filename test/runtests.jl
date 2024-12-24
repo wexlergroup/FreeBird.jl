@@ -4,6 +4,7 @@ using Test
 using DataFrames
 using Unitful
 using AtomsBase
+using LinearAlgebra
 
 include("test-Potentials.jl")
 

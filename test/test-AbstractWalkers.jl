@@ -109,7 +109,163 @@
         end
     end
 
+    @testset "LatticeWalkers.jl test" begin
 
+        @testset "compute_neighbors function" begin
+            # Simple cubic lattice
+            lattice = [
+                2.0 0.0 0.0;
+                0.0 2.0 0.0;
+                0.0 0.0 2.0
+            ]
+
+            positions = [
+                0.0 0.0 0.0;
+                1.0 1.0 0.0;
+                0.0 1.0 1.0;
+                1.0 0.0 1.0
+                1.0 1.0 1.0
+            ]
+
+            periodicity = (false, false, false)
+
+            cutoff_radii = [1.0, 1.5]
+
+            neighbors = compute_neighbors(lattice, positions, periodicity, cutoff_radii)
+
+            @test sort(neighbors[1][1]) == []
+            @test sort(neighbors[1][2]) == [2, 3, 4]
+            @test sort(neighbors[2][1]) == [5]
+            @test sort(neighbors[2][2]) == [1, 3, 4]            
+            @test sort(neighbors[5][1]) == [2, 3, 4]
+            @test sort(neighbors[5][2]) == []
+
+            # Periodic boundary conditions
+            lattice = [
+                2.0 0.0 0.0;
+                0.0 2.0 0.0;
+                0.0 0.0 2.0
+            ]
+
+            positions = [
+                0.0 0.0 0.0;
+                1.9 0.0 0.0   
+            ]
+
+            periodicity = (true, false, false)
+            cutoff_radii = [1.5, 2.0]
+
+            neighbors = compute_neighbors(lattice, positions, periodicity, cutoff_radii)
+
+            @test neighbors[1][1] == [2]
+            @test length(neighbors[1][2]) == 0
+
+        end
+
+        @testset "lattice_positions function" begin
+            # Simple cubic lattice
+            lattice_vectors = [
+                1.0 0.0 0.0
+                0.0 1.0 0.0
+                0.0 0.0 1.0
+            ]
+
+            basis = [(0.0, 0.0, 0.0)]
+            dims = (2, 2, 1)
+
+            positions = lattice_positions(lattice_vectors, basis, dims)
+
+            @test size(positions) == (4, 3)
+            @test positions[1,:] ≈ [0.0, 0.0, 0.0]
+            @test positions[2,:] ≈ [1.0, 0.0, 0.0]
+            @test positions[3,:] ≈ [0.0, 1.0, 0.0]
+            @test positions[4,:] ≈ [1.0, 1.0, 0.0]
+
+            # FCC lattice
+            lattice_vectors = [
+                1.0 0.0 0.0
+                0.0 1.0 0.0
+                0.0 0.0 1.0
+            ]
+            basis = [
+                (0.0, 0.0, 0.0),
+                (0.5, 0.5, 0.0),
+                (0.5, 0.0, 0.5),
+                (0.0, 0.5, 0.5)
+            ]
+            dims = (1, 1, 1)
+            
+            positions = lattice_positions(lattice_vectors, basis, dims)
+            
+            @test size(positions) == (4, 3)
+            for pos in eachrow(positions)
+                @test 0.0 <= pos[1] <= 1.0
+                @test 0.0 <= pos[2] <= 1.0
+                @test 0.0 <= pos[3] <= 1.0
+            end
+        
+            # Non-orthogonal lattice
+                lattice_vectors = [
+                    1.0 0.5 0.0
+                    0.0 1.0 0.0
+                    0.0 0.0 1.0
+                ]
+
+                basis = [(0.0, 0.0, 0.0)]
+                dims = (2, 2, 1)
+                
+                positions = lattice_positions(lattice_vectors, basis, dims)
+                
+                @test size(positions) == (4, 3)
+                @test positions[2,1] > positions[1,1]
+                @test positions[3,2] > positions[1,2]
+            
+
+        end
+        
+        @testset "split_into_subarrays function" begin
+            # 
+        end
+
+        @testset "mlattice_setup function" begin
+            #
+        end
+
+        @testset "MLattice function" begin
+            # Test default construction
+            lattice = MLattice{2,SquareLattice}()
+            @test size(lattice.lattice_vectors) == (3,3)
+            @test lattice.supercell_dimensions == (4,4,1)
+            @test length(lattice.components) == 2
+
+            # Test custom parameters
+            lattice = MLattice{3,SquareLattice}(
+                lattice_constant=2.0,
+                supercell_dimensions=(6,6,1),
+                components=[[1],[2],[3,4]],
+                adsorptions=[1,2]
+            )
+
+            @test lattice.lattice_vectors[1,1] == 2.0
+            @test length(lattice.components) == 3
+            @test count(lattice.adsorptions) == 2
+
+            # Test triangular lattice
+            lattice = MLattice{2,TriangularLattice}()
+            @test size(lattice.lattice_vectors) == (3,3)
+            @test length(lattice.basis) == 2
+            @test lattice.supercell_dimensions == (4,2,1)
+            
+            @test_throws BoundsError MLattice{2,TriangularLattice}(
+                components=[[1,2]], # Wrong number of components
+                adsorptions=:full
+            )
+        end
+
+        @testset "LatticeWalker structure" begin
+            #
+        end
+
+    end
 
 end
-

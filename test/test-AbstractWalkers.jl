@@ -231,12 +231,20 @@
             #
         end
 
-        @testset "MLattice function" begin
+        @testset "MLattice structure" begin
             # Test default construction
             lattice = MLattice{2,SquareLattice}()
+
+            @test lattice |> typeof ==  MLattice{2, SquareLattice}
             @test size(lattice.lattice_vectors) == (3,3)
+            @test lattice.basis == [(0.0, 0.0, 0.0)]
             @test lattice.supercell_dimensions == (4,4,1)
+            @test lattice.periodicity == (true, true, false)
+            @test lattice.cutoff_radii == [1.1, 1.5]            
             @test length(lattice.components) == 2
+            @test count(lattice.adsorptions) == 16
+            @test num_sites(lattice) == 16
+            @test length(occupied_site_count(lattice)) == length(lattice.components)
 
             # Test custom parameters
             lattice = MLattice{3,SquareLattice}(
@@ -246,15 +254,26 @@
                 adsorptions=[1,2]
             )
 
-            @test lattice.lattice_vectors[1,1] == 2.0
+            @test lattice |> typeof ==  MLattice{3, SquareLattice}
+            @test lattice.lattice_vectors[1,1] == lattice.lattice_vectors[2,2] == 2.0
+            @test lattice.basis == [(0.0, 0.0, 0.0)]
+            @test lattice.supercell_dimensions == (6,6,1)
+            @test lattice.periodicity == (true, true, false)
+            @test lattice.cutoff_radii == [1.1, 1.5]
             @test length(lattice.components) == 3
             @test count(lattice.adsorptions) == 2
+            @test num_sites(lattice) == 36
+            @test length(occupied_site_count(lattice)) == length(lattice.components)
 
             # Test triangular lattice
             lattice = MLattice{2,TriangularLattice}()
-            @test size(lattice.lattice_vectors) == (3,3)
+            @test lattice.lattice_vectors[2, 2] == sqrt(3)
             @test length(lattice.basis) == 2
             @test lattice.supercell_dimensions == (4,2,1)
+            @test lattice.periodicity == (true, true, false)
+            @test lattice.cutoff_radii == [1.1, 1.5]
+            @test length(lattice.components) == 2
+
             
             @test_throws BoundsError MLattice{2,TriangularLattice}(
                 components=[[1,2]], # Wrong number of components
@@ -263,7 +282,34 @@
         end
 
         @testset "LatticeWalker structure" begin
-            #
+            # Test default parameters
+            lattice = MLattice{1,SquareLattice}()
+            walker = LatticeWalker(lattice)
+
+            @test walker |> typeof == LatticeWalker{1}
+            @test walker.energy == 0.0u"eV"
+            @test walker.iter == 0
+            
+            walkers = [walker, LatticeWalker(lattice)]
+            @test length(walkers) == 2
+            @test sprint(show, walkers) isa String
+
+            # Test custom constructor
+            lattice = MLattice{3,SquareLattice}(
+                lattice_constant=2.0,
+                supercell_dimensions=(6,6,1),
+                components=[[1],[2],[3,4]],
+                adsorptions=[1,2]
+            )
+
+            walker = LatticeWalker(lattice, energy=1.5u"eV", iter=10)
+            @test walker |> typeof == LatticeWalker{3}
+            @test walker.energy == 1.5u"eV"
+            @test walker.iter == 10
+    
+            walkers = [walker, LatticeWalker(lattice)]
+            @test length(walkers) == 2
+            @test sprint(show, walkers) isa String
         end
 
     end

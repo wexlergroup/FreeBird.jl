@@ -131,7 +131,7 @@
 
             cutoff_radii = [1.0, 1.5]
 
-            neighbors = compute_neighbors(lattice, positions, periodicity, cutoff_radii)
+            neighbors = AbstractWalkers.compute_neighbors(lattice, positions, periodicity, cutoff_radii)
 
             @test sort(neighbors[1][1]) == []
             @test sort(neighbors[1][2]) == [2, 3, 4]
@@ -155,7 +155,7 @@
             periodicity = (true, false, false)
             cutoff_radii = [1.5, 2.0]
 
-            neighbors = compute_neighbors(lattice, positions, periodicity, cutoff_radii)
+            neighbors = AbstractWalkers.compute_neighbors(lattice, positions, periodicity, cutoff_radii)
 
             @test neighbors[1][1] == [2]
             @test length(neighbors[1][2]) == 0
@@ -173,7 +173,7 @@
             basis = [(0.0, 0.0, 0.0)]
             dims = (2, 2, 1)
 
-            positions = lattice_positions(lattice_vectors, basis, dims)
+            positions = AbstractWalkers.lattice_positions(lattice_vectors, basis, dims)
 
             @test size(positions) == (4, 3)
             @test positions[1,:] ≈ [0.0, 0.0, 0.0]
@@ -195,7 +195,7 @@
             ]
             dims = (1, 1, 1)
             
-            positions = lattice_positions(lattice_vectors, basis, dims)
+            positions = AbstractWalkers.lattice_positions(lattice_vectors, basis, dims)
             
             @test size(positions) == (4, 3)
             for pos in eachrow(positions)
@@ -214,7 +214,7 @@
                 basis = [(0.0, 0.0, 0.0)]
                 dims = (2, 2, 1)
                 
-                positions = lattice_positions(lattice_vectors, basis, dims)
+                positions = AbstractWalkers.lattice_positions(lattice_vectors, basis, dims)
                 
                 @test size(positions) == (4, 3)
                 @test positions[2,1] > positions[1,1]

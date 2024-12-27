@@ -43,6 +43,7 @@
         
         # DataFrame interface
         df = DataFrame(iter = [1, 2, 3], emax = [1.0, 1.5, 2.0])
+        β = 1.0
         βs = [0.1, 1.0, 10.0]
         n_walkers = 4
         result = cv(df, βs, dof, n_walkers)

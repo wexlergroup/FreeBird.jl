@@ -22,9 +22,9 @@ export num_sites, occupied_site_count
 
 abstract type AbstractWalker end
 
-include("AtomWalkers.jl")
+include("atomistic_walkers.jl")
 
-include("LatticeWalkers.jl")
+include("lattice_walkers.jl")
 
 include("helpers.jl")
 

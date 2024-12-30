@@ -14,8 +14,8 @@ export LJAtomWalkers, LatticeGasWalkers
 abstract type AbstractLiveSet end
 
 
-include("AtomLiveSets.jl")
+include("atomistic_livesets.jl")
 
-include("LatticeLiveSets.jl")
+include("lattice_livesets.jl")
     
 end # module AbstractLiveSets

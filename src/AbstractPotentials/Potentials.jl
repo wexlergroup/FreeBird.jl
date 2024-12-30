@@ -9,7 +9,9 @@ export LJParameters, lj_energy
 export CompositeLJParameters
 export LennardJonesParametersSets
 
-abstract type LennardJonesParametersSets end
+abstract type AbstractPotentials end
+
+abstract type LennardJonesParametersSets <: AbstractPotentials end
 
 
 """

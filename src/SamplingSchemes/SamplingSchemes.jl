@@ -25,7 +25,7 @@ export exact_enumeration, nvt_monte_carlo, wang_landau
 
 abstract type SamplingParameters end
 
-include("NestedSampling.jl")
+include("nested_sampling.jl")
 
 include("exact_enumeration.jl")
 

@@ -57,44 +57,6 @@ A type for generating a new walker from a random configuration. Currently, it is
 """
 struct MCNewSample <: MCRoutine end
 
-"""
-    MCDemonWalk <: MCRoutine
-
-A Monte Carlo routine for performing demon walks.
-
-# Fields
-- `e_demon_tolerance::typeof(0.0u"eV")`: The tolerance for the energy difference in the demon walk. Tighter tolerance will lead to lower overall acceptance of the demon walk.
-- `demon_energy_threshold::typeof(0.0u"eV")`: The energy threshold for the demon walk. Lower threshold will limit the exploration of the potential energy landscape but increase the overall acceptance of the demon walk.
-- `demon_gain_threshold::typeof(0.0u"eV")`: The gain threshold for the demon during each walk. Similar to the `demon_energy_threshold`, lower gain threshold will limit the exploration of the potential energy landscape but increase the overall acceptance of the demon walk.
-- `max_add_steps::Int`: The maximum number of steps to add in the demon walk if the demon energy `e_demon` is higher than the `demon_energy_threshold`.
-"""
-@kwdef struct MCDemonWalk <: MCRoutine 
-    e_demon_tolerance::typeof(0.0u"eV")=1e-9u"eV"
-    demon_energy_threshold::typeof(0.0u"eV")=Inf*u"eV"
-    demon_gain_threshold::typeof(0.0u"eV")=Inf*u"eV"
-    max_add_steps::Int=1_000_000
-end
-
-"""
-    struct MixedMCRoutine <: MCRoutine
-
-A mutable struct representing a mixed Monte Carlo routine, where the main routine is used for the majority of the steps, 
-    and the backup routine is used when the main routine fails to accept a move. Currently, it is intended to use `MCRandomWalk` 
-    as the main routine and `MCDemonWalk` as the backup routine.
-
-# Fields
-- `main_routine::MCRoutine`: The main Monte Carlo routine.
-- `back_up_routine::MCRoutine`: The backup Monte Carlo routine.
-- `ns_params_main::NestedSamplingParameters`: The nested sampling parameters for the main routine.
-- `ns_params_back_up::NestedSamplingParameters`: The nested sampling parameters for the backup routine.
-"""
-@kwdef mutable struct MixedMCRoutine <: MCRoutine
-    main_routine::MCRoutine=MCRandomWalk()
-    back_up_routine::MCRoutine=MCDemonWalk()
-    ns_params_main::NestedSamplingParameters=NestedSamplingParameters(1000, 0.1, 0.1, 1e-6, 0.1, 0, 10)
-    ns_params_back_up::NestedSamplingParameters=NestedSamplingParameters(10000, 0.01, 0.01, 1e-6, .01, 0, 10)
-end
-
 
 
 
@@ -288,51 +250,6 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
 end
 
 """
-    nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCDemonWalk)
-
-Perform a single step of the nested sampling algorithm using the Monte Carlo demon walk routine.
-
-# Arguments
-- `liveset::AtomWalkers`: The set of atom walkers representing the current state of the system.
-- `ns_params::NestedSamplingParameters`: The parameters for the nested sampling algorithm.
-- `mc_routine::MCDemonWalk`: The parameters for the Monte Carlo demon walk.
-
-# Returns
-- `iter`: The iteration number after the step.
-- `emax`: The maximum energy recorded during the step.
-- `liveset`: The updated set of atom walkers after the step.
-- `ns_params`: The updated nested sampling parameters after the step.
-"""
-function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCDemonWalk)
-    sort_by_energy!(liveset)
-    ats = liveset.walkers
-    lj = liveset.lj_potential
-    iter::Union{Missing,Int} = missing
-    emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
-    pick_a_random_walker = rand(ats[2:end])
-    to_walk = deepcopy(pick_a_random_walker)
-    accept, rate, at, _, _ = MC_nve_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size;
-                                        e_demon_tolerance=mc_routine.e_demon_tolerance,
-                                        demon_energy_threshold=mc_routine.demon_energy_threshold,
-                                        demon_gain_threshold=mc_routine.demon_gain_threshold,
-                                        max_add_steps=mc_routine.max_add_steps)
-    @info "acceptance rate: $rate, emax: $emax, is_accepted: $accept"
-    if accept
-        push!(ats, at)
-        popfirst!(ats)
-        update_iter!(liveset)
-        ns_params.fail_count = 0
-        iter = liveset.walkers[1].iter
-    else
-        @warn "Failed to accept MC move"
-        emax = missing
-        ns_params.fail_count += 1
-    end
-    adjust_step_size(ns_params, rate)
-    return iter, emax, liveset, ns_params
-end
-
-"""
     adjust_step_size(ns_params::NestedSamplingParameters, rate::Float64)
 
 Adjusts the step size of the nested sampling algorithm based on the acceptance rate. 
@@ -443,43 +360,4 @@ function nested_sampling_loop!(liveset::LatticeGasWalkers,
         write_ls_every_n(liveset, i, save_strategy)
     end
     return df, liveset, ns_params
-end
-
-
-"""
-    nested_sampling_loop!(liveset::AtomWalkers, n_steps::Int64, mc_routine::MixedMCRoutine, save_strategy::DataSavingStrategy)
-
-Perform a nested sampling loop for a given number of steps.
-
-# Arguments
-- `liveset::AtomWalkers`: The initial set of walkers.
-- `n_steps::Int64`: The number of steps to perform.
-- `mc_routine::MixedMCRoutine`: The mixed Monte Carlo routine to use.
-- `save_strategy::DataSavingStrategy`: The strategy for saving data.
-
-# Returns
-- `df::DataFrame`: The data frame containing the iteration number and maximum energy for each step.
-- `liveset::AtomWalkers`: The updated set of walkers.
-- `mc_routine.ns_params_main`: The updated nested sampling parameters for the main routine.
-"""
-function nested_sampling_loop!(liveset::AtomWalkers,  
-                                n_steps::Int64, 
-                                mc_routine::MixedMCRoutine,
-                                save_strategy::DataSavingStrategy)
-    df = DataFrame(iter=Int[], emax=Float64[])
-    for i in 1:n_steps
-        write_walker_every_n(liveset.walkers[1], i, save_strategy)
-        iter, emax, liveset, mc_routine.ns_params_main = nested_sampling_step!(liveset, mc_routine.ns_params_main, mc_routine.main_routine)
-        if mc_routine.ns_params_main.fail_count >= mc_routine.ns_params_main.allowed_fail_count
-            @warn "Failed to accept $(mc_routine.main_routine) move $(mc_routine.ns_params_main.allowed_fail_count) times in a row. Switching to back up routine $(mc_routine.back_up_routine)!"
-            mc_routine.ns_params_main.fail_count = 0
-            iter, emax, liveset, mc_routine.ns_params_back_up = nested_sampling_step!(liveset, mc_routine.ns_params_back_up, mc_routine.back_up_routine)
-        end
-        if !(iter isa typeof(missing))
-            push!(df, (iter, emax.val))
-        end
-        write_df_every_n(df, i, save_strategy)
-        write_ls_every_n(liveset, i, save_strategy)
-    end
-    return df, liveset, mc_routine.ns_params_main
 end

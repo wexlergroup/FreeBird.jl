@@ -1,7 +1,7 @@
 """
 Method for defining and implementing Hamiltonians.
 """
-module Hamiltonians
+module AbstractHamiltonians
 
 using Unitful
 using StaticArrays

@@ -5,7 +5,7 @@ import Unitful: unit
 using ..AbstractWalkers
 using ..EnergyEval
 using ..AbstractPotentials
-using ..Hamiltonians
+using ..AbstractHamiltonians
 
 export AbstractLiveSet
 export AtomWalkers, LatticeWalkers

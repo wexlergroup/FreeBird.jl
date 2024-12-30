@@ -5,7 +5,7 @@ using Reexport
 @reexport using Unitful
 
 include("AbstractHamiltonians/Hamiltonians.jl")
-@reexport using .Hamiltonians
+@reexport using .AbstractHamiltonians
 
 include("AbstractPotentials/Potentials.jl")
 @reexport using .AbstractPotentials

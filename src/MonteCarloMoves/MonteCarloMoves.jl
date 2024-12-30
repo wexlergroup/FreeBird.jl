@@ -12,7 +12,7 @@ using StaticArrays
 # using LinearAlgebra
 
 using ..AbstractPotentials
-using ..Hamiltonians
+using ..AbstractHamiltonians
 using ..AbstractWalkers
 using ..EnergyEval
 

@@ -14,7 +14,7 @@ using ..AbstractWalkers
 using ..AbstractLiveSets
 using ..EnergyEval
 using ..FreeBirdIO
-using ..Hamiltonians
+using ..AbstractHamiltonians
 
 export NestedSamplingParameters, LatticeNestedSamplingParameters
 export sort_by_energy!, nested_sampling_step!

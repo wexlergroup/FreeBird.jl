@@ -9,7 +9,7 @@ using Random
 using LinearAlgebra
 using Statistics
 using ..AbstractPotentials
-using ..Hamiltonians
+using ..AbstractHamiltonians
 
 export AbstractWalker
 export AbstractLattice

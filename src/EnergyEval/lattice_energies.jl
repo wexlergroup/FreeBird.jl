@@ -1,44 +1,4 @@
 """
-    interacting_energy(lattice::SLattice, h::LatticeGasHamiltonian)
-
-Compute the interaction energy of a lattice configuration using the Hamiltonian parameters.
-
-# Arguments
-- `lattice::SLattice`: The lattice configuration.
-- `h::LatticeGasHamiltonian`: The lattice-gas Hamiltonian parameters.
-
-# Returns
-- `e_interaction::Float64`: The interaction energy of the lattice configuration.
-
-"""
-function interacting_energy(lattice::SLattice, h::LatticeGasHamiltonian)
-    e_adsorption = sum(lattice.occupations .& lattice.adsorptions) * h.adsorption_energy
-    e_nn = 0.0u"eV"
-    e_nnn = 0.0u"eV"
-
-    for index in 1:length(lattice.occupations)
-        if lattice.occupations[index]
-            # Compute nearest-neighbor interaction energy
-            for nn in lattice.neighbors[index][1]
-                if lattice.occupations[nn]
-                    e_nn += h.nn_interaction_energy / 2
-                end
-            end
-
-            # Compute next-nearest-neighbor interaction energy
-            for nnn in lattice.neighbors[index][2]
-                if lattice.occupations[nnn]
-                    e_nnn += h.nnn_interaction_energy / 2
-                end
-            end
-        end
-    end
-
-    e_interaction = e_adsorption + e_nn + e_nnn
-    return e_interaction
-end
-
-"""
     lattice_interaction_energy(lattice_occupations::Vector{Bool}, lattice_neighbors::Vector{Vector{Vector{Int64}}}, h::GenericLatticeHamiltonian{N,U})
 
 Compute the interaction energy of a lattice configuration using the Hamiltonian parameters.

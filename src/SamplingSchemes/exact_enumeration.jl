@@ -86,7 +86,7 @@ function enumerate_lattices(init_lattice::SLattice{G}) where {G}
 end
 
 """
-    exact_enumeration(lattice::SLattice{G}, cutoff_radii::Tuple{Float64, Float64}, h::LatticeGasHamiltonian) where G
+    exact_enumeration(lattice::SLattice{G}, cutoff_radii::Tuple{Float64, Float64}, h::ClassicalHamiltonian) where G
 
 Enumerate all possible configurations of a lattice system and compute the energy of each configuration.
 

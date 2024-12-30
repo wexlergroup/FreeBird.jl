@@ -9,7 +9,7 @@ using Random
 using Statistics
 
 using ..MonteCarloMoves
-using ..Potentials
+using ..AbstractPotentials
 using ..AbstractWalkers
 using ..AbstractLiveSets
 using ..EnergyEval

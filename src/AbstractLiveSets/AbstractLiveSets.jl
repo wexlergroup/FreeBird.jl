@@ -4,7 +4,7 @@ import Unitful: unit
 
 using ..AbstractWalkers
 using ..EnergyEval
-using ..Potentials
+using ..AbstractPotentials
 using ..Hamiltonians
 
 export AbstractLiveSet

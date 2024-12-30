@@ -1,7 +1,7 @@
 """
 Module for defining and implementing potentials.
 """
-module Potentials
+module AbstractPotentials
 
 using Unitful
 
@@ -9,9 +9,9 @@ export LJParameters, lj_energy
 export CompositeLJParameters
 export LennardJonesParametersSets
 
-abstract type AbstractPotentials end
+abstract type AbstractPotential end
 
-abstract type LennardJonesParametersSets <: AbstractPotentials end
+abstract type LennardJonesParametersSets <: AbstractPotential end
 
 
 """

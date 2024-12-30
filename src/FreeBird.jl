@@ -8,7 +8,7 @@ include("AbstractHamiltonians/Hamiltonians.jl")
 @reexport using .Hamiltonians
 
 include("AbstractPotentials/Potentials.jl")
-@reexport using .Potentials
+@reexport using .AbstractPotentials
 
 include("AbstractWalkers/AbstractWalkers.jl")
 @reexport using .AbstractWalkers

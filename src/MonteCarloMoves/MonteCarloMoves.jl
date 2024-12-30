@@ -11,7 +11,7 @@ using Unitful
 using StaticArrays
 # using LinearAlgebra
 
-using ..Potentials
+using ..AbstractPotentials
 using ..Hamiltonians
 using ..AbstractWalkers
 using ..EnergyEval

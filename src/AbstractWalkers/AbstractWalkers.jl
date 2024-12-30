@@ -8,7 +8,7 @@ using Unitful
 using Random
 using LinearAlgebra
 using Statistics
-using ..Potentials
+using ..AbstractPotentials
 using ..Hamiltonians
 
 export AbstractWalker

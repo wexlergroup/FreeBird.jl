@@ -7,7 +7,7 @@ using AtomsBase
 using Unitful
 using StaticArrays
 using ..AbstractWalkers
-using ..Potentials
+using ..AbstractPotentials
 using ..Hamiltonians
 
 export pbc_dist

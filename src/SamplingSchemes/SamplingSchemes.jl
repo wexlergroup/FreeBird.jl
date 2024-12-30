@@ -9,12 +9,12 @@ using Random
 using Statistics
 
 using ..MonteCarloMoves
-using ..Potentials
+using ..AbstractPotentials
 using ..AbstractWalkers
 using ..AbstractLiveSets
 using ..EnergyEval
 using ..FreeBirdIO
-using ..Hamiltonians
+using ..AbstractHamiltonians
 
 export NestedSamplingParameters, LatticeNestedSamplingParameters
 export sort_by_energy!, nested_sampling_step!

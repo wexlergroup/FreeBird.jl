@@ -11,8 +11,8 @@ using Unitful
 using StaticArrays
 # using LinearAlgebra
 
-using ..Potentials
-using ..Hamiltonians
+using ..AbstractPotentials
+using ..AbstractHamiltonians
 using ..AbstractWalkers
 using ..EnergyEval
 

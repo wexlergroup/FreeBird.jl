@@ -4,13 +4,13 @@ using FreeBird
 makedocs(;
     pages=[
             "FreeBird.jl" => "index.md",
-            "Potentials" => "Potentials.md",
-            "Hamiltonians" => "Hamiltonians.md",
-            "EnergyEval" => "EnergyEval.md",
             "AbstractLiveSets" => "AbstractLiveSets.md",
             "AbstractWalkers" => "AbstractWalkers.md",
-            "MonteCarloMoves" => "MonteCarloMoves.md",
             "SamplingSchemes" => "SamplingSchemes.md",
+            "Potentials" => "AbstractPotentials.md",
+            "Hamiltonians" => "AbstractHamiltonians.md",
+            "EnergyEval" => "EnergyEval.md",
+            "MonteCarloMoves" => "MonteCarloMoves.md",
             "FreeBirdIO" => "FreeBirdIO.md",
             "AnalysisTools" => "AnalysisTools.md",
             "API" => "API.md",

@@ -2,5 +2,5 @@
 
 ## Functions
 ```@autodocs
-Modules = [Potentials]
+Modules = [AbstractPotentials]
 ```

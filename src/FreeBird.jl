@@ -4,11 +4,11 @@ using Reexport
 
 @reexport using Unitful
 
-include("AbstractHamiltonians/Hamiltonians.jl")
-@reexport using .Hamiltonians
+include("AbstractHamiltonians/AbstractHamiltonians.jl")
+@reexport using .AbstractHamiltonians
 
-include("AbstractPotentials/Potentials.jl")
-@reexport using .Potentials
+include("AbstractPotentials/AbstractPotentials.jl")
+@reexport using .AbstractPotentials
 
 include("AbstractWalkers/AbstractWalkers.jl")
 @reexport using .AbstractWalkers

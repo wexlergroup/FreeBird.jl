@@ -7,8 +7,8 @@ using AtomsBase
 using Unitful
 using StaticArrays
 using ..AbstractWalkers
-using ..Potentials
-using ..Hamiltonians
+using ..AbstractPotentials
+using ..AbstractHamiltonians
 
 export pbc_dist
 export interacting_energy, frozen_energy

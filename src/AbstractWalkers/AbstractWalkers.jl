@@ -8,8 +8,8 @@ using Unitful
 using Random
 using LinearAlgebra
 using Statistics
-using ..Potentials
-using ..Hamiltonians
+using ..AbstractPotentials
+using ..AbstractHamiltonians
 
 export AbstractWalker
 export AbstractLattice

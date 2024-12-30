@@ -2,5 +2,5 @@
 
 ## Functions
 ```@autodocs
-Modules = [Hamiltonians]
+Modules = [AbstractHamiltonians]
 ```

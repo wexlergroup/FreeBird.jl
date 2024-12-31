@@ -151,8 +151,6 @@ routine for generating new samples. It performs a single step of the nested samp
 - `liveset::LatticeGasWalkers`: The liveset of lattice gas walkers.
 - `ns_params::LatticeNestedSamplingParameters`: The parameters for nested sampling.
 - `mc_routine::MCRoutine`: The Monte Carlo routine for generating new samples.
-- `accept_same_config::Bool=true`: A flag indicating whether to accept a new sample with the same configuration as an existing one. Default is `true`. Note that 
-if it is set to `false`, the sampling process may take significantly longer to find a new configuration.
 
 ## Returns
 - `iter`: The iteration number of the liveset after the step.
@@ -160,8 +158,7 @@ if it is set to `false`, the sampling process may take significantly longer to f
 """
 function nested_sampling_step!(liveset::LatticeGasWalkers, 
                                ns_params::LatticeNestedSamplingParameters, 
-                               mc_routine::MCRoutine;
-                               accept_same_config::Bool=true)
+                               mc_routine::MCRoutine)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     h = liveset.hamiltonian
@@ -175,11 +172,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         error("Unsupported MCRoutine type: $mc_routine")
     end
     accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, h, emax; energy_perturb=ns_params.energy_perturbation)
-    configs = [wk.configuration.occupations for wk in ats]
-    if (at.configuration.occupations in configs) && !accept_same_config
-        @warn "Configuration already exists in the liveset"
-        accept = false
-    end
+
     @info "iter: $(liveset.walkers[1].iter), acceptance rate: $rate, emax: $emax, is_accepted: $accept"
     if accept
         push!(ats, at)
@@ -217,8 +210,7 @@ This function takes a `liveset` of lattice gas walkers, `ns_params` containing t
 """
 function nested_sampling_step!(liveset::LatticeGasWalkers, 
                                ns_params::LatticeNestedSamplingParameters, 
-                               mc_routine::MCNewSample;
-                               accept_same_config::Bool=true)
+                               mc_routine::MCNewSample)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     h = liveset.hamiltonian
@@ -228,11 +220,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     to_walk = deepcopy(ats[1])
 
     accept, at = MC_new_sample!(to_walk, h, emax; energy_perturb=ns_params.energy_perturbation)
-    # configs = [wk.configuration.occupations for wk in ats]
-    # if (at.configuration.occupations in configs) && !accept_same_config
-    #     @warn "Configuration already exists in the liveset"
-    #     accept = false
-    # end
+
     @info "iter: $(liveset.walkers[1].iter), emax: $emax, is_accepted: $accept"
     if accept
         push!(ats, at)
@@ -316,7 +304,7 @@ function nested_sampling_loop!(liveset::AtomWalkers,
 end
 
 """
-    nested_sampling_loop!(liveset::LatticeGasWalkers, ns_params::LatticeNestedSamplingParameters, n_steps::Int64, mc_routine::MCRoutine; args...)
+    nested_sampling_loop!(liveset::LatticeGasWalkers, ns_params::LatticeNestedSamplingParameters, n_steps::Int64, mc_routine::MCRoutine, save_strategy::DataSavingStrategy)
 
 Perform a nested sampling loop on a lattice gas system for a given number of steps.
 
@@ -325,9 +313,7 @@ Perform a nested sampling loop on a lattice gas system for a given number of ste
 - `ns_params::LatticeNestedSamplingParameters`: The parameters for nested sampling.
 - `n_steps::Int64`: The number of steps to perform.
 - `mc_routine::MCRoutine`: The Monte Carlo routine to use.
-
-# Keyword Arguments
-- `args...`: Additional arguments.
+- `save_strategy::DataSavingStrategy`: The strategy for saving data.
 
 # Returns
 - `df`: A DataFrame containing the iteration number and maximum energy for each step.
@@ -338,15 +324,15 @@ function nested_sampling_loop!(liveset::LatticeGasWalkers,
                                 ns_params::LatticeNestedSamplingParameters, 
                                 n_steps::Int64, 
                                 mc_routine::MCRoutine,
-                                save_strategy::DataSavingStrategy;
-                                accept_same_config::Bool=false)
+                                save_strategy::DataSavingStrategy)
+
     df = DataFrame(iter=Int[], emax=Float64[], config=Any[])
     for i in 1:n_steps
         # write_walker_every_n(liveset.walkers[1], i, save_strategy)
         
         config = liveset.walkers[1].configuration.components
 
-        iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine; accept_same_config=accept_same_config)
+        iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
         @debug "n_step $i, iter: $iter, emax: $emax"
         if ns_params.fail_count >= ns_params.allowed_fail_count
             @warn "Failed to accept MC move $(ns_params.allowed_fail_count) times in a row. Break!"

@@ -100,15 +100,15 @@ function MC_random_walk!(n_steps::Int,
     for i_mc_step in 1:n_steps
         current_lattice = lattice.configuration
         # select a random site to hop from
-        hop_from = rand(eachindex(current_lattice.occupations))
+        hop_from = rand(eachindex(current_lattice.components[1]))
         # select a random site to hop to (can be the same as hop_from)
-        hop_to = rand(eachindex(current_lattice.occupations))
+        hop_to = rand(eachindex(current_lattice.components[1]))
         # propose a swap in occupation state (only if it maintains constant N)
         proposed_lattice = deepcopy(current_lattice)
 
-        if proposed_lattice.occupations[hop_from] != proposed_lattice.occupations[hop_to]
-            proposed_lattice.occupations[hop_from], proposed_lattice.occupations[hop_to] = 
-            proposed_lattice.occupations[hop_to], proposed_lattice.occupations[hop_from]
+        if proposed_lattice.components[1][hop_from] != proposed_lattice.components[1][hop_to]
+            proposed_lattice.components[1][hop_from], proposed_lattice.components[1][hop_to] = 
+            proposed_lattice.components[1][hop_to], proposed_lattice.components[1][hop_from]
         end
         
         perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)

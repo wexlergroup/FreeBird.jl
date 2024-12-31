@@ -36,6 +36,7 @@ function periodic_boundary_wrap!(pos::SVector{3,T}, system::AbstractSystem) wher
     return pos
 end
 
+### EXPERIMENTAL FUNCTION! ###
 """
     mean_sq_displacement(at::AtomWalker, at_orig::AtomWalker)
 

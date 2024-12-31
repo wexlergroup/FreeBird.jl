@@ -9,12 +9,12 @@ using Random
 using Statistics
 
 using ..MonteCarloMoves
-using ..Potentials
+using ..AbstractPotentials
 using ..AbstractWalkers
 using ..AbstractLiveSets
 using ..EnergyEval
 using ..FreeBirdIO
-using ..Hamiltonians
+using ..AbstractHamiltonians
 
 export NestedSamplingParameters, LatticeNestedSamplingParameters
 export sort_by_energy!, nested_sampling_step!
@@ -25,7 +25,7 @@ export exact_enumeration, nvt_monte_carlo, wang_landau
 
 abstract type SamplingParameters end
 
-include("NestedSampling.jl")
+include("nested_sampling.jl")
 
 include("exact_enumeration.jl")
 

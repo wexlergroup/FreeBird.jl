@@ -4,8 +4,8 @@ import Unitful: unit
 
 using ..AbstractWalkers
 using ..EnergyEval
-using ..Potentials
-using ..Hamiltonians
+using ..AbstractPotentials
+using ..AbstractHamiltonians
 
 export AbstractLiveSet
 export AtomWalkers, LatticeWalkers
@@ -13,10 +13,9 @@ export LJAtomWalkers, LatticeGasWalkers
 
 abstract type AbstractLiveSet end
 
-# Base.eltype(::AbstractLiveSet{T}) where {T} = T
 
-include("AtomLiveSets.jl")
+include("atomistic_livesets.jl")
 
-include("LatticeLiveSets.jl")
+include("lattice_livesets.jl")
     
 end # module AbstractLiveSets

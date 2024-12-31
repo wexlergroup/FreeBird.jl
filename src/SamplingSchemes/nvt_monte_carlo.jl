@@ -38,31 +38,9 @@ function nvt_monte_carlo(
     push!(configurations, deepcopy(current_lattice))
 
     for _ in 1:num_steps
-        # Select a random site
-        # site_index = rand(1:length(current_lattice.occupations))
         
         # Propose a swap in occupation state (only if it maintains constant N)
         proposed_lattice = deepcopy(current_lattice)
-        
-        # if proposed_lattice.occupations[site_index] == 1
-        #     vacant_sites = findall(x -> x == 0, proposed_lattice.occupations)
-        #     if length(vacant_sites) > 0
-        #         swap_site = rand(vacant_sites)
-        #         proposed_lattice.occupations[site_index] = 0
-        #         proposed_lattice.occupations[swap_site] = 1
-        #     else
-        #         continue
-        #     end
-        # else
-        #     occupied_sites = findall(x -> x == 1, proposed_lattice.occupations)
-        #     if length(occupied_sites) > 0
-        #         swap_site = rand(occupied_sites)
-        #         proposed_lattice.occupations[site_index] = 1
-        #         proposed_lattice.occupations[swap_site] = 0
-        #     else
-        #         continue
-        #     end
-        # end
 
         generate_random_new_lattice_sample!(proposed_lattice)
 

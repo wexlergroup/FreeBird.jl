@@ -4,11 +4,11 @@ using Reexport
 
 @reexport using Unitful
 
-include("Hamiltonians.jl")
-@reexport using .Hamiltonians
+include("AbstractHamiltonians/AbstractHamiltonians.jl")
+@reexport using .AbstractHamiltonians
 
-include("Potentials.jl")
-@reexport using .Potentials
+include("AbstractPotentials/AbstractPotentials.jl")
+@reexport using .AbstractPotentials
 
 include("AbstractWalkers/AbstractWalkers.jl")
 @reexport using .AbstractWalkers
@@ -22,13 +22,13 @@ include("AbstractLiveSets/AbstractLiveSets.jl")
 include("MonteCarloMoves/MonteCarloMoves.jl")
 @reexport using .MonteCarloMoves
 
-include("FreeBirdIO.jl")
+include("FreeBirdIO/FreeBirdIO.jl")
 @reexport using .FreeBirdIO
 
 include("SamplingSchemes/SamplingSchemes.jl")
 @reexport using .SamplingSchemes
 
-include("AnalysisTools.jl")
+include("AnalysisTools/AnalysisTools.jl")
 @reexport using .AnalysisTools
 
 end # module FreeBird

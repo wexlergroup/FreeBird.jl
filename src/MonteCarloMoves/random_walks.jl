@@ -69,14 +69,14 @@ function MC_random_walk!(
 end
 
 """
-    MC_random_walk!(n_steps::Int, lattice::LatticeWalker, h::LatticeGasHamiltonian, emax::Float64; energy_perturb::Float64=0.0)
+    MC_random_walk!(n_steps::Int, lattice::LatticeWalker, h::ClassicalHamiltonian, emax::Float64; energy_perturb::Float64=0.0)
 
 Perform a Monte Carlo random walk on the lattice system.
 
 # Arguments
 - `n_steps::Int`: The number of Monte Carlo steps to perform.
 - `lattice::LatticeWalker`: The walker to perform the random walk on.
-- `h::LatticeGasHamiltonian`: The lattice gas Hamiltonian.
+- `h::ClassicalHamiltonian`: The lattice gas Hamiltonian.
 - `emax::Float64`: The maximum energy allowed for accepting a move.
 - `energy_perturb::Float64=0.0`: The energy perturbation used to make degenerate configurations distinguishable.
 
@@ -204,6 +204,11 @@ function generate_random_new_lattice_sample!(lattice::MLattice{C}) where C
     return lattice
 end
 
+"""
+    generate_random_new_lattice_sample!(lattice::SLattice)
+
+Generate a new random sample for the single-component lattice system.
+"""
 function generate_random_new_lattice_sample!(lattice::SLattice)
     number_occupied_sites = sum(lattice.components[1])
     # flush occupancy

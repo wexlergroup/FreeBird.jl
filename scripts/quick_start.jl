@@ -48,7 +48,7 @@ ls = LJAtomWalkers(walkers, lj)
 # First, we need to define the nested sampling parameters:
 ns_params = NestedSamplingParameters(200, 0.1, 0.01, 1e-5, 1.0, 0, 200)
 
-# The[ `NestedSamplingParameters`](@ref) type is a struct that holds the parameters of the nested sampling algorithm.
+# The [`NestedSamplingParameters`](@ref) type is a struct that holds the parameters of the nested sampling algorithm.
 # The fields are as follows:
 # -  `mc_steps::Int64`: The number of total Monte Carlo moves to perform.
 # -  `initial_step_size`::Float64: The initial step size, which is the fallback step size if MC routine fails to accept a move.

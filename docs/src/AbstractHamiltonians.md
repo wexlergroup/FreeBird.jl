@@ -1,4 +1,4 @@
-# Hamiltonians
+# AbstractHamiltonians
 
 ## Functions
 ```@autodocs

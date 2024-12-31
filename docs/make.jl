@@ -4,6 +4,8 @@ using FreeBird
 makedocs(;
     pages=[
             "FreeBird.jl" => "index.md",
+            "Quick Start" => "quick_start.md",
+            "Modules and Documentation" => [
             "AbstractLiveSets" => "AbstractLiveSets.md",
             "AbstractWalkers" => "AbstractWalkers.md",
             "SamplingSchemes" => "SamplingSchemes.md",
@@ -12,7 +14,7 @@ makedocs(;
             "EnergyEval" => "EnergyEval.md",
             "MonteCarloMoves" => "MonteCarloMoves.md",
             "FreeBirdIO" => "FreeBirdIO.md",
-            "AnalysisTools" => "AnalysisTools.md",
+            "AnalysisTools" => "AnalysisTools.md"],
             "API" => "API.md",
         ],
     sitename = "FreeBird.jl",

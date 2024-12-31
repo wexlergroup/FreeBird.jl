@@ -1,4 +1,4 @@
-# Monte Carlo Moves
+# MonteCarloMoves
 
 ## Functions
 ```@autodocs

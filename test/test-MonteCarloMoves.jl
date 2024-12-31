@@ -117,15 +117,33 @@ using Unitful
                     @test updated_walker isa LatticeWalker
                 end
 
-                
-
             end
 
+        end
 
+        @testset "MC_new_sample function" begin
 
+            # Create a simple square lattice system for test
+            square_lattice = MLattice{1,SquareLattice}(
+                lattice_constant=1.0,                   # Unit cell size
+                basis=[(0.0, 0.0, 0.0)],                # Single atom per unit cell
+                supercell_dimensions=(4, 4, 1),         # 4x4x1 supercell
+                periodicity=(true, true, false),        # Periodic in x,y but not z
+                cutoff_radii=[1.1, 1.5],                # Neighbor cutoff distances
+                components=:equal,                      # Split into equal components
+                adsorptions=:full                       # All sites are adsorption sites
+            )
+
+            s_walker = LatticeWalker(
+                square_lattice,
+                energy=5.0u"eV",
+                iter=0
+            )
+
+            
 
         end
-        
+
 
     end
 

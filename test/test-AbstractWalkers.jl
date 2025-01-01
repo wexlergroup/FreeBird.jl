@@ -1,5 +1,3 @@
-import Unitful: DimensionError
-
 @testset "AbstractWalkers Tests" begin
     @testset "atomistic_walkers.jl test" begin
         @testset "AtomWalker struct and functions tests" begin
@@ -861,6 +859,7 @@ import Unitful: DimensionError
         @testset "MLattice show function tests" begin
             
             lattice = MLattice{2,SquareLattice}()
+            output = sprint(show, lattice)
 
             # Test presence of all required fields
             @test contains(output, "MLattice{2, SquareLattice}")
@@ -935,7 +934,7 @@ import Unitful: DimensionError
 
             # Test print_layer_multi_comp()
             merged = AbstractWalkers.merge_components(lattice2)
-            print_layer_output2 = capture_print_layer(lattice2, merged)
+            print_layer_output2 = capture_print(AbstractWalkers.print_layer, lattice2, merged)
             @test contains(print_layer_output2, "➊")
             @test contains(print_layer_output2, "➋")
 

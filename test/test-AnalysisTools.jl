@@ -1,5 +1,5 @@
 @testset "AnalysisTools.jl tests" begin
-    @testset "ωᵢ function" begin
+    @testset "ωᵢ function tests" begin
         # Basic tests
         @test ωᵢ([1], 4) ≈ [1/5 * (4/5)^1]
         @test ωᵢ([1, 2, 3], 4) ≈ [1/5 * (4/5)^1, 1/5 * (4/5)^2, 1/5 * (4/5)^3]
@@ -14,7 +14,7 @@
         @test all(result .> 0)        # All positive
     end
 
-    @testset "Partition function and internal energy" begin
+    @testset "Partition function and internal energy tests" begin
         # Basic functionality
         @test partition_function(1.0, [1.0], [0.0]) ≈ 1.0
         @test internal_energy(1.0, [1.0], [0.0]) == 0.0
@@ -31,7 +31,7 @@
         @test_throws DimensionMismatch partition_function(1.0, [0.5, 0.5], Ei)
     end
 
-    @testset "Constant-volume heat capacity" begin
+    @testset "Constant-volume heat capacity tests" begin
         kb = 8.617333262e-5
         ωi = [0.4, 0.3, 0.2, 0.1]
         Ei = [0.0, 0.3, 0.6, 0.9]

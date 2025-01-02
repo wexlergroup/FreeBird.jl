@@ -3,6 +3,7 @@
 [![Build Status](https://github.com/wexlergroup/FreeBird.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/wexlergroup/FreeBird.jl/actions/workflows/CI.yml?query=branch%3Amain)
 [![Coverage Status](https://coveralls.io/repos/github/wexlergroup/FreeBird.jl/badge.svg?branch=main)](https://coveralls.io/github/wexlergroup/FreeBird.jl?branch=main)
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://wexlergroup.github.io/FreeBird.jl/dev/)
+[![Code Style: Blue](https://img.shields.io/badge/code%20style-blue-4495d1.svg)](https://github.com/JuliaDiff/BlueStyle)
 
 *Free energy calculators by Bayesian-inspired nested sampling and other integration techniques*
 

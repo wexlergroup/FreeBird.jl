@@ -18,4 +18,4 @@ include("test-AnalysisTools.jl")
 
 include("test-EnergyEval.jl")
 
-# include("test-Potentials.jl")
+include("test-MonteCarloMoves.jl")

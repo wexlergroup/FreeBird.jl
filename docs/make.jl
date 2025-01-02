@@ -9,8 +9,8 @@ makedocs(;
             "AbstractLiveSets" => "AbstractLiveSets.md",
             "AbstractWalkers" => "AbstractWalkers.md",
             "SamplingSchemes" => "SamplingSchemes.md",
-            "Potentials" => "AbstractPotentials.md",
-            "Hamiltonians" => "AbstractHamiltonians.md",
+            "AbstractPotentials" => "AbstractPotentials.md",
+            "AbstractHamiltonians" => "AbstractHamiltonians.md",
             "EnergyEval" => "EnergyEval.md",
             "MonteCarloMoves" => "MonteCarloMoves.md",
             "FreeBirdIO" => "FreeBirdIO.md",
@@ -31,6 +31,6 @@ deploydocs(
     repo = "github.com/wexlergroup/FreeBird.jl.git",
     target = "build",
     branch = "gh-pages",
-    devbranch = "dev",
+    # devbranch = "dev",
     push_preview = true,
 )

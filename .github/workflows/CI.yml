@@ -29,7 +29,7 @@ jobs:
         include:
           - julia-version: '1'
             os: macos-latest
-            julia-arch: [x64]
+            julia-arch: x64
       fail-fast: false
     steps:
       - uses: actions/checkout@v4

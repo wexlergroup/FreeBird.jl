@@ -16,6 +16,6 @@ include("test-AbstractWalkers.jl")
 
 include("test-AnalysisTools.jl")
 
-# include("test-EnergyEval.jl")
+include("test-EnergyEval.jl")
 
 # include("test-Potentials.jl")

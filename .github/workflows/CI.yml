@@ -41,12 +41,14 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
       - uses: julia-actions/julia-processcoverage@v1
-      - uses: codecov/codecov-action@v4
+      - name: Coveralls Parallel
+        uses: coverallsapp/github-action@v2
         with:
           files: lcov.info
-          token: ${{ secrets.COVERALLS_REPO_TOKEN }}
-          fail_ci_if_error: false
-        if: ${{ matrix.julia-version == '1' }}
+          flag-name: run-${{ join(matrix.*, '-') }}
+          github-token: ${{ secrets.COVERALLS_REPO_TOKEN }}
+          fail-on-error: false
+          parallel: true
       - uses: julia-actions/julia-uploadcoveralls@v1
         env:
           COVERALLS_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}

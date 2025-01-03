@@ -10,6 +10,8 @@ using LinearAlgebra
 
 include("test-AbstractHamiltonians.jl")
 
+include("test-AbstractLiveSets.jl")
+
 include("test-AbstractPotentials.jl")
 
 include("test-AbstractWalkers.jl")

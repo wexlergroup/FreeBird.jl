@@ -2,9 +2,18 @@
 EditURL = "../../scripts/quick_start.jl"
 ```
 
-This is a quick start guide to using the FreeBird.jl package.
+# Quick start guide to FreeBird.jl
 
-Load the FreeBird.jl package:
+This is a quick start guide to using the FreeBird.jl package.
+It covers the basic functionalities of the package, such as
+generating atomistic and lattice walkers, defining a potential energy function or
+Hamiltonian, and running a sampling simulation.
+For more detailed information, please refer to the documentation of the package.
+You can find the runnable version of this script in the `scripts` directory of the package.
+
+## Atomistic walkers and nested sampling
+
+First, let's load the FreeBird.jl package:
 
 ````@example quick_start
 using FreeBird
@@ -71,9 +80,9 @@ The `lj` potential will be used to attached and used to calculate the potential 
 ls = LJAtomWalkers(walkers, lj)
 ````
 
-Here, `ls` is a [`LJAtomWalkers`](@ref) type, and has the `walkers` and `lj` files attached to it.
+Here, `ls` is a [`LJAtomWalkers`](@ref) type, and has the `walkers` and `lj` fields attached to it.
 
-Now, time to set up a simulation. We will be using nested sampling, a Bayesian inference method, as an example here.
+Now, time to set up a simulation. We will be using nested sampling, a Bayesian-inference inspired method, as an example here.
 First, we need to define the nested sampling parameters:
 
 ````@example quick_start
@@ -125,10 +134,89 @@ They should be in a more ordered state, in this case, a cluster, than the initia
 
 That's it! You have successfully run a nested sampling simulation using the FreeBird.jl package.
 
-For more information, please refer to the documentation of the FreeBird.jl package.
+## Lattice walkers and exact enumeration
 
-Please see other scripts in the `scripts` directory for more examples and use cases.
-More tutorials and examples will be added in the future. Stay tuned!
+Another feature of FreeBird.jl is the ability to work with lattice systems.
+The lattice systems are defined by the [`MLattice`](@ref) which is a parametrized type.
+```julia
+MLattice{C,G}(
+    lattice_vectors::Matrix{Float64},
+    basis::Vector{Tuple{Float64, Float64, Float64}},
+    supercell_dimensions::Tuple{Int64, Int64, Int64},
+    periodicity::Tuple{Bool, Bool, Bool},
+    components::Vector{Vector{Bool}},
+    adsorptions::Vector{Bool},
+    cutoff_radii::Vector{Float64},
+) where {C,G}
+```
+The `C` parameter is the number of components in the system, and the `G` parameter defines the geometry of the lattice.
+
+Now, let's create a simple square lattice system with single component:
+
+````@example quick_start
+ml = MLattice{1,SquareLattice}(components=[[1,2]])
+````
+
+When you run the above code, the outer constructor of `MLattice` will be called.
+Many of the arguments are optional and have default values.
+The `components` argument is a vector of vectors that defines the components of the system.
+The `components=[[1,2]]` argument specifies that the system has a single component,
+and the first and second sites are occupied.
+```julia
+MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
+    basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0)],
+    supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 4, 1),
+    periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
+    cutoff_radii::Vector{Float64}=[1.1, 1.5],
+    components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
+    adsorptions::Union{Vector{Int},Symbol}=:full)
+```
+
+You may notice that the above code returns a `SLattice` type.
+The `SLattice` type is simply an alias for the `MLattice{1,G}`,
+where `G` is the geometry of the lattice and the number of components is fixed to 1.
+You can also directly call the `SLattice`, it will give the same result:
+
+````@example quick_start
+sl = SLattice{SquareLattice}(components=[[1,2]])
+````
+
+Now, let's define a Hamiltonian for the lattice system:
+
+````@example quick_start
+ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+````
+
+The [`GenericLatticeHamiltonian`](@ref) type is a struct that holds the parameters of the Hamiltonian.
+The first argument is the on-site energy, and the second argument is the list of n-th nearest-neighbors energy.
+The third argument is the unit of the energy.
+
+To run exact enumeration, we only need a initial walker/lattice configuration, and
+the Hamiltonian. Let's run the exact enumeration:
+
+````@example quick_start
+df, ls = exact_enumeration(sl, ham)
+````
+
+The results of the exact enumeration are stored in the `df` and `ls` variables.
+The `df` variable is a `DataFrame` that contains the list of energies, as well as the configurations.
+The `ls` variable is the final liveset that contains all possible configurations of the lattice system.
+Let's see how the first configuration looks like:
+
+````@example quick_start
+ls.walkers[1].configuration
+````
+
+It's the initial configuration of the lattice system.
+Let's see how the last configuration looks like:
+
+````@example quick_start
+ls.walkers[end].configuration
+````
+
+Be warned that the exact enumeration can be computationally expensive for large systems.
+
+That's it! You have successfully run an exact enumeration simulation using the FreeBird.jl package.
 
 ---
 

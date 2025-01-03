@@ -33,6 +33,4 @@ include("nvt_monte_carlo.jl")
 
 include("wang_landau.jl")
 
-include("other_samplings.jl")
-
 end # module SamplingSchemes

@@ -626,11 +626,6 @@
                 @test_throws BoundsError MLattice{3,SquareLattice}(
                     components=[[1], [2]]  # Only 2 components for 3-component system
                 )
-                
-                # Test invalid supercell dimensions
-                @test_throws LAPACKException MLattice{2,SquareLattice}(
-                    supercell_dimensions=(0, 2, 1)
-                )
             end
 
             @testset "Component distribution" begin

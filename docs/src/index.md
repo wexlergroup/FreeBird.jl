@@ -11,6 +11,11 @@ Once Julia is installed, you can install the `FreeBird` package from the Julia R
 ```julia-repl
 julia> ] # press the "]" key on your keyboard to enter the Pkg manager
 
+pkg> add FreeBird
+```
+Or, if you want to install a specific branch from GitHub, you can do so with:
+
+```julia-repl
 pkg> add https://github.com/wexlergroup/FreeBird.jl#branch_name
 ```
 To get back to the Julia REPL, press `Ctrl+C` or backspace (when the REPL cursor is at the beginning of the input).

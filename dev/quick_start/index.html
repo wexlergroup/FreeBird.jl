@@ -5,39 +5,39 @@
                                 0       15        0;
                                 0        0       15]u&quot;Å&quot;
 
-    AtomView(H,  [ 2.52638,  11.4364, 0.868852]u&quot;Å&quot;)
-    AtomView(H,  [  13.443,  9.43743,  14.0042]u&quot;Å&quot;)
-    AtomView(H,  [ 5.15471,  3.67712,  7.51115]u&quot;Å&quot;)
-    AtomView(H,  [ 4.14413,   1.8877, 0.845053]u&quot;Å&quot;)
-    AtomView(H,  [ 3.27207,  14.4824,  3.90172]u&quot;Å&quot;)
-    AtomView(H,  [ 4.86725,  7.32459,  8.06582]u&quot;Å&quot;)
+    AtomView(H,  [ 10.9769,  3.59409,  7.56689]u&quot;Å&quot;)
+    AtomView(H,  [ 1.79897,  14.8578,  6.37463]u&quot;Å&quot;)
+    AtomView(H,  [ 6.31828,  7.56556,  13.7665]u&quot;Å&quot;)
+    AtomView(H,  [ 8.61269,  13.7088, 0.732127]u&quot;Å&quot;)
+    AtomView(H,  [ 8.58997,  8.61678,  12.2389]u&quot;Å&quot;)
+    AtomView(H,  [ 8.53539,  3.34299,  1.27003]u&quot;Å&quot;)
 
              .------------------------------------.  
             /|                                    |  
            / |                                    |  
           /  |                                    |  
          /   |                                    |  
-        /    |                             H      |  
-       /     |                                    |  
-      /      |                                    |  
+        /    |                                    |  
+       /     |          H                         |  
+      /      |                H                   |  
      /       |                                    |  
     *        |                                    |  
+    |        |   H                                |  
     |        |                                    |  
     |        |                                    |  
     |        |                                    |  
-    |        |      H                             |  
-    |        |       H                            |  
     |        |                                    |  
-    |        |     H                              |  
     |        |                                    |  
-    |        .------------------------------------.  
-    |       /    H                               /   
+    |        |                   H                |  
+    |        |                                    |  
+    |        .-------------------H----------------.  
+    |       /                                    /   
     |      /                                    /    
     |     /                                    /     
     |    /                                    /      
-    |   /                                    /       
+    |   /                  H                 /       
     |  /                                    /        
-    | /        H                           /         
+    | /                                    /         
     |/                                    /          
     *------------------------------------*           
 </code></pre><p>It&#39;s of a <code>FastSystem</code> type from <code>AtomsBase</code>. The dimensions of the box are 15 Å x 15 Å x 15 Å, following the volume per particle specified. The positions of the particles are randomly generated within the box.</p><p>Now, let&#39;s generate a few more configurations:</p><pre><code class="language-julia hljs">configs = generate_initial_configs(120, 562.5, 6)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">120-element Vector{AtomsBase.FastSystem{3, Quantity{Float64, 𝐋, Unitful.FreeUnits{(Å,), 𝐋, nothing}}, Quantity{Float64, 𝐌, Unitful.FreeUnits{(u,), 𝐌, nothing}}}}:
@@ -216,7 +216,7 @@
 </code></pre><p>Let&#39;s inquire the type of the <code>walkers</code> variable:</p><pre><code class="language-julia hljs">walkers |&gt; typeof</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Vector{AtomWalker{1}}<span class="sgr90"> (alias for Array{AtomWalker{1}, 1})</span></code></pre><p>The <code>walkers</code> variable is of a <code>Vector{AtomWalker{1}}</code> type, which is a vector of <code>AtomWalker{1}</code> objects. The <code>AtomWalker{1}</code> type is a parametrized type, where the parameter is the number of components in the system. In this case, the system has only one component, consisting of 6 particles of type H.</p><p>To define how these particles interact with each other, we need to create a potential energy function. Let&#39;s use the Lennard-Jones potential:</p><pre><code class="language-julia hljs">lj = LJParameters(epsilon=0.1, sigma=2.5, cutoff=4.0)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)</code></pre><p>The <a href="../AbstractPotentials/#FreeBird.AbstractPotentials.LJParameters"><code>LJParameters</code></a> type is a struct that holds the parameters of the Lennard-Jones potential. The <code>epsilon</code> and <code>sigma</code> fields are the energy and length scales of the potential, respectively. The <code>cutoff</code> field is the distance at which the potential is truncated. An energy shift is applied to the potential to ensure continuity at the cutoff distance, automatically in this case. See the documentation of the <code>LJParameters</code> type for more information and examples.</p><p>We now can create a so-called <em>liveset</em> that will be used to store the walkers during the simulation. The <code>lj</code> potential will be used to attached and used to calculate the potential energy of the walkers.</p><pre><code class="language-julia hljs">ls = LJAtomWalkers(walkers, lj)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">LJAtomWalkers(AtomWalker{1}, LJParameters):
 [1] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : 1.2742107286487805 eV
+    energy             : -0.07460603144748347 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -224,7 +224,7 @@
 
 [2] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : 16694.231112394325 eV
+    energy             : -0.006264834730204015 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -232,7 +232,7 @@
 
 [3] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : -0.008728364083614274 eV
+    energy             : -0.1412910629836151 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -240,7 +240,7 @@
 
 [4] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : -0.13803516706934307 eV
+    energy             : -0.04155842141487099 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -248,7 +248,7 @@
 
 [5] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : 34704.8380067025 eV
+    energy             : -0.09709247593518433 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -260,7 +260,7 @@ Omitted 110 walkers
 
 [116] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : 3.5613630649026087 eV
+    energy             : -0.002307097960764584 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -268,7 +268,7 @@ Omitted 110 walkers
 
 [117] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : -0.03383302214142519 eV
+    energy             : 2.2395911654025444 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -276,7 +276,7 @@ Omitted 110 walkers
 
 [118] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : -0.020797521952813817 eV
+    energy             : 18796.746972390763 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -284,7 +284,7 @@ Omitted 110 walkers
 
 [119] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : 16.382556611239668 eV
+    energy             : -0.13341959874625758 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -292,7 +292,7 @@ Omitted 110 walkers
 
 [120] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : 0.3093539330682832 eV
+    energy             : 175.02189894216875 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -303,14 +303,14 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
    Row │ iter   emax
        │<span class="sgr90"> Int64  Float64
 ───────┼────────────────────
-     1 │     1  87093.1
-     2 │     2  52994.6
-     3 │     3  49724.9
-     4 │     4  34704.8
-     5 │     5  16694.2
-     6 │     6    631.4
-     7 │     7    475.752
-     8 │     8    169.273
+     1 │     1  82276.4
+     2 │     2  18796.7
+     3 │     3   8313.71
+     4 │     4   3469.73
+     5 │     5   1809.49
+     6 │     6    175.022
+     7 │     7    145.287
+     8 │     8     77.8786
    ⋮   │   ⋮         ⋮
  19994 │ 19994     -1.26974
  19995 │ 19995     -1.26974
@@ -322,7 +322,7 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
 </span><span class="sgr36">          19985 rows omitted, LJAtomWalkers(AtomWalker{1}, LJParameters):
 [1] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : -1.2697417395105444 eV
+    energy             : -1.269741739468254 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -330,7 +330,7 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
 
 [2] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : -1.2697417395105706 eV
+    energy             : -1.2697417394684083 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -338,7 +338,7 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
 
 [3] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : -1.2697417395106507 eV
+    energy             : -1.269741739468564 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -346,7 +346,7 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
 
 [4] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : -1.2697417395107249 eV
+    energy             : -1.2697417394686303 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -354,7 +354,7 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
 
 [5] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : -1.2697417395107593 eV
+    energy             : -1.2697417394687318 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -366,7 +366,7 @@ Omitted 110 walkers
 
 [116] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : -1.2697417395324133 eV
+    energy             : -1.269741739511913 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -374,7 +374,7 @@ Omitted 110 walkers
 
 [117] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : -1.2697417395333463 eV
+    energy             : -1.2697417395140795 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -382,7 +382,7 @@ Omitted 110 walkers
 
 [118] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : -1.2697417395363195 eV
+    energy             : -1.2697417395164585 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -390,7 +390,7 @@ Omitted 110 walkers
 
 [119] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : -1.2697417395367046 eV
+    energy             : -1.2697417395196289 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -398,7 +398,7 @@ Omitted 110 walkers
 
 [120] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodic = FFF, bounding_box = [[14.999999999999998, 0.0, 0.0], [0.0, 14.999999999999998, 0.0], [0.0, 0.0, 14.999999999999998]]u&quot;Å&quot;)
-    energy             : -1.2697417395190003 eV
+    energy             : -1.2697417394695032 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -410,12 +410,12 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
                                 0       15        0;
                                 0        0       15]u&quot;Å&quot;
 
-    AtomView(H,  [ 3.64413,  6.30506,  7.41924]u&quot;Å&quot;)
-    AtomView(H,  [ 6.39117,  6.34509,  7.92564]u&quot;Å&quot;)
-    AtomView(H,  [ 5.06107,  3.90653,   7.6281]u&quot;Å&quot;)
-    AtomView(H,  [ 5.41592,  7.17979,  5.44442]u&quot;Å&quot;)
-    AtomView(H,  [ 6.83286,  4.78126,  5.65328]u&quot;Å&quot;)
-    AtomView(H,  [ 4.08582,  4.74123,  5.14688]u&quot;Å&quot;)
+    AtomView(H,  [ 5.11218,   7.8429,  6.04643]u&quot;Å&quot;)
+    AtomView(H,  [ 5.87773,  8.07872,  3.37013]u&quot;Å&quot;)
+    AtomView(H,  [ 7.78332,  8.07485,  6.83094]u&quot;Å&quot;)
+    AtomView(H,  [ 8.54888,  8.31066,  4.15464]u&quot;Å&quot;)
+    AtomView(H,  [ 6.62658,  10.0383,  5.21503]u&quot;Å&quot;)
+    AtomView(H,  [ 7.03448,   6.1153,  4.98605]u&quot;Å&quot;)
 
              .------------------------------------.  
             /|                                    |  
@@ -431,11 +431,11 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
     |        |                                    |  
     |        |                                    |  
     |        |                                    |  
-    |        |   H      H                         |  
+    |        |              H                     |  
+    |        |       H    H                       |  
     |        |                                    |  
-    |        |     H  H                           |  
-    |        |          H                         |  
-    |        .---H--------------------------------.  
+    |        |           H    H                   |  
+    |        .---------H--------------------------.  
     |       /                                    /   
     |      /                                    /    
     |     /                                    /     
@@ -598,4 +598,4 @@ GenericLatticeHamiltonian{2,Quantity{Float64, 𝐋^2 𝐌 𝐓^-2, Unitful.FreeU
       ○ ○ ○ ○ 
       ○ ○ ● ● 
     adsorptions          : full adsorption
-</code></pre><p>Be warned that the exact enumeration can be computationally expensive for large systems.</p><p>That&#39;s it! You have successfully run an exact enumeration simulation using the FreeBird.jl package.</p><hr/><p><em>This page was generated using <a href="https://github.com/fredrikekre/Literate.jl">Literate.jl</a>.</em></p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« FreeBird.jl</a><a class="docs-footer-nextpage" href="../AbstractLiveSets/">AbstractLiveSets »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="auto">Automatic (OS)</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.2.1 on <span class="colophon-date" title="Friday 3 January 2025 22:34">Friday 3 January 2025</span>. Using Julia version 1.11.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</code></pre><p>Be warned that the exact enumeration can be computationally expensive for large systems.</p><p>That&#39;s it! You have successfully run an exact enumeration simulation using the FreeBird.jl package.</p><hr/><p><em>This page was generated using <a href="https://github.com/fredrikekre/Literate.jl">Literate.jl</a>.</em></p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« FreeBird.jl</a><a class="docs-footer-nextpage" href="../AbstractLiveSets/">AbstractLiveSets »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="auto">Automatic (OS)</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.2.1 on <span class="colophon-date" title="Friday 3 January 2025 23:00">Friday 3 January 2025</span>. Using Julia version 1.11.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

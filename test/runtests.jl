@@ -1,12 +1,14 @@
 using FreeBird
-using Test
 
+using Statistics
 using StaticArrays
 using DataFrames
+using LinearAlgebra
+
 using Unitful
 using Unitful: DimensionError
 using AtomsBase
-using LinearAlgebra
+using Test
 
 include("test-AbstractHamiltonians.jl")
 
@@ -21,3 +23,5 @@ include("test-AnalysisTools.jl")
 include("test-EnergyEval.jl")
 
 include("test-MonteCarloMoves.jl")
+
+include("test-SamplingSchemes.jl")

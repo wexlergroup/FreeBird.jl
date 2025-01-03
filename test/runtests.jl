@@ -3,7 +3,6 @@ using FreeBird
 using Statistics
 using StaticArrays
 using DataFrames
-using LinearAlgebra
 
 using Unitful
 using Unitful: DimensionError

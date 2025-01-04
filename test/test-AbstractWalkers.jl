@@ -867,6 +867,7 @@
                 walker = LatticeWalker(square_lattice, energy=2.0u"eV", iter=5)
                 output = sprint(show, walker)
                 @test contains(output, "LatticeWalker(")
+                @test contains(output, "configuration")
                 @test contains(output, "energy: 2.0 eV")
                 @test contains(output, "iter: 5")
         

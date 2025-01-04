@@ -27,11 +27,11 @@ UnitfulAtomic = "a7773ee8-282e-5fa2-be4e-bd808c38a91a"
 
 [compat]
 AtomBase = "0.1"
-AtomsBase = "0.3"
+AtomsBase = "0.3, 0.5"
 AtomsIO = "0.2"
 BenchmarkTools = "1"
-Combinatorics = "1"
 CSV = "0.10"
+Combinatorics = "1"
 DataFrames = "1"
 Distributions = "0.25"
 Documenter = "1"

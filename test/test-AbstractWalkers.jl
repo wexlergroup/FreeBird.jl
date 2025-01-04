@@ -499,7 +499,12 @@
             basis_double = [(0.0, 0.0, 0.0), (0.5, 0.5, 0.0)]
             dims_2d = (2, 2, 1)
             
-            @testset "Equal Components" begin
+            components_cum1 = [[true, false, false, false], [false, false, false, true]]
+            adsorptions_cum1 = [false, true, true, false]
+            components_cum2 = [[1], [4]]
+            adsorptions_cum2 = [2, 3]
+            
+            @testset "Equal components and Full adsorption" begin
                 # Test with single basis point
                 components, adsorptions = AbstractWalkers.mlattice_setup(
                     2,
@@ -527,6 +532,46 @@
                 @test length(components) == 3  # Three components
                 @test length(components[1]) == 8  # 2×2×1×2 = 8 sites
                 @test all(count.(components) .≈ [3, 3, 2])  # Distribution of sites
+
+                @testset "Custom components and adsorptions" begin
+
+                    # components isa Vector{Vector{Bool}} and adsoprtions isa Vector{Bool}
+                    components, adsorptions = AbstractWalkers.mlattice_setup(
+                        2,
+                        basis_single,
+                        dims_2d,
+                        components_cum1,
+                        adsorptions_cum1
+                    )
+
+                    @test length(components) == 2  
+                    @test length(components[1]) == 4  
+                    @test count(components[1]) == 1  
+                    @test count(components[2]) == 1
+
+                    # components isa Vector{Vector{Int}} and adsoprtions isa Vector{Int}
+                    components, adsorptions = AbstractWalkers.mlattice_setup(
+                        2,
+                        basis_single,
+                        dims_2d,
+                        components_cum2,
+                        adsorptions_cum2
+                    )
+
+                    @test length(components) == 2  
+                    @test length(components[1]) == 4  
+                    @test count(components[1]) == 1  
+                    @test count(components[2]) == 1
+
+                    # Error cases for components and adsoprtions
+                    @test_throws ArgumentError AbstractWalkers.mlattice_setup(
+                        2,
+                        basis_single,
+                        dims_2d,
+                        :not_equal,
+                        :not_full
+                    )
+                end
             end
         end
 

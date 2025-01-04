@@ -333,6 +333,13 @@
                     @test length(updated_liveset.walkers) == length(liveset.walkers)
                     @test updated_params.fail_count >= 0
                 end
+
+                @testset "Unsupported MCRoutine" begin
+                    mc_routine = MCNewSample()
+                    @test_throws UndefVarError(:unsupported_mc) begin
+                        nested_sampling_step!(liveset, ns_params, unsupported_mc)
+                    end
+                end
             end
 
             @testset "LatticeGasWalkers nested_sampling_step!" begin
@@ -366,6 +373,16 @@
         
                 @testset "MCRandomWalkMaxE" begin
                     mc_routine = MCRandomWalkMaxE()
+                    iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+                    
+                    @test iter isa Union{Missing,Int}
+                    @test emax isa Union{Missing,Float64}
+                    @test length(updated_liveset.walkers) == length(liveset.walkers)
+                    @test updated_params.fail_count >= 0
+                end
+
+                @testset "MCRandomWalkClone" begin
+                    mc_routine = MCRandomWalkClone()
                     iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
                     
                     @test iter isa Union{Missing,Int}
@@ -510,7 +527,65 @@
             end
 
             @testset "LatticeGasWalkers cases tests" begin
+                # Setup test system
+                square_lattice = MLattice{1,SquareLattice}(
+                    lattice_constant=1.0,
+                    basis=[(0.0, 0.0, 0.0)],
+                    supercell_dimensions=(4, 4, 1),
+                    periodicity=(true, true, false),
+                    cutoff_radii=[1.1, 1.5],
+                    components=:equal,
+                    adsorptions=:full
+                )
+                ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+                s_walker = LatticeWalker(square_lattice, energy=5.0u"eV", iter=0)
+                s_walkers = [deepcopy(s_walker) for _ in 1:3]
+                liveset = LatticeGasWalkers(s_walkers, ham)
                 
+                ns_params = LatticeNestedSamplingParameters(1000, 0.1, 0, 100)
+                save_strategy = SaveEveryN("test_df.csv", "test.traj", "test.ls", 2, 2)
+
+                @testset "Basic functionality" begin
+                    df, updated_liveset, updated_params = nested_sampling_loop!(
+                        liveset, deepcopy(ns_params), 5, MCRandomWalkMaxE(), save_strategy)
+                    
+                    @test df isa DataFrame
+                    @test names(df) == ["iter", "emax", "config"]
+                    @test eltype(df.emax) == Float64  # emax is stored as Float64
+                    @test length(updated_liveset.walkers) == length(liveset.walkers)
+                    @test all(walker -> walker isa LatticeWalker, updated_liveset.walkers)
+                end
+
+                @testset "Failure handling" begin
+                    fail_params = deepcopy(ns_params)
+                    fail_params.allowed_fail_count = 1
+                    df, _, updated_params = nested_sampling_loop!(
+                        liveset, fail_params, 10, MCRandomWalkMaxE(), save_strategy)
+                    
+                    @test updated_params.fail_count == 0
+                    @test nrow(df) <= 10
+                end
+
+                @testset "Data saving" begin
+                    nested_sampling_loop!(liveset, deepcopy(ns_params), 4, MCRandomWalkMaxE(), save_strategy)
+                    
+                    @test isfile("test_df.csv")
+                    @test isfile("test.ls")
+                    
+                    rm("test_df.csv", force=true)
+                    rm("test.ls", force=true)
+                end
+
+                @testset "Walker properties" begin
+                    _, updated_liveset, _ = nested_sampling_loop!(
+                        liveset, deepcopy(ns_params), 3, MCRandomWalkMaxE(), save_strategy)
+                    
+                    walker = updated_liveset.walkers[1]
+                    @test walker isa LatticeWalker
+                    @test typeof(walker.energy) <: Quantity
+                    @test unit(walker.energy) == u"eV"
+                    @test walker.configuration isa SLattice{SquareLattice}
+                end
             end
         end
     end

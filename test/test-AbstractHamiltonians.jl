@@ -82,9 +82,6 @@
             @test_nowarn mlham = MLatticeHamiltonian(3, hams_3x3)
             mlham = MLatticeHamiltonian(3, hams_3x3)
             @test size(mlham.Hamiltonians) == (3, 3)
-    
-            # Test error for incorrect number of elements
-            @test_throws ArgumentError MLatticeHamiltonian(2, [GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV") for i in 1:9])
         end
     
         @testset "Constructor Tests - Symmetric Matrix" begin
@@ -101,6 +98,7 @@
             @test_nowarn mlham = MLatticeHamiltonian(3, hams_3x3_sym)
             mlham = MLatticeHamiltonian(3, hams_3x3_sym)
             @test size(mlham.Hamiltonians) == (3, 3)
+            
             # Test symmetry
             @test mlham.Hamiltonians[1,2] === mlham.Hamiltonians[2,1]
             @test mlham.Hamiltonians[1,3] === mlham.Hamiltonians[3,1]
@@ -153,7 +151,7 @@
             @test_nowarn MLatticeHamiltonian(2, different_hams)
     
             # Test error cases
-            # Wrong number of elements
+            @test_throws ArgumentError MLatticeHamiltonian{3,2,typeof(1.0u"eV")}([GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV") for i in 1:2, j in 1:2])
             @test_throws ArgumentError MLatticeHamiltonian(2, [GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV") for i in 1:5])
             @test_throws ArgumentError MLatticeHamiltonian(3, [GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV") for i in 1:7])
         end

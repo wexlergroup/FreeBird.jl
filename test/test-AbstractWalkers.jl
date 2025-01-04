@@ -902,6 +902,9 @@
             lattice = MLattice{2,SquareLattice}()
             output = sprint(show, lattice)
 
+            lattice2 = MLattice{2,SquareLattice}(adsorptions=[1])
+            output2 = sprint(show, lattice2)
+
             # Test presence of all required fields
             @test contains(output, "MLattice{2, SquareLattice}")
             @test contains(output, "lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]")
@@ -911,6 +914,8 @@
             @test contains(output, "periodicity          : (true, true, false)")
             @test contains(output, "cutoff radii         : 2 nearest neighbors")
             @test contains(output, "adsorptions          : full adsorption")
+
+            @test contains(output2, "adsorptions          : \n      ● ○ ○ ○ \n      ○ ○ ○ ○ \n      ○ ○ ○ ○ \n      ○ ○ ○ ○ \n")
         end
 
         @testset "merge_components function tests" begin
@@ -945,27 +950,39 @@
             end
 
             # Single component print
-            lattice1 = MLattice{1,SquareLattice}(
+            s_lattice1 = MLattice{1,SquareLattice}(
                 supercell_dimensions = (2, 2, 1),
                 components = [[true, false, true, false]]
             )
 
+            s_lattice2 = MLattice{1,SquareLattice}(
+                basis= [(1.0, 1.0, 11.0)],
+                supercell_dimensions = (2, 2, 2),
+                components = [fill(true, 8)]
+            )
+
             # Test print_layer_single_comp()
-            print_layer_output1 = capture_print(AbstractWalkers.print_layer, lattice1, lattice1.components[1])
+            print_layer_output1 = capture_print(AbstractWalkers.print_layer, s_lattice1, s_lattice1.components[1])
             @test contains(print_layer_output1, "●")
             @test contains(print_layer_output1, "○")
             @test count("●", print_layer_output1) == 2
             @test count("○", print_layer_output1) == 2
 
             # Test occupation printing
-            occ_output = capture_print(AbstractWalkers.print_occupation, lattice1)
-            @test contains(occ_output, "●")
-            @test contains(occ_output, "○")
+            occ_output1 = capture_print(AbstractWalkers.print_occupation, s_lattice1)
+            occ_output2 = capture_print(AbstractWalkers.print_occupation, s_lattice2)
+            @test contains(occ_output1, "●")
+            @test contains(occ_output1, "○")
+            @test contains(occ_output2, "●")
 
             # Test adsorption printing
-            ads_output = capture_print(AbstractWalkers.print_adsorption, lattice1, fill(true, 4))
-            @test contains(ads_output, "●")
-            @test !contains(ads_output, "➊")  # Shouldn't use numbered symbols for adsorption
+            ads_output1 = capture_print(AbstractWalkers.print_adsorption, s_lattice1, fill(true, 4))
+            ads_output2 = capture_print(AbstractWalkers.print_adsorption, s_lattice2, fill(true, 8))
+
+            @test contains(ads_output1, "●")
+            @test !contains(ads_output1, "➊")  # Shouldn't use numbered symbols for adsorption
+            @test contains(ads_output2, "●")
+            @test contains(ads_output2, "Layer")
 
             # Test multi-component print
             lattice2 = MLattice{2,SquareLattice}(
@@ -1048,7 +1065,7 @@
                 
                 # Error cases
                 @test_throws ArgumentError AbstractWalkers.check_num_components(3, [2,3], [true,false,true])
-                @test_throws ArgumentError AbstractWalkers.check_num_components(2, [2,3,4], [true,false])
+                @test_throws ArgumentError AbstractWalkers.check_num_components(3, [2,3,4], [true,false])
             end
 
             @testset "sort_components_by_atomic_number" begin

@@ -161,7 +161,7 @@ Ts = collect(1:0.1:1000) #hide
 Define the Boltzmann constant in units of eV/K.
 
 ````@example quick_start
-kb = 8.617333262e-5 # eV/K #hide
+kb = 8.617333262e-5 # eV/K
 ````
 
 Calculate the inverse temperatures
@@ -289,6 +289,12 @@ Define the temperatures that we are interested in, in units of Kelvin.
 Ts = collect(1:0.1:500) #hide
 ````
 
+Define the Boltzmann constant in units of eV/K.
+
+````@example quick_start
+kb = 8.617333262e-5 # eV/K
+````
+
 Convert them to inverse temperatures
 
 ````@example quick_start
@@ -322,6 +328,7 @@ cvs = [cv(β, ω_1, es, dof) for β in βs] #hide
 Let's plot the heat capacity as a function of temperature
 
 ````@example quick_start
+using Plots
 plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", label="Square Lattice")
 ````
 

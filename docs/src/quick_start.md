@@ -1,5 +1,5 @@
 ```@meta
-EditURL = "scripts/quick_start.jl"
+EditURL = "../../scripts/quick_start.jl"
 ```
 
 # Quick start guide to FreeBird.jl

@@ -89,9 +89,9 @@ liveset.walkers[1].configuration
 # The [`AnalysisTools`](@ref) module provides functions to calculate the heat capacity of the system.
 # First, we calculate the `ω` factors, which account for the fractions of phase-space volume sampled during
 # each nested sampling iteration, defined as:
-# $$
+# ```math
 # \omega_i = \frac{1}{N+1} \left(\frac{N}{N+1}\right)^i
-# $$
+# ````
 # where $N$ is the number of walkers and $i$ is the iteration number.
 ωi = ωᵢ(energies.iter, 120)
 # Let's shift the energies to be greater than or equal to zero, making the calculation of the heat capacity more stable.
@@ -105,9 +105,9 @@ kb = 8.617333262e-5 # eV/K
 # Define the degrees of freedom, which is 3×6 for the 6-particle system.
 dof = 18
 # Calculate the heat capacities as a function of temperature using the `cv` function,
-# $$
+# ```math
 # C_V(\beta) = \frac{\mathrm{dof} \cdot k_B}{2} + k_B \beta^2 \left(\frac{\sum_i \omega_i E_i^2 \exp(-E_i \beta)}{Z(\beta)} - U(\beta)^2\right)
-# $$
+# ```
 cvs = cv(energies, β, dof, 120)
 
 # Let's plot the heat capacity as a function of temperature

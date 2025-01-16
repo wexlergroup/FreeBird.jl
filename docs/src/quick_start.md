@@ -137,9 +137,9 @@ They should be in a more ordered state, in this case, a cluster, than the initia
 The [`AnalysisTools`](@ref) module provides functions to calculate the heat capacity of the system.
 First, we calculate the `ω` factors, which account for the fractions of phase-space volume sampled during
 each nested sampling iteration, defined as:
-$$
+```math
 \omega_i = \frac{1}{N+1} \left(\frac{N}{N+1}\right)^i
-$$
+````
 where $N$ is the number of walkers and $i$ is the iteration number.
 
 ````@example quick_start
@@ -177,9 +177,9 @@ dof = 18
 ````
 
 Calculate the heat capacities as a function of temperature using the `cv` function,
-$$
+```math
 C_V(\beta) = \frac{\mathrm{dof} \cdot k_B}{2} + k_B \beta^2 \left(\frac{\sum_i \omega_i E_i^2 \exp(-E_i \beta)}{Z(\beta)} - U(\beta)^2\right)
-$$
+```
 
 ````@example quick_start
 cvs = cv(energies, β, dof, 120)

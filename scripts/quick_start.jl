@@ -30,7 +30,7 @@ configs = generate_initial_configs(120, 562.5, 6)
 
 # The function above has generated 120 configurations, again, with 562.5 Å$^3$ volume per particle, and 6 particles of type H.
 # These configurations will be served as the initial walkers for a sampling run, but first, we need to warp them into the [`AtomWalker`](@ref) type defined in FreeBird.jl.
-walkers = AtomWalker.(generate_initial_configs(120, 562.5, 6))
+walkers = AtomWalker.(generate_initial_configs(120, 562.5, 6)) #hide
 
 # Let's inquire the type of the `walkers` variable:
 walkers |> typeof
@@ -93,22 +93,22 @@ liveset.walkers[1].configuration
 # \omega_i = \frac{1}{N+1} \left(\frac{N}{N+1}\right)^i
 # ````
 # where $N$ is the number of walkers and $i$ is the iteration number.
-ωi = ωᵢ(energies.iter, 120)
+ωi = ωᵢ(energies.iter, 120) #hide
 # Let's shift the energies to be greater than or equal to zero, making the calculation of the heat capacity more stable.
-Ei = energies.emax .- minimum(energies.emax)
+Ei = energies.emax .- minimum(energies.emax) #hide
 # Specify the temperatures that we are interested in, in units of Kelvin.
-Ts = collect(1:0.1:1000)
+Ts = collect(1:0.1:1000) #hide
 # Define the Boltzmann constant in units of eV/K.
-kb = 8.617333262e-5 # eV/K
+kb = 8.617333262e-5 # eV/K #hide
 # Calculate the inverse temperatures
-β = 1 ./(kb.*Ts)
+β = 1 ./(kb.*Ts) #hide
 # Define the degrees of freedom, which is 3×6 for the 6-particle system.
-dof = 18
+dof = 18 #hide
 # Calculate the heat capacities as a function of temperature using the `cv` function,
 # ```math
 # C_V(\beta) = \frac{\mathrm{dof} \cdot k_B}{2} + k_B \beta^2 \left(\frac{\sum_i \omega_i E_i^2 \exp(-E_i \beta)}{Z(\beta)} - U(\beta)^2\right)
 # ```
-cvs = cv(energies, β, dof, 120)
+cvs = cv(energies, β, dof, 120) #hide
 
 # Let's plot the heat capacity as a function of temperature
 using Plots
@@ -190,18 +190,18 @@ ls.walkers[end].configuration
 
 # Let's calculate the heat capacity for the lattice system:
 # Define the temperatures that we are interested in, in units of Kelvin.
-Ts = collect(1:0.1:500)
+Ts = collect(1:0.1:500) #hide
 # Convert them to inverse temperatures
-βs = 1 ./(kb.*Ts)
+βs = 1 ./(kb.*Ts) #hide
 # Extract the energies from the DataFrame, keeping the values only
-es = [e.val for e in df.energy]
+es = [e.val for e in df.energy] #hide
 
 # Since this is not a nested sampling run, each configuration carries the same weight:
-ω_1 = ones(length(df.energy))
+ω_1 = ones(length(df.energy)) #hide
 # And for a lattice, the degrees of freedom is 0:
-dof = 0
+dof = 0 #hide
 # Now we can use a scaler version of the [`cv`](@ref) function to calculate the heat capacity:
-cvs = [cv(β, ω_1, es, dof) for β in βs]
+cvs = [cv(β, ω_1, es, dof) for β in βs] #hide
 
 # Let's plot the heat capacity as a function of temperature
 plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", label="Square Lattice")

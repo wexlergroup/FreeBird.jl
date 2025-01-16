@@ -1,5 +1,5 @@
 ```@meta
-EditURL = "../../scripts/quick_start.jl"
+EditURL = "scripts/quick_start.jl"
 ```
 
 # Quick start guide to FreeBird.jl
@@ -110,7 +110,7 @@ The [`MCRandomWalkClone`](@ref) type is a type of Monte Carlo move that indicate
 We also need to specify how we want to save the data and the output:
 
 ````@example quick_start
-save = SaveEveryN(n_traj=10, n_snap=20_00)
+save = SaveEveryN(n_traj=10, n_snap=20_000)
 ````
 
 The [`SaveEveryN`](@ref) type is a struct that holds the parameters of the saving routine.
@@ -131,6 +131,68 @@ liveset.walkers[1].configuration
 ````
 
 They should be in a more ordered state, in this case, a cluster, than the initial gaseous state.
+
+### Calculating heat capacity with `AnalysisTools` module
+
+The [`AnalysisTools`](@ref) module provides functions to calculate the heat capacity of the system.
+First, we calculate the `ω` factors, which account for the fractions of phase-space volume sampled during
+each nested sampling iteration, defined as:
+$$
+\omega_i = \frac{1}{N+1} \left(\frac{N}{N+1}\right)^i
+$$
+where $N$ is the number of walkers and $i$ is the iteration number.
+
+````@example quick_start
+ωi = ωᵢ(energies.iter, 120)
+````
+
+Let's shift the energies to be greater than or equal to zero, making the calculation of the heat capacity more stable.
+
+````@example quick_start
+Ei = energies.emax .- minimum(energies.emax)
+````
+
+Specify the temperatures that we are interested in, in units of Kelvin.
+
+````@example quick_start
+Ts = collect(1:0.1:1000)
+````
+
+Define the Boltzmann constant in units of eV/K.
+
+````@example quick_start
+kb = 8.617333262e-5 # eV/K
+````
+
+Calculate the inverse temperatures
+
+````@example quick_start
+β = 1 ./(kb.*Ts)
+````
+
+Define the degrees of freedom, which is 3×6 for the 6-particle system.
+
+````@example quick_start
+dof = 18
+````
+
+Calculate the heat capacities as a function of temperature using the `cv` function,
+$$
+C_V(\beta) = \frac{\mathrm{dof} \cdot k_B}{2} + k_B \beta^2 \left(\frac{\sum_i \omega_i E_i^2 \exp(-E_i \beta)}{Z(\beta)} - U(\beta)^2\right)
+$$
+
+````@example quick_start
+cvs = cv(energies, β, dof, 120)
+````
+
+Let's plot the heat capacity as a function of temperature
+
+````@example quick_start
+using Plots
+plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", label="LJ\$_6\$")
+````
+
+The plot should show the heat capacity as a function of temperature for the 6-particle Lennard-Jones system, with a main peak around 400 K, representing the phase transition, and some fluctuations at low temperatures, and tailing off to zero at high temperatures.
 
 That's it! You have successfully run a nested sampling simulation using the FreeBird.jl package.
 
@@ -178,7 +240,7 @@ where `G` is the geometry of the lattice and the number of components is fixed t
 You can also directly call the `SLattice`, it will give the same result:
 
 ````@example quick_start
-sl = SLattice{SquareLattice}(components=[[1,2]])
+sl = SLattice{SquareLattice}(components=[[1,2,3,4]])
 ````
 
 Now, let's define a Hamiltonian for the lattice system:
@@ -215,6 +277,55 @@ ls.walkers[end].configuration
 ````
 
 Be warned that the exact enumeration can be computationally expensive for large systems.
+
+### Calculating heat capacity
+
+Since we enumerated all possible configurations of the lattice system, we can calculate the partition function, then heat capacity directly.
+
+Let's calculate the heat capacity for the lattice system:
+Define the temperatures that we are interested in, in units of Kelvin.
+
+````@example quick_start
+Ts = collect(1:0.1:500)
+````
+
+Convert them to inverse temperatures
+
+````@example quick_start
+βs = 1 ./(kb.*Ts)
+````
+
+Extract the energies from the DataFrame, keeping the values only
+
+````@example quick_start
+es = [e.val for e in df.energy]
+````
+
+Since this is not a nested sampling run, each configuration carries the same weight:
+
+````@example quick_start
+ω_1 = ones(length(df.energy))
+````
+
+And for a lattice, the degrees of freedom is 0:
+
+````@example quick_start
+dof = 0
+````
+
+Now we can use a scaler version of the [`cv`](@ref) function to calculate the heat capacity:
+
+````@example quick_start
+cvs = [cv(β, ω_1, es, dof) for β in βs]
+````
+
+Let's plot the heat capacity as a function of temperature
+
+````@example quick_start
+plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", label="Square Lattice")
+````
+
+You should expect to see a single peak in the heat capacity curve around 40 K, and tailing off to zero at high temperatures.
 
 That's it! You have successfully run an exact enumeration simulation using the FreeBird.jl package.
 

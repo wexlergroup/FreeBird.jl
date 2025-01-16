@@ -216,14 +216,14 @@ The `C` parameter is the number of components in the system, and the `G` paramet
 Now, let's create a simple square lattice system with single component:
 
 ````@example quick_start
-ml = MLattice{1,SquareLattice}(components=[[1,2]])
+ml = MLattice{1,SquareLattice}(components=[[1,2,3,4]])
 ````
 
 When you run the above code, the outer constructor of `MLattice` will be called.
 Many of the arguments are optional and have default values.
 The `components` argument is a vector of vectors that defines the components of the system.
-The `components=[[1,2]]` argument specifies that the system has a single component,
-and the first and second sites are occupied.
+The `components=[[1,2,3,4]]` argument specifies that the system has a single component,
+and the first four sites are occupied.
 ```julia
 MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
     basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0)],

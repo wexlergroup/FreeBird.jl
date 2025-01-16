@@ -1,4 +1,6 @@
 """
+    AbstractPotentials
+
 Module for defining and implementing potentials.
 """
 module AbstractPotentials

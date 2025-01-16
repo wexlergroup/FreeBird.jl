@@ -1,5 +1,7 @@
 """
-Method for defining and implementing Hamiltonians.
+    AbstractHamiltonians
+
+Module for defining and implementing Hamiltonians.
 """
 module AbstractHamiltonians
 

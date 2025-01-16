@@ -1,5 +1,7 @@
 """
-Module containing functions for performing Monte Carlo moves on atomic/molecular systems.
+    MonteCarloMoves
+
+Module containing functions for performing Monte Carlo moves on atomistic/lattice systems.
 """
 module MonteCarloMoves
 

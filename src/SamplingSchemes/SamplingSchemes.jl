@@ -1,3 +1,8 @@
+"""
+    SamplingSchemes
+    
+Module for defining the sampling schemes.
+"""
 module SamplingSchemes
 
 using ExtXYZ

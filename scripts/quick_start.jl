@@ -91,7 +91,7 @@ liveset.walkers[1].configuration
 # each nested sampling iteration, defined as:
 # ```math
 # \omega_i = \frac{1}{N+1} \left(\frac{N}{N+1}\right)^i
-# ````
+# ```
 # where $N$ is the number of walkers and $i$ is the iteration number.
 ωi = ωᵢ(energies.iter, 120);
 # Let's shift the energies to be greater than or equal to zero, making the calculation of the heat capacity more stable.

@@ -140,7 +140,7 @@ First, we calculate the `ω` factors, which account for the fractions of phase-s
 each nested sampling iteration, defined as:
 ```math
 \omega_i = \frac{1}{N+1} \left(\frac{N}{N+1}\right)^i
-````
+```
 where $N$ is the number of walkers and $i$ is the iteration number.
 
 ````@example quick_start

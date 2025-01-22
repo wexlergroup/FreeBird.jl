@@ -27,7 +27,7 @@ function Base.show(io::IO, lattice::MLattice{C,G}) where {C,G}
     println(io, "    supercell_dimensions : ", lattice.supercell_dimensions)
     println(io, "    basis                : ", lattice.basis)
     println(io, "    periodicity          : ", lattice.periodicity)
-    println(io, "    cutoff radii         : ", length(lattice.cutoff_radii), " nearest neighbors at cutoffs ", lattice.cutoff_radii)
+    println(io, "    cutoff radii         : ", length(lattice.cutoff_radii), " nearest neighbors cutoffs ", lattice.cutoff_radii)
     println(io, "    occupations          : ")
     print_occupation(io, lattice)
     if prod(lattice.adsorptions) == true

@@ -908,7 +908,7 @@
             # Test presence of all required fields
             @test contains(output, "MLattice{2, SquareLattice}")
             @test contains(output, "lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]")
-            @test contains(output, "positions            : 48 grid points")
+            @test contains(output, "positions            : 16 grid points")
             @test contains(output, "supercell_dimensions : (4, 4, 1)")
             @test contains(output, "basis                : [(0.0, 0.0, 0.0)]")
             @test contains(output, "periodicity          : (true, true, false)")

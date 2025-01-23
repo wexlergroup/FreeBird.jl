@@ -1,3 +1,9 @@
+"""
+    AbstractLiveSets
+
+Module for defining the livesets, which are collections of 
+walkers that are used in the sampling schemes.
+"""
 module AbstractLiveSets
 
 import Unitful: unit

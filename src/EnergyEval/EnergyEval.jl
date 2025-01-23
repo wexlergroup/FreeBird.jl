@@ -1,4 +1,6 @@
 """
+    EnergyEval
+    
 Module for evaluating energy-related quantities for a system.
 """
 module EnergyEval

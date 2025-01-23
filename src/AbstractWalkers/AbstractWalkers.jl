@@ -1,4 +1,6 @@
 """
+    AbstractWalkers
+    
 Module containing abstract definitions for walkers.
 """
 module AbstractWalkers

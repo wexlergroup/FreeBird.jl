@@ -1,3 +1,8 @@
+"""
+    SamplingSchemes
+    
+Module for defining the sampling schemes.
+"""
 module SamplingSchemes
 
 using ExtXYZ
@@ -32,7 +37,5 @@ include("exact_enumeration.jl")
 include("nvt_monte_carlo.jl")
 
 include("wang_landau.jl")
-
-include("other_samplings.jl")
 
 end # module SamplingSchemes

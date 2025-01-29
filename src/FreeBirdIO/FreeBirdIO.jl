@@ -15,6 +15,8 @@ using ..EnergyEval
 export read_single_config, read_configs, read_single_walker, read_walkers
 export write_single_walker, write_walkers
 
+export append_system
+
 export DataSavingStrategy, SaveEveryN
 export write_df, write_df_every_n, write_walker_every_n, write_ls_every_n
 
@@ -217,6 +219,27 @@ function append_walker(filename::String, at::AtomWalker{C}) where C
 end
 
 """
+    append_system(ats1::FlexibleSystem, ats2::FlexibleSystem)
+
+Append two `FlexibleSystem` objects into a single `FastSystem` object.
+The first argument is the system to be appended to, and its bounding box and boundary conditions 
+will be used for the new system.
+
+# Arguments
+- `ats1::FlexibleSystem`: The base system to be appended.
+- `ats2::FlexibleSystem`: The system to append.
+
+# Returns
+- `new_list`: A new `FastSystem` object containing the appended systems.
+
+"""
+function append_system(ats1::FlexibleSystem, ats2::FlexibleSystem)
+    new_list = [Atom(atomic_symbol(i),position(i)) for i in ats1.particles]
+    append!(new_list,[Atom(atomic_symbol(i),position(i)) for i in ats2.particles])
+    return FastSystem(new_list,ats1.bounding_box,ats1.boundary_conditions)
+end
+
+"""
     write_single_walker(filename::String, at::AtomWalker)
 
 Write a single AtomWalker object to a file.
@@ -285,7 +308,7 @@ end
 """
     extract_free_par(walker::AtomWalker)
 
-Extract free particles from existing walker and create new walker conating only the free particles.
+Extract free particles from existing walker and create new walker containing only the free particles.
 
 # Arguments
 - `walker::AtomWalker`: The AtomWalker object for extraction.

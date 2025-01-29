@@ -15,8 +15,26 @@ Assigns the energy to the given `walker` using the Lennard-Jones parameters `lj`
 
 """
 function assign_energy!(walker::AtomWalker, lj::LennardJonesParametersSets)
-    walker.energy_frozen_part = frozen_energy(walker.configuration, lj, walker.list_num_par, walker.frozen)
+    # walker.energy_frozen_part = frozen_energy(walker.configuration, lj, walker.list_num_par, walker.frozen)
     walker.energy = interacting_energy(walker.configuration, lj, walker.list_num_par, walker.frozen) + walker.energy_frozen_part
+    return walker
+end
+
+"""
+    assign_frozen_energy!(walker::AtomWalker, lj::LennardJonesParametersSets)
+
+Assigns the frozen energy to the given `walker` using the Lennard-Jones parameters `lj`.
+
+# Arguments
+- `walker::AtomWalker`: The walker object to assign the energy to.
+- `lj::LennardJonesParametersSets`: The Lennard-Jones parameters.
+
+# Returns
+- `walker::AtomWalker`: The walker object with the assigned energy.
+
+"""
+function assign_frozen_energy!(walker::AtomWalker, lj::LennardJonesParametersSets)
+    walker.energy_frozen_part = frozen_energy(walker.configuration, lj, walker.list_num_par, walker.frozen)
     return walker
 end
 
@@ -39,9 +57,19 @@ The `LJAtomWalkers` struct represents a collection of atom walkers that interact
 struct LJAtomWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
     lj_potential::LennardJonesParametersSets
-    function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParametersSets; assign_energy=true) where C
+    function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParametersSets; assign_energy=true, const_frozen_part=true) where C
+        if const_frozen_part
+            frozen_part_energy = frozen_energy(walkers[1].configuration, lj_potential, walkers[1].list_num_par, walkers[1].frozen)
+        end
         if assign_energy
-            [assign_energy!(walker, lj_potential) for walker in walkers]
+            for walker in walkers
+                if const_frozen_part
+                    walker.energy_frozen_part = frozen_part_energy
+                else
+                    assign_frozen_energy!(walker, lj_potential)
+                end
+                assign_energy!(walker, lj_potential) # comes after assign_frozen_energy!
+            end
         end
         return new(walkers, lj_potential)
     end

@@ -1,5 +1,22 @@
 # show methods
 
+function Base.show(io::IO, walker::AtomWalker{C}) where C
+    println(io, "AtomWalker{$C}(")
+    println(io, "    configuration      : ", walker.configuration)
+    println(io, "    energy             : ", walker.energy)
+    println(io, "    iter               : ", walker.iter)
+    println(io, "    list_num_par       : ", walker.list_num_par)
+    println(io, "    frozen             : ", walker.frozen)
+    println(io, "    energy_frozen_part : ", walker.energy_frozen_part,")")
+end
+
+function Base.show(io::IO, walker::Vector{AtomWalker{C}}) where C
+    println(io, "Vector{AtomWalker{$C}}(", length(walker), "):")
+    for (ind, w) in enumerate(walker)
+        println(io, "[", ind, "] ", w)
+    end
+end
+
 """
     custom_sort(arr::Vector{Int}, period::Int)
 

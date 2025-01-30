@@ -7,6 +7,7 @@ using DataFrames
 using Unitful
 using Unitful: DimensionError
 using AtomsBase
+using ExtXYZ
 using Test
 
 include("test-AbstractHamiltonians.jl")
@@ -24,3 +25,5 @@ include("test-EnergyEval.jl")
 include("test-MonteCarloMoves.jl")
 
 include("test-SamplingSchemes.jl")
+
+include("test-FreeBirdIO.jl")

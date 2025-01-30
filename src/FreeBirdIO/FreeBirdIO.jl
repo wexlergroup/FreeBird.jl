@@ -330,7 +330,6 @@ function extract_free_par(walker::AtomWalker)
     system = periodic_system(free_part, components[1].bounding_box)
     flex = FlexibleSystem(system; boundary_conditions=components[1].boundary_conditions)
     fast = FastSystem(flex)
-    #return AtomWalker{length(components)}(fast; walker.energy - walker.energy_frozen_part, walker.iter,[length(comp) for comp in components], zeros(Bool,length(components)), 0.0u"eV")
     return AtomWalker{length(free_indices)}(fast;list_num_par = free_indices, energy = walker.energy - walker.energy_frozen_part, iter = walker.iter)
 end
 

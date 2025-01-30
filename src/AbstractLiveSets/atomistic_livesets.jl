@@ -58,7 +58,7 @@ struct LJAtomWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
     lj_potential::LennardJonesParametersSets
     function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParametersSets; assign_energy=true, const_frozen_part=true) where C
-        if const_frozen_part
+        if const_frozen_part && !isempty(walkers)
             frozen_part_energy = frozen_energy(walkers[1].configuration, lj_potential, walkers[1].list_num_par, walkers[1].frozen)
         end
         if assign_energy

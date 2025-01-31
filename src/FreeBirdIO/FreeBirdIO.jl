@@ -15,7 +15,9 @@ using ..EnergyEval
 export read_single_config, read_configs, read_single_walker, read_walkers
 export write_single_walker, write_walkers
 
-export DataSavingStrategy, SaveEveryN
+export append_system
+
+export DataSavingStrategy, SaveEveryN, SaveFreePartEveryN
 export write_df, write_df_every_n, write_walker_every_n, write_ls_every_n
 
 export generate_initial_configs
@@ -217,6 +219,27 @@ function append_walker(filename::String, at::AtomWalker{C}) where C
 end
 
 """
+    append_system(ats1::FlexibleSystem, ats2::FlexibleSystem)
+
+Append two `FlexibleSystem` objects into a single `FastSystem` object.
+The first argument is the system to be appended to, and its bounding box and boundary conditions 
+will be used for the new system.
+
+# Arguments
+- `ats1::FlexibleSystem`: The base system to be appended.
+- `ats2::FlexibleSystem`: The system to append.
+
+# Returns
+- `new_list`: A new `FastSystem` object containing the appended systems.
+
+"""
+function append_system(ats1::FlexibleSystem, ats2::FlexibleSystem)
+    new_list = [Atom(atomic_symbol(i),position(i)) for i in ats1.particles]
+    append!(new_list,[Atom(atomic_symbol(i),position(i)) for i in ats2.particles])
+    return FastSystem(new_list,ats1.bounding_box,ats1.boundary_conditions)
+end
+
+"""
     write_single_walker(filename::String, at::AtomWalker)
 
 Write a single AtomWalker object to a file.
@@ -285,7 +308,7 @@ end
 """
     extract_free_par(walker::AtomWalker)
 
-Extract free particles from existing walker and create new walker conating only the free particles.
+Extract free particles from existing walker and create new walker containing only the free particles.
 
 # Arguments
 - `walker::AtomWalker`: The AtomWalker object for extraction.
@@ -307,7 +330,6 @@ function extract_free_par(walker::AtomWalker)
     system = periodic_system(free_part, components[1].bounding_box)
     flex = FlexibleSystem(system; boundary_conditions=components[1].boundary_conditions)
     fast = FastSystem(flex)
-    #return AtomWalker{length(components)}(fast; walker.energy - walker.energy_frozen_part, walker.iter,[length(comp) for comp in components], zeros(Bool,length(components)), 0.0u"eV")
     return AtomWalker{length(free_indices)}(fast;list_num_par = free_indices, energy = walker.energy - walker.energy_frozen_part, iter = walker.iter)
 end
 
@@ -417,6 +439,28 @@ SaveEveryN is a concrete subtype of DataSavingStrategy that specifies saving dat
 end
 
 """
+    struct SaveFreePartEveryN <: DataSavingStrategy
+
+SaveFreePartEveryN is a concrete subtype of DataSavingStrategy that specifies saving data every N steps.
+Only the free particles are saved into the trajectory and snapshot files.
+
+# Fields
+- `df_filename::String`: The name of the file to save the DataFrame to.
+- `wk_filename::String`: The name of the file to save the atom walker to.
+- `ls_filename::String`: The name of the file to save the liveset to.
+- `n_traj::Int`: The number of steps between each save of the culled walker into a trajectory file.
+- `n_snap::Int`: The number of steps between each save of the liveset into a snapshot file.
+
+"""
+@kwdef struct SaveFreePartEveryN <: DataSavingStrategy
+    df_filename::String = "output_df.csv"
+    wk_filename::String = "output.traj.extxyz"
+    ls_filename::String = "output.ls.extxyz"
+    n_traj::Int = 100
+    n_snap::Int = 1000
+end
+
+"""
     write_df(filename::String, df::DataFrame)
 
 Write a DataFrame to a CSV file.
@@ -439,7 +483,7 @@ Write the DataFrame `df` to a file specified by `d_strategy.filename` every `d_s
 - `d_strategy::SaveEveryN`: The save strategy specifying the filename and the step interval.
 
 """
-function write_df_every_n(df::DataFrame, step::Int, d_strategy::SaveEveryN)
+function write_df_every_n(df::DataFrame, step::Int, d_strategy::DataSavingStrategy)
     if step % d_strategy.n_traj == 0
         write_df(d_strategy.df_filename, df)
     end
@@ -462,6 +506,13 @@ function write_walker_every_n(at::AtomWalker, step::Int, d_strategy::SaveEveryN)
     end
 end
 
+function write_walker_every_n(at::AtomWalker, step::Int, d_strategy::SaveFreePartEveryN)
+    if step % d_strategy.n_traj == 0
+        at = extract_free_par(at)
+        write_single_walker(d_strategy.wk_filename, at, true)
+    end
+end
+
 """
     write_ls_every_n(ls::AtomWalkers, step::Int, d_strategy::SaveEveryN)
 
@@ -476,6 +527,13 @@ Write the liveset `ls` to file every `n` steps, as specified by the `d_strategy`
 function write_ls_every_n(ls::AbstractLiveSet, step::Int, d_strategy::SaveEveryN)
     if step % d_strategy.n_snap == 0
         write_walkers(d_strategy.ls_filename, ls.walkers)
+    end
+end
+
+function write_ls_every_n(ls::AbstractLiveSet, step::Int, d_strategy::SaveFreePartEveryN)
+    if step % d_strategy.n_snap == 0
+        wks = extract_free_par.(ls.walkers)
+        write_walkers(d_strategy.ls_filename, wks)
     end
 end
 

@@ -336,8 +336,9 @@
 
                 @testset "Unsupported MCRoutine" begin
                     mc_routine = MCNewSample()
-                    @test_throws UndefVarError(:unsupported_mc) begin
-                        nested_sampling_step!(liveset, ns_params, unsupported_mc)
+                    struct Unsupported <: MCRoutine end
+                    @test_throws ErrorException begin
+                        nested_sampling_step!(liveset, ns_params, Unsupported())
                     end
                 end
             end

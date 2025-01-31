@@ -30,4 +30,6 @@ include("lattice_walkers.jl")
 
 include("helpers.jl")
 
+include("shows.jl")
+
 end # module AbstractWalkers

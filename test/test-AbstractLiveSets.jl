@@ -25,11 +25,13 @@
             
             # Test with O frozen
             walker_partial = AtomWalker(at, freeze_species=[:O])
+            AbstractLiveSets.assign_frozen_energy!(walker_partial, lj)
             AbstractLiveSets.assign_energy!(walker_partial, lj)
             @test walker_partial.energy > walker_partial.energy_frozen_part > 0.0u"eV"
             
             # Test all frozen
             walker_frozen = AtomWalker(at, freeze_species=[:H, :O])
+            AbstractLiveSets.assign_frozen_energy!(walker_frozen, lj)
             AbstractLiveSets.assign_energy!(walker_frozen, lj)
             @test walker_frozen.energy == walker_frozen.energy_frozen_part > 0.0u"eV"
         end
@@ -45,7 +47,7 @@
             ]
 
             @testset "Constructor with energy assignment" begin
-                lj_walkers = LJAtomWalkers(walkers, lj)
+                lj_walkers = LJAtomWalkers(walkers, lj; const_frozen_part=false)
                 
                 # Test type and structure
                 @test lj_walkers isa LJAtomWalkers

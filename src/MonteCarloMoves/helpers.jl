@@ -76,3 +76,24 @@ function free_par_index(at::AtomWalker{C}) where C
     end
     return ind_free_par
 end
+
+
+"""
+    free_component_index(at::AtomWalker{C}) where C
+
+Get the indices of the free particles in each component of the `AtomWalker`.
+
+# Returns
+- `ind_free_parts::Array{Vector{Int}}`: An array of vectors containing the indices of the free particles in each component.
+"""
+function free_component_index(at::AtomWalker{C}) where C
+    ind_free_parts = Array{Vector{Int}}(undef, 0)
+    comp_cut = vcat([0],cumsum(at.list_num_par))
+    # @show comp_cut
+    for i in 1:C
+        if !at.frozen[i]
+            push!(ind_free_parts,collect(comp_cut[i]+1:comp_cut[i+1]))
+        end
+    end
+    return ind_free_parts
+end

@@ -6,7 +6,7 @@ Module for defining the sampling schemes.
 module SamplingSchemes
 
 using ExtXYZ
-using Setfield
+# using Setfield
 using Unitful
 using DataFrames
 using Combinatorics

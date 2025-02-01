@@ -14,13 +14,13 @@ The wrapped position vector.
 
 """
 function periodic_boundary_wrap!(pos::SVector{3,T}, system::AbstractSystem) where T
-    pbc = system.boundary_conditions
-    box = system.bounding_box
+    pbc = periodicity(system)
+    box = cell_vectors(system)
     new_pos = Vector{typeof(0.0u"Å")}(undef, 3)
     for i in eachindex(pbc)
-        if pbc[i] == Periodic() # wrap the position
+        if pbc[i] == true # wrap the position
             new_pos[i] = mod(pos[i], box[i][i])
-        elseif pbc[i] == DirichletZero() # reflect the position
+        elseif pbc[i] == false # reflect the position
             if pos[i] > box[i][i]
                 new_pos[i] = box[i][i]*2 - pos[i]
             elseif pos[i] < 0.0u"Å"

@@ -36,19 +36,8 @@ Set the periodic boundary conditions for a system of atoms.
 - `FlexibleSystem`: A flexible system with the specified boundary conditions.
 
 """
-function set_pbc(at::Atoms, pbc::Vector)
-    pbc_conditions = []
-    for i in 1:3
-        if pbc[i] == false
-            push!(pbc_conditions, DirichletZero())
-        elseif pbc[i] == true
-            push!(pbc_conditions, Periodic())
-        else
-            error("Unsupported boundary condition: $(pbc[i])")
-        end
-    end
-    pbc_conditions = Vector{BoundaryCondition}(pbc_conditions)
-    return FlexibleSystem(at;boundary_conditions=pbc_conditions)
+function set_pbc(at::Atoms, pbc::Vector{Bool})
+    return FlexibleSystem(at, periodicity=Tuple(pbc))
 end
 
 """
@@ -236,7 +225,7 @@ will be used for the new system.
 function append_system(ats1::FlexibleSystem, ats2::FlexibleSystem)
     new_list = [Atom(atomic_symbol(i),position(i)) for i in ats1.particles]
     append!(new_list,[Atom(atomic_symbol(i),position(i)) for i in ats2.particles])
-    return FastSystem(new_list,ats1.bounding_box,ats1.boundary_conditions)
+    return FastSystem(new_list, cell_vectors(ats1), periodicity(ats1))
 end
 
 """
@@ -323,13 +312,13 @@ function extract_free_par(walker::AtomWalker)
         if !walker.frozen[ind]
             push!(free_indices, length(components[ind]))
             for i in 1:length(components[ind])
-                push!(free_part, components[ind].atomic_symbol[i]=>components[ind].position[i])
+                pos = components[ind].position[i]
+                sym = atomic_symbol(components[ind], i)
+                push!(free_part, Atom(sym, pos))
             end
         end
     end
-    system = periodic_system(free_part, components[1].bounding_box)
-    flex = FlexibleSystem(system; boundary_conditions=components[1].boundary_conditions)
-    fast = FastSystem(flex)
+    fast = FastSystem(free_part, cell_vectors(walker.configuration), periodicity(walker.configuration))
     return AtomWalker{length(free_indices)}(fast;list_num_par = free_indices, energy = walker.energy - walker.energy_frozen_part, iter = walker.iter)
 end
 
@@ -352,7 +341,7 @@ function generate_random_starting_config(volume_per_particle::Float64, num_parti
     total_volume = volume_per_particle * num_particle
     box_length = total_volume^(1/3)
     box = [[box_length, 0.0, 0.0], [0.0, box_length, 0.0], [0.0, 0.0, box_length]]u"Å"
-    boundary_conditions = [DirichletZero(), DirichletZero(), DirichletZero()]
+    boundary_conditions = (false, false, false)
     list_of_atoms = [particle_type => [rand(), rand(), rand()] for _ in 1:num_particle]
     system = periodic_system(list_of_atoms, box, fractional=true)
     flex = FlexibleSystem(system; boundary_conditions=boundary_conditions)
@@ -379,15 +368,14 @@ function generate_multi_type_random_starting_config(volume_per_particle::Float64
     total_volume = volume_per_particle * total_num_particle
     box_length = total_volume^(1/3)
     box = [[box_length, 0.0, 0.0], [0.0, box_length, 0.0], [0.0, 0.0, box_length]]u"Å"
-    boundary_conditions = [DirichletZero(), DirichletZero(), DirichletZero()]
+    boundary_conditions = (false, false, false)
     list_of_atoms = []
     for i in 1:num_types
         for _ in 1:num_particle[i]
-            push!(list_of_atoms, particle_types[i] => [rand(), rand(), rand()])
+            push!(list_of_atoms, particle_types[i] => [rand(), rand(), rand()] .* box_length * u"Å")
         end
     end
-    system = periodic_system(list_of_atoms, box, fractional=true)
-    flex = FlexibleSystem(system; boundary_conditions=boundary_conditions)
+    flex = atomic_system(list_of_atoms, box, boundary_conditions)
     return FastSystem(flex)
 end
 

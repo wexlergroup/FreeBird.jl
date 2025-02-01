@@ -342,10 +342,9 @@ function generate_random_starting_config(volume_per_particle::Float64, num_parti
     box_length = total_volume^(1/3)
     box = [[box_length, 0.0, 0.0], [0.0, box_length, 0.0], [0.0, 0.0, box_length]]u"Å"
     boundary_conditions = (false, false, false)
-    list_of_atoms = [particle_type => [rand(), rand(), rand()] for _ in 1:num_particle]
-    system = periodic_system(list_of_atoms, box, fractional=true)
-    flex = FlexibleSystem(system; boundary_conditions=boundary_conditions)
-    return FastSystem(flex)
+    list_of_atoms = [particle_type => [rand(), rand(), rand()] .* box_length * u"Å" for _ in 1:num_particle]
+    system = atomic_system(list_of_atoms, box, boundary_conditions)
+    return FastSystem(system)
 end
 
 """

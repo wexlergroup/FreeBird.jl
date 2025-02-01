@@ -20,6 +20,4 @@ include("atomistic_energies.jl")
 
 include("lattice_energies.jl")
 
-# include("helpers.jl")
-
 end # module EnergyEval

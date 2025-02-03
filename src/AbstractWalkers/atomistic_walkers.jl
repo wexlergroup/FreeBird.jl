@@ -40,23 +40,6 @@ mutable struct AtomWalker{C} <: AbstractWalker
     end
 end
 
-function Base.show(io::IO, walker::AtomWalker{C}) where C
-    println(io, "AtomWalker{$C}(")
-    println(io, "    configuration      : ", walker.configuration)
-    println(io, "    energy             : ", walker.energy)
-    println(io, "    iter               : ", walker.iter)
-    println(io, "    list_num_par       : ", walker.list_num_par)
-    println(io, "    frozen             : ", walker.frozen)
-    println(io, "    energy_frozen_part : ", walker.energy_frozen_part,")")
-end
-
-function Base.show(io::IO, walker::Vector{AtomWalker{C}}) where C
-    println(io, "Vector{AtomWalker{$C}}(", length(walker), "):")
-    for (ind, w) in enumerate(walker)
-        println(io, "[", ind, "] ", w)
-    end
-end
-
 """
     AtomWalker(configuration::FastSystem; freeze_species::Vector{Symbol}=Symbol[], merge_same_species=true)
 
@@ -104,8 +87,7 @@ function AtomWalker(configuration::FastSystem; freeze_species::Vector{Symbol}=Sy
     C = length(list_num_par)
     frozen = zeros(Bool, C)
     if !isempty(freeze_species)
-        elements = unique(atomic_symbol(configuration))
-        @show elements
+        elements = unique([atomic_symbol(configuration, i) for i in 1:length(configuration)])
         for species in freeze_species
             if !(species in elements)
                 throw(ArgumentError("The species $species is not in the system."))
@@ -114,7 +96,7 @@ function AtomWalker(configuration::FastSystem; freeze_species::Vector{Symbol}=Sy
         components = split_components(configuration, list_num_par)
         for i in 1:length(freeze_species)
             for j in 1:C
-                if freeze_species[i] in atomic_symbol(components[j])
+                if freeze_species[i] in [atomic_symbol(components[j], k) for k in 1:length(components[j])]
                     frozen[j] = true
                 end
             end

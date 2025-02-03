@@ -84,7 +84,7 @@
                 @test sum(walker_unmerged.list_num_par) == length(at)
 
                 # Test with invalid freeze species
-                @test_throws ArgumentError AtomWalker(at, freeze_species=[:Xx])
+                @test_throws ArgumentError AtomWalker(at, freeze_species=[:Si])
             end
 
             @testset "Show method tests" begin

@@ -23,8 +23,6 @@ function pbc_dist(pos1::Union{SVector{T},Vector{T}},
             distsq += min(abs(pos1[i] - pos2[i]), box[i][i] - abs(pos1[i] - pos2[i]))^2
         elseif pbc[i] == false
             distsq += (pos1[i] - pos2[i])^2
-        else
-            error("Unsupported boundary condition: $(pbc[i])")
         end
     end
     return sqrt(distsq)

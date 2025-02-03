@@ -166,6 +166,9 @@
                 # Test empty system
                 empty_sys = periodic_system([], box, fractional=true)
                 @test interacting_energy(empty_sys, lj) == 0.0u"eV"
+
+                # Test error handling
+                @test_throws ArgumentError interacting_energy(sys3, ljp1, [2, 2], [true, false, false])
             end
         end
     end

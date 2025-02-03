@@ -112,7 +112,7 @@
         @test isfile("test.traj.extxyz")
         readin_config = FreeBirdIO.read_single_config("test.traj.extxyz")
         @test readin_config isa FlexibleSystem
-        @test length(readin) == sum(num_particle)
+        @test length(readin_config) == sum(num_particle)
         @test periodicity(readin_config) == (true, true, true) # which is wrong
         readin_config = FreeBirdIO.read_single_config("test.traj.extxyz", pbc="FFF")
         @test periodicity(readin_config) == (false, false, false) # which is correct

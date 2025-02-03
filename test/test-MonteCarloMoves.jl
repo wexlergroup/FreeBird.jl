@@ -336,7 +336,6 @@
             # Test Dirichlet reflection
             pbc = (false, false, false)
             dirichlet_sys = atomic_system(coor_list, box, pbc)
-            @show dirichlet_sys
             pos = SVector{3,typeof(1.0u"Å")}([12.0, -2.0, 15.0] .* u"Å")
             wrapped_pos = periodic_boundary_wrap!(pos, dirichlet_sys)
             @test wrapped_pos ≈ SVector{3,typeof(1.0u"Å")}([8.0, 2.0, 5.0] .* u"Å")

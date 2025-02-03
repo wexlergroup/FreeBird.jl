@@ -187,3 +187,17 @@ function sort_components_by_atomic_number(at::AbstractSystem; merge_same_species
     sys = atomic_system(new_list, cell_vectors(at), periodicity(at))
     return list_num_par, FastSystem(sys)
 end
+
+"""
+    view_structure(at::AbstractSystem)
+    view_structure(walker::AtomWalker)
+
+Print an ASCII representation of the system.
+"""
+function view_structure(at::AbstractSystem)
+    return println(visualize_ascii(at))
+end
+
+function view_structure(walker::AtomWalker)
+    return println(visualize_ascii(walker.configuration))
+end

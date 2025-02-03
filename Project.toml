@@ -1,7 +1,7 @@
 name = "FreeBird"
 uuid = "b4936512-85e8-430f-a91d-7f510ed448a2"
 authors = ["Ray Yang <mingrui.yang@outlook.com> and contributors"]
-version = "0.0.2"
+version = "0.0.3"
 
 [deps]
 AtomsBase = "a963bdd2-2df7-4f54-a1ee-49d51e6be12a"

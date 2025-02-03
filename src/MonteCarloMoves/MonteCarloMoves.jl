@@ -7,7 +7,6 @@ module MonteCarloMoves
 
 using ExtXYZ
 using AtomsBase
-# using Setfield
 using Distributions
 using Unitful
 using StaticArrays

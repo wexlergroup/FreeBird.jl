@@ -66,8 +66,8 @@
                 @test pbc_dist(pos5, pos6, six_particle_sys) ≈ 2.236068u"Å" rtol=1e-6
         
                 # Test non-periodic conditions
-                boundary_conditions = [DirichletZero(), DirichletZero(), DirichletZero()]
-                non_periodic_sys = FlexibleSystem(six_particle_sys; boundary_conditions=boundary_conditions)
+                boundary_conditions = (false, false, false)
+                non_periodic_sys = FastSystem(six_particle_sys.particles, box, boundary_conditions)
         
                 @test pbc_dist(pos1, pos2, non_periodic_sys) ≈ 6.0u"Å"
                 @test pbc_dist(pos3, pos4, non_periodic_sys) ≈ 6.324555u"Å" rtol=1e-6
@@ -166,6 +166,9 @@
                 # Test empty system
                 empty_sys = periodic_system([], box, fractional=true)
                 @test interacting_energy(empty_sys, lj) == 0.0u"eV"
+
+                # Test error handling
+                @test_throws ArgumentError interacting_energy(sys3, ljp1, [2, 2], [true, false, false])
             end
         end
     end

@@ -324,27 +324,28 @@
         @testset "periodic_boundary_wrap function tests" begin
 
             # Single-atom system
-            coor_list = [:H => [0.5, 0.5, 0.5]]
+            coor_list = [:H => [0.5, 0.5, 0.5] .* box_size]
             
             # Test periodic wrapping
-            periodic_sys = periodic_system(coor_list, box, fractional=true)
+            pbc = (true, true, true)
+            periodic_sys = atomic_system(coor_list, box, pbc)
             pos = SVector{3,typeof(1.0u"Å")}([12.0, 15.0, -2.0] .* u"Å")
             wrapped_pos = periodic_boundary_wrap!(pos, periodic_sys)
             @test wrapped_pos ≈ SVector{3,typeof(1.0u"Å")}([2.0, 5.0, 8.0] .* u"Å")
 
             # Test Dirichlet reflection
-            dirichlet_sys = periodic_system(coor_list, box, fractional=true, 
-                boundary_conditions=[DirichletZero(), DirichletZero(), DirichletZero()])
+            pbc = (false, false, false)
+            dirichlet_sys = atomic_system(coor_list, box, pbc)
             pos = SVector{3,typeof(1.0u"Å")}([12.0, -2.0, 15.0] .* u"Å")
             wrapped_pos = periodic_boundary_wrap!(pos, dirichlet_sys)
-            @test wrapped_pos ≈ SVector{3,typeof(1.0u"Å")}([2.0, 8.0, 5.0] .* u"Å")
+            @test wrapped_pos ≈ SVector{3,typeof(1.0u"Å")}([8.0, 2.0, 5.0] .* u"Å")
 
             # Test mixed boundaries
-            mixed_sys = periodic_system(coor_list, box, fractional=true, 
-                boundary_conditions=[Periodic(), DirichletZero(), Periodic()])
+            pbc = (true, false, true)
+            mixed_sys = atomic_system(coor_list, box, pbc)
             pos = SVector{3,typeof(1.0u"Å")}([12.0, 12.0, -2.0] .* u"Å")
             wrapped_pos = periodic_boundary_wrap!(pos, mixed_sys)
-            @test wrapped_pos ≈ SVector{3,typeof(1.0u"Å")}([2.0, 2.0, 8.0] .* u"Å")
+            @test wrapped_pos ≈ SVector{3,typeof(1.0u"Å")}([2.0, 8.0, 8.0] .* u"Å")
         end
 
             

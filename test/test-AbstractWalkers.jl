@@ -84,7 +84,7 @@
                 @test sum(walker_unmerged.list_num_par) == length(at)
 
                 # Test with invalid freeze species
-                @test_throws ArgumentError AtomWalker(at, freeze_species=[:Xx])
+                @test_throws ArgumentError AtomWalker(at, freeze_species=[:Si])
             end
 
             @testset "Show method tests" begin
@@ -1038,8 +1038,8 @@
                 @test length(components[6]) == 6  # Cl₆
                 
                 # Check bounding box and boundary conditions preserved
-                @test all(c.bounding_box == at.bounding_box for c in components)
-                @test all(c.boundary_conditions == at.boundary_conditions for c in components)
+                @test all(cell_vectors(c) == cell_vectors(at) for c in components)
+                @test all(periodicity(c) == periodicity(at) for c in components)
             end
 
             @testset "split_components_by_chemical_species" begin
@@ -1055,8 +1055,8 @@
                 @test species_counts[5] == 5   # Au
                 
                 # Verify system properties preserved
-                @test all(c.bounding_box == at.bounding_box for c in components)
-                @test all(c.boundary_conditions == at.boundary_conditions for c in components)
+                @test all(cell_vectors(c) == cell_vectors(at) for c in components)
+                @test all(periodicity(c) == periodicity(at) for c in components)
             end
 
             @testset "check_num_components" begin
@@ -1079,8 +1079,8 @@
                 list_num_par, new_system = sort_components_by_atomic_number(at, merge_same_species=false)
                 @test length(list_num_par) == 6  # H₂, H₃, O, Cl, Fe, Au
                 @test length(new_system) == length(at)
-                @test new_system.bounding_box == at.bounding_box
-                @test new_system.boundary_conditions == at.boundary_conditions
+                @test cell_vectors(new_system) == cell_vectors(at)
+                @test periodicity(new_system) == periodicity(at)
             end
         end
     end

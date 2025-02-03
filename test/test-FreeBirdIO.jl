@@ -2,15 +2,12 @@
     
     @testset "set_pbc" begin
         box = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]]u"Å"
-        boundary_conditions = [Periodic(), Periodic(), Periodic()]
+        boundary_conditions = (true, true, true)
         sys = FlexibleSystem([Atom(:H, [0, 0, 1.]u"Å")], box, boundary_conditions)
         at = Atoms(sys)
         pbc = [true, false, true]
         flex_sys = FreeBirdIO.set_pbc(at, pbc)
-        @test length(flex_sys.boundary_conditions) == 3
-        @test flex_sys.boundary_conditions[1] isa Periodic
-        @test flex_sys.boundary_conditions[2] isa DirichletZero
-        @test flex_sys.boundary_conditions[3] isa Periodic
+        @test periodicity(flex_sys) == Tuple(pbc)
     end
 
     @testset "convert_system_to_walker" begin
@@ -31,7 +28,7 @@
 
     @testset "append_system" begin
         box = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]]u"Å"
-        boundary_conditions = [Periodic(), Periodic(), Periodic()]
+        boundary_conditions = (true, true, true)
         at1 = FlexibleSystem([Atom(:H, [0, 0, 1.]u"Å")], box, boundary_conditions)
         at2 = FlexibleSystem([Atom(:H, [0, 0, 3.]u"Å")], box, boundary_conditions)
         new_sys = append_system(at1, at2)
@@ -87,7 +84,7 @@
         free = FreeBirdIO.extract_free_par(walker)
         @test length(free.configuration) == 2
         @test all([!frozen for frozen in free.frozen])
-        @test all(:O in free.configuration.atomic_symbol)
+        @test all(ChemicalSpecies(:O) in free.configuration.species)
     end
 
 

@@ -87,7 +87,7 @@ function AtomWalker(configuration::FastSystem; freeze_species::Vector{Symbol}=Sy
     C = length(list_num_par)
     frozen = zeros(Bool, C)
     if !isempty(freeze_species)
-        elements = unique(atomic_symbol(configuration))
+        elements = unique([atomic_symbol(configuration, i) for i in 1:length(configuration)])
         for species in freeze_species
             if !(species in elements)
                 throw(ArgumentError("The species $species is not in the system."))
@@ -96,7 +96,7 @@ function AtomWalker(configuration::FastSystem; freeze_species::Vector{Symbol}=Sy
         components = split_components(configuration, list_num_par)
         for i in 1:length(freeze_species)
             for j in 1:C
-                if freeze_species[i] in atomic_symbol(components[j])
+                if freeze_species[i] in [atomic_symbol(components[j], k) for k in 1:length(components[j])]
                     frozen[j] = true
                 end
             end

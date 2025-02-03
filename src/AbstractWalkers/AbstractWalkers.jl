@@ -16,6 +16,10 @@ using ..AbstractHamiltonians
 export AbstractWalker
 export AbstractLattice
 export AtomWalker
+export sort_components_by_atomic_number
+export split_components
+export split_components_by_chemical_species
+export check_num_components
 export LatticeWalker
 export LatticeGeometry, SquareLattice, TriangularLattice, GenericLattice
 export MLattice, SLattice, GLattice

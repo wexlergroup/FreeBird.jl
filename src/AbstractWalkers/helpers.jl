@@ -18,7 +18,14 @@ function split_components(at::AbstractSystem, list_num_par::Vector{Int})
     comp_cut = vcat([0],cumsum(list_num_par))
     comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:length(list_num_par)]
     for i in 1:length(list_num_par)
-        components[i] = FastSystem(at[comp_split[i]],at.bounding_box,at.boundary_conditions)
+        new_list = empty([Symbol(atomic_symbol(at[1])) => position(at[1])])
+        pos = position(at, comp_split[i])
+        symbols = [Symbol(atomic_symbol(at[i])) for i in comp_split[i]]
+        for i in 1:length(pos)
+            push!(new_list, symbols[i] => pos[i])
+        end
+        sys = atomic_system(new_list, cell_vectors(at), periodicity(at))
+        components[i] = FastSystem(sys)
     end
     return components
 end
@@ -67,11 +74,18 @@ julia> AbstractWalkers.split_components_by_chemical_species(at)
 ```
 """
 function split_components_by_chemical_species(at::AbstractSystem)
-    list_species = atomic_number(at)
+    list_species = [atomic_number(at, i) for i in 1:length(at)]
     species = sort!(unique(list_species))
     components = Array{FastSystem}(undef, length(species))
     for i in 1:length(species)
-        components[i] = FastSystem(at[findall(x->x==species[i],list_species)],at.bounding_box,at.boundary_conditions)
+        new_list = empty([Symbol(atomic_symbol(at[1])) => position(at[1])])
+        pos = position(at, findall(x->x==species[i],list_species))
+        symbols = [Symbol(atomic_symbol(at[i])) for i in findall(x->x==species[i],list_species)]
+        for i in 1:length(pos)
+            push!(new_list, symbols[i] => pos[i])
+        end
+        sys = atomic_system(new_list, cell_vectors(at), periodicity(at))
+        components[i] = FastSystem(sys)
     end
     return components
 end
@@ -142,8 +156,8 @@ julia> AbstractWalkers.sort_components_by_atomic_number(at)
 ```
 """
 function sort_components_by_atomic_number(at::AbstractSystem; merge_same_species=true)
-    list_species = atomic_number(at)
-    new_list = Array{eltype(at[1])}(undef,0)
+    list_species = [atomic_number(at, i) for i in 1:length(at)]
+    new_list = empty([Symbol(atomic_symbol(at[1])) => position(at[1])])
     if merge_same_species
         species = sort!(unique(list_species))
         list_num_par = [count(x->x==s, list_species) for s in species]
@@ -164,7 +178,12 @@ function sort_components_by_atomic_number(at::AbstractSystem; merge_same_species
         species = unique([x[1] for x in zipped])
     end
     for i in 1:length(species)
-        append!(new_list,at[findall(x->x==species[i],list_species)])
+        pos = position(at, findall(x->x==species[i],list_species))
+        symbols = [Symbol(atomic_symbol(at[i])) for i in findall(x->x==species[i],list_species)]
+        for i in 1:length(pos)
+            push!(new_list, symbols[i] => pos[i])
+        end
     end
-    return list_num_par, FastSystem(new_list,at.bounding_box,at.boundary_conditions)
+    sys = atomic_system(new_list, cell_vectors(at), periodicity(at))
+    return list_num_par, FastSystem(sys)
 end

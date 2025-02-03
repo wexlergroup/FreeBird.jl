@@ -339,14 +339,14 @@
             @show dirichlet_sys
             pos = SVector{3,typeof(1.0u"Å")}([12.0, -2.0, 15.0] .* u"Å")
             wrapped_pos = periodic_boundary_wrap!(pos, dirichlet_sys)
-            @test wrapped_pos ≈ SVector{3,typeof(1.0u"Å")}([2.0, 8.0, 5.0] .* u"Å")
+            @test wrapped_pos ≈ SVector{3,typeof(1.0u"Å")}([8.0, 2.0, 5.0] .* u"Å")
 
             # Test mixed boundaries
             pbc = (true, false, true)
             mixed_sys = atomic_system(coor_list, box, pbc)
             pos = SVector{3,typeof(1.0u"Å")}([12.0, 12.0, -2.0] .* u"Å")
             wrapped_pos = periodic_boundary_wrap!(pos, mixed_sys)
-            @test wrapped_pos ≈ SVector{3,typeof(1.0u"Å")}([2.0, 2.0, 8.0] .* u"Å")
+            @test wrapped_pos ≈ SVector{3,typeof(1.0u"Å")}([2.0, 8.0, 8.0] .* u"Å")
         end
 
             

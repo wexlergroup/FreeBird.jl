@@ -34,12 +34,13 @@ where \$N\$ is the number of walkers and \$i\$ is the iteration number.
 # Arguments
 - `iters::Vector{Int}`: The iteration numbers.
 - `n_walkers::Int`: The number of walkers.
+- `ω0::Float64`: The initial \$\\omega\$ factor. Default is 1.0.
 
 # Returns
 - A vector of \$\\omega\$ factors.
 """
-function ωᵢ(iters::Vector{Int}, n_walkers::Int)
-    ωi = (1/(n_walkers+1))*(n_walkers/(n_walkers+1)).^iters
+function ωᵢ(iters::Vector{Int}, n_walkers::Int; ω0::Float64=1.0)
+    ωi = ω0 * (1/(n_walkers+1)) * (n_walkers/(n_walkers+1)).^iters
     return ωi
 end
 
@@ -140,12 +141,13 @@ where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann cons
 - `βs::Vector{Float64}`: The inverse temperatures.
 - `dof::Int`: The degrees of freedom, equals to the number of dimensions times the number of particles.
 - `n_walkers::Int`: The number of walkers.
+- `ω0::Float64`: The initial \$\\omega\$ factor. Default is 1.0.
 
 # Returns
 - A vector of constant-volume heat capacities.
 """
-function cv(df::DataFrame, βs::Vector{Float64}, dof::Int, n_walkers::Int)
-    ωi = ωᵢ(df.iter, n_walkers)
+function cv(df::DataFrame, βs::Vector{Float64}, dof::Int, n_walkers::Int; ω0::Float64=1.0)
+    ωi = ωᵢ(df.iter, n_walkers; ω0=ω0)
     Ei = df.emax .- minimum(df.emax)
     cvs = [cv(b, ωi, Ei, dof) for b in βs]
     return cvs

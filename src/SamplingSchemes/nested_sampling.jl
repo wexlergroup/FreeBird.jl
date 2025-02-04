@@ -11,7 +11,7 @@ The `NestedSamplingParameters` struct represents the parameters used in the nest
 - `step_size_up::Float64`: The upper bound of the step size.
 - `fail_count::Int64`: The number of failed MC moves in a row.
 - `allowed_fail_count::Int64`: The maximum number of failed MC moves allowed before resetting the step size.
-
+- `random_seed::Int64`: The seed for the random number generator.
 """
 mutable struct NestedSamplingParameters <: SamplingParameters
     mc_steps::Int64
@@ -21,13 +21,48 @@ mutable struct NestedSamplingParameters <: SamplingParameters
     step_size_up::Float64
     fail_count::Int64
     allowed_fail_count::Int64
+    random_seed::Int64
+    function NestedSamplingParameters(;
+        mc_steps::Int64=200,
+        initial_step_size::Float64=0.01,
+        step_size::Float64=0.1,
+        step_size_lo::Float64=1e-6,
+        step_size_up::Float64=1.0,
+        fail_count::Int64=0,
+        allowed_fail_count::Int64=100,
+        random_seed::Int64=1234,
+        )
+        new(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, fail_count, allowed_fail_count, random_seed)  
+    end
 end
 
+"""
+    mutable struct LatticeNestedSamplingParameters <: SamplingParameters
+
+The `LatticeNestedSamplingParameters` struct represents the parameters used in the lattice nested sampling scheme.
+
+# Fields
+- `mc_steps::Int64`: The number of total Monte Carlo moves to perform.
+- `energy_perturbation::Float64`: The energy perturbation used in the sampling process.
+- `fail_count::Int64`: The number of failed MC moves in a row.
+- `allowed_fail_count::Int64`: The maximum number of failed MC moves allowed before resetting the step size.
+- `random_seed::Int64`: The seed for the random number generator.
+"""
 mutable struct LatticeNestedSamplingParameters <: SamplingParameters
     mc_steps::Int64
     energy_perturbation::Float64
     fail_count::Int64
     allowed_fail_count::Int64
+    random_seed::Int64
+    function LatticeNestedSamplingParameters(;
+        mc_steps::Int64=100,
+        energy_perturbation::Float64=1e-12,
+        fail_count::Int64=0,
+        allowed_fail_count::Int64=10,
+        random_seed::Int64=1234,
+        )
+        new(mc_steps, energy_perturbation, fail_count, allowed_fail_count, random_seed)  
+    end
 end
 
 

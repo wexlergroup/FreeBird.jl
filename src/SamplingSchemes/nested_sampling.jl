@@ -93,7 +93,7 @@ A type for generating a new walker from a random configuration. Currently, it is
 struct MCNewSample <: MCRoutine end
 
 
-
+struct MCRejectionSampling <: MCRoutine end
 
 """
     sort_by_energy!(liveset::LJAtomWalkers)
@@ -175,7 +175,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
 end
 
 """
-    nested_sampling_step!(liveset::LatticeGasWalkers, ns_params::LatticeNestedSamplingParameters, mc_routine::MCRoutine; accept_same_config::Bool=true)
+    nested_sampling_step!(liveset::LatticeGasWalkers, ns_params::LatticeNestedSamplingParameters, mc_routine::MCRoutine)
 
 Perform a single step of the nested sampling algorithm.
 
@@ -225,7 +225,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
 end
 
 """
-    nested_sampling_step!(liveset::LatticeGasWalkers, ns_params::LatticeNestedSamplingParameters, mc_routine::MCNewSample; accept_same_config::Bool=false)
+    nested_sampling_step!(liveset::LatticeGasWalkers, ns_params::LatticeNestedSamplingParameters, mc_routine::MCNewSample)
 
 Perform a single step of the nested sampling algorithm.
 
@@ -235,7 +235,6 @@ This function takes a `liveset` of lattice gas walkers, `ns_params` containing t
 - `liveset::LatticeGasWalkers`: The liveset of lattice gas walkers.
 - `ns_params::LatticeNestedSamplingParameters`: The parameters for nested sampling.
 - `mc_routine::MCNewSample`: The Monte Carlo routine for generating new samples.
-- `accept_same_config::Bool=true`: A flag indicating whether to accept a new sample with the same configuration as an existing one.
 
 ## Returns
 - `iter`: The iteration number of the liveset after the step.
@@ -255,6 +254,36 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     to_walk = deepcopy(ats[1])
 
     accept, at = MC_new_sample!(to_walk, h, emax; energy_perturb=ns_params.energy_perturbation)
+
+    @info "iter: $(liveset.walkers[1].iter), emax: $emax, is_accepted: $accept"
+    if accept
+        push!(ats, at)
+        popfirst!(ats)
+        update_iter!(liveset)
+        ns_params.fail_count = 0
+        iter = liveset.walkers[1].iter
+    else
+        @warn "Failed to accept MC move"
+        emax = missing
+        ns_params.fail_count += 1
+    end
+    # adjust_step_size(ns_params, rate)
+    return iter, emax, liveset, ns_params
+end
+
+
+function nested_sampling_step!(liveset::LatticeGasWalkers, 
+                               ns_params::LatticeNestedSamplingParameters, 
+                               mc_routine::MCRejectionSampling)
+    sort_by_energy!(liveset)
+    ats = liveset.walkers
+    h = liveset.hamiltonian
+    iter::Union{Missing,Int} = missing
+    emax::Union{Missing,Float64} = liveset.walkers[1].energy.val
+
+    to_walk = deepcopy(ats[1])
+
+    accept, at = MC_rejection_sampling!(to_walk, h, emax; energy_perturb=ns_params.energy_perturbation)
 
     @info "iter: $(liveset.walkers[1].iter), emax: $emax, is_accepted: $accept"
     if accept

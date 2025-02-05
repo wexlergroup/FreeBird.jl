@@ -171,6 +171,41 @@ function MC_new_sample!(lattice::LatticeWalker{C},
 end
 
 
+function MC_rejection_sampling!(lattice::LatticeWalker{C},
+                        h::ClassicalHamiltonian,
+                        emax::Float64;
+                        energy_perturb::Float64=0.0,
+                        ) where C
+
+    accept_this_walker = false
+    emax = emax * unit(lattice.energy)
+
+    current_energy = lattice.energy + 1e-12 * unit(lattice.energy) # initialize to a value greater than emax
+    current_lattice = lattice.configuration
+
+    while current_energy > emax
+        
+        proposed_lattice = deepcopy(current_lattice)
+        generate_random_new_lattice_sample!(proposed_lattice)
+
+        perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
+        raw_energy = interacting_energy(proposed_lattice, h)
+        proposed_energy = raw_energy + perturbation_energy
+
+        @debug "proposed_energy = $proposed_energy, perturbed_energy = $(perturbation_energy), emax = $(emax)), accept = $(proposed_energy < emax)"
+
+        if proposed_energy <= emax
+            lattice.configuration = proposed_lattice
+            lattice.energy = raw_energy
+            accept_this_walker = true
+            break
+        end
+    end
+
+    return accept_this_walker, lattice
+end
+
+
 """
     generate_random_new_lattice_sample!(lattice::MLattice{C}) where C
 

@@ -23,7 +23,7 @@ using ..AbstractHamiltonians
 export NestedSamplingParameters, LatticeNestedSamplingParameters, WangLandauParameters
 export sort_by_energy!, nested_sampling_step!
 export nested_sampling_loop!
-export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCDemonWalk, MixedMCRoutine, MCNewSample
+export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MixedMCRoutine, MCNewSample, MCRejectionSampling
 export exact_enumeration, nvt_monte_carlo, wang_landau
 
 abstract type SamplingParameters end

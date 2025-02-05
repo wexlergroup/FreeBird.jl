@@ -66,9 +66,7 @@ function wang_landau(
     S = zeros(Float64, energy_bins_count)  # Entropy
     H = zeros(Int64, energy_bins_count)
 
-    # energies = Float64[]
-    # configurations = Vector{typeof(lattice)}()
-    df = DataFrame(energy=Float64[], config=Any[])
+    df = DataFrame(energy=Float64[], config=Vector{Vector{Bool}}[])
     
     # Choose a modification factor
     f = wl_params.f_initial
@@ -79,8 +77,12 @@ function wang_landau(
     # push!(energies, current_energy)
     # push!(configurations, deepcopy(current_lattice))
     push!(df, (current_energy, deepcopy(current_lattice.components)))
+    counter = 0
 
     while f > wl_params.f_min
+
+        counter += 1
+
         for _ in 1:wl_params.num_steps        
             # Propose a swap in occupation state (only if it maintains constant N)
             proposed_lattice = deepcopy(current_lattice)
@@ -112,8 +114,6 @@ function wang_landau(
             S[current_bin] += log(f)
             H[current_bin] += 1
 
-            # push!(energies, current_energy)
-            # push!(configurations, deepcopy(current_lattice))
             push!(df, (current_energy, deepcopy(current_lattice.components)))
         end
 
@@ -122,10 +122,10 @@ function wang_landau(
         if length(non_zero_histogram) > 0 && minimum(non_zero_histogram) > wl_params.flatness_criterion * mean(non_zero_histogram)
             f = sqrt(f)
             H .= 0
+            # Print progress
+            @info "f = $f, iterations = $counter"
+            counter = 0
         end
-
-        # Print progress
-        println("f = $f")
     end
 
     return df, wl_params, S, H

@@ -71,6 +71,19 @@ end
     abstract type MCRoutine
 
 An abstract type representing a Monte Carlo routine.
+    
+Currnetly, the following concrete types are supported:
+- `MCRandomWalkMaxE`: A type for generating a new walker by performing a random walk for decorrelation on the
+highest-energy walker.
+- `MCRandomWalkClone`: A type for generating a new walker by cloning an existing walker and performing a random walk
+for decorrelation.
+- `MCNewSample`: A type for generating a new walker from a random configuration. Currently, it is intended to use 
+this routine for lattice gas systems.
+- `MCMixedMoves`: A type for generating a new walker by performing random walks and swapping atoms. Currently, it is
+intended to use this routine for multi-component systems. The actual number of random walks and swaps to perform is
+determined by the weights of the fields `walks_freq` and `swaps_freq`. See [`MCMixedMoves`](@ref).
+- `MCRejectionSampling`: A type for generating a new walker by performing rejection sampling. Currently, it is intended
+to use this routine for lattice gas systems.
 """
 abstract type MCRoutine end
 
@@ -112,6 +125,10 @@ mutable struct MCMixedMoves <: MCRoutine
     swaps_counter::Int
 end
 
+"""
+    struct MCRejectionSampling <: MCRoutine
+A type for generating a new walker by performing rejection sampling. Currently, it is intended to use this routine for lattice gas systems.
+"""
 struct MCRejectionSampling <: MCRoutine end
 
 """
@@ -148,14 +165,14 @@ end
 
 
 """
-    nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRandomWalk)
+    nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine)
 
 Perform a single step of the nested sampling algorithm using the Monte Carlo random walk routine.
 
 Arguments
 - `liveset::AtomWalkers`: The set of atom walkers.
 - `ns_params::NestedSamplingParameters`: The parameters for nested sampling.
-- `mc_routine::MCRandomWalk`: The Monte Carlo random walk routine. Currently within this function, the random walk is only applied to the highest-energy walker, i.e., the one being culled.
+- `mc_routine::MCRoutine`: The Monte Carlo routine for generating new samples. See [`MCRoutine`](@ref).
 
 Returns
 - `iter`: The iteration number after the step.

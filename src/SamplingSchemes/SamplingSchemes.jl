@@ -29,7 +29,7 @@ export MetropolisMCParameters
 # nested sampling related functions
 export sort_by_energy!, nested_sampling_step!
 export nested_sampling_loop!
-export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MixedMCRoutine, MCNewSample, MCRejectionSampling, MCMixedMoves
+export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCNewSample, MCRejectionSampling, MCMixedMoves
 
 # other sampling schemes
 export exact_enumeration

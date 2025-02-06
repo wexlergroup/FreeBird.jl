@@ -35,7 +35,7 @@ end
 
 Perform the NVT Monte Carlo algorithm to sample the lattice configurations.
 
-Note: The Boltzmann constant is set to 8.617333262e-5 eV K\(^{-1}\). Thus, the units of the temperature
+Note: The Boltzmann constant is set to 8.617333262e-5 eV K\$^{-1}\$. Thus, the units of the temperature
 should be in Kelvin, and the units of the energy should be in eV (defined in the Hamiltonian).
 
 # Arguments
@@ -96,6 +96,53 @@ function nvt_monte_carlo(
     return energies, configurations, accepted_steps
 end
 
+
+function nvt_monte_carlo(
+    walker::AtomWalker,
+    lj::LennardJonesParametersSets,
+    temperature::Float64,
+    num_steps::Int64,
+    random_seed::Int64
+)
+    # Set the random seed
+    Random.seed!(random_seed)
+    
+    energies = Vector{Float64}(undef, num_steps)
+    configurations = Vector{typeof(lattice)}(undef, num_steps)
+    # df = DataFrame(energy=Float64[], config=Vector{Vector{Bool}}[])
+    accepted_steps = 0
+
+    current_walker = deepcopy(walker)
+    current_energy = interacting_energy(current_walker.configuration, lj).val
+    
+    Threads.@threads for i in 1:num_steps
+        
+        # Propose a swap in occupation state (only if it maintains constant N)
+        proposed_walker = deepcopy(current_walker)
+
+        MC_random_walk!(200, proposed_walker, lj, 0.01, Inf*unit(proposed_walker.energy))
+
+        # Calculate the proposed energy
+        proposed_energy = interacting_energy(proposed_walker, lj).val
+
+        # Metropolis-Hastings acceptance criterion
+        kb = 8.617_333_262e-5  # eV K-1
+
+        ΔE = proposed_energy - current_energy
+        if ΔE < 0 || rand() < exp(-ΔE / (kb * temperature))
+            current_walker.configuration = proposed_walker.configuration
+            current_energy = proposed_energy
+            accepted_steps += 1
+        end
+
+        # push!(df, (current_energy, deepcopy(current_lattice.components)))
+        energies[i] = current_energy
+        configurations[i] = current_walker
+    end
+
+    return energies, configurations, accepted_steps
+end
+
 """
     monte_carlo_sampling(
         lattice::AbstractLattice,
@@ -105,7 +152,7 @@ end
 
 Perform the Metropolis Monte Carlo sampling algorithm for a range of temperatures.
 
-Note: The Boltzmann constant is set to 8.617333262e-5 eV K\(^{-1}\). Thus, the units of the temperature
+Note: The Boltzmann constant is set to 8.617333262e-5 eV K\$^{-1}\$. Thus, the units of the temperature
 should be in Kelvin, and the units of the energy should be in eV (defined in the Hamiltonian).
 
 # Arguments
@@ -129,7 +176,7 @@ function monte_carlo_sampling(
 
     kb = 8.617333262e-5 # eV/K
 
-    Threads.@threads for (i, temp) in collect(enumerate(mc_params.temperatures))
+    for (i, temp) in enumerate(mc_params.temperatures)
 
         # Equilibrate the lattice
         equilibration_energies, equilibration_configurations, equilibration_accepted_steps = nvt_monte_carlo(
@@ -160,6 +207,8 @@ function monte_carlo_sampling(
         energies[i] = E
         cvs[i] = Cv
         acceptance_rates[i] = acceptance_rate
+
+        lattice = sampling_configurations[end]
 
         @info "Temperature: $temp K, Energy: $E eV, Cv: $Cv, Acceptance rate: $acceptance_rate"
     end

@@ -149,7 +149,10 @@ where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann cons
 function cv(df::DataFrame, βs::Vector{Float64}, dof::Int, n_walkers::Int; ω0::Float64=1.0)
     ωi = ωᵢ(df.iter, n_walkers; ω0=ω0)
     Ei = df.emax .- minimum(df.emax)
-    cvs = [cv(b, ωi, Ei, dof) for b in βs]
+    cvs = Vector{Float64}(undef, length(βs))
+    Threads.@threads for (i, b) in collect(enumerate(βs))
+        cvs[i] = cv(b, ωi, Ei, dof)
+    end
     return cvs
 end
 

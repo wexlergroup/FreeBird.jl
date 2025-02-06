@@ -68,7 +68,7 @@ function nvt_monte_carlo(
     current_lattice = deepcopy(lattice)
     current_energy = interacting_energy(current_lattice, h).val
     
-    Threads.@threads for i in 1:num_steps
+    for i in 1:num_steps
         
         # Propose a swap in occupation state (only if it maintains constant N)
         proposed_lattice = deepcopy(current_lattice)
@@ -106,36 +106,33 @@ function nvt_monte_carlo(
 )
     # Set the random seed
     Random.seed!(random_seed)
+
+    e_unit = unit(walker.energy)
+    cell_vec = walker.configuration.cell.cell_vectors
+    cell_volume = cell_vec[1][1] * cell_vec[2][2] * cell_vec[3][3]
+    cell_size = cbrt(cell_volume).val
     
-    energies = Vector{Float64}(undef, num_steps)
-    configurations = Vector{typeof(lattice)}(undef, num_steps)
-    # df = DataFrame(energy=Float64[], config=Vector{Vector{Bool}}[])
+    energies = Vector{typeof(walker.energy)}(undef, num_steps)
+    configurations = Vector{typeof(walker)}(undef, num_steps)
     accepted_steps = 0
 
     current_walker = deepcopy(walker)
-    current_energy = interacting_energy(current_walker.configuration, lj).val
+    current_energy = interacting_energy(current_walker.configuration, lj, current_walker.list_num_par, current_walker.frozen)
     
-    Threads.@threads for i in 1:num_steps
-        
-        # Propose a swap in occupation state (only if it maintains constant N)
+    for i in 1:num_steps
         proposed_walker = deepcopy(current_walker)
-
-        MC_random_walk!(200, proposed_walker, lj, 0.01, Inf*unit(proposed_walker.energy))
-
+        # move the atoms by 1% of the average cell size
+        _, _, proposed_walker = MC_random_walk!(200, proposed_walker, lj, cell_size*0.01, Inf*unit(proposed_walker.energy))
         # Calculate the proposed energy
-        proposed_energy = interacting_energy(proposed_walker, lj).val
-
+        proposed_energy = interacting_energy(proposed_walker.configuration, lj, proposed_walker.list_num_par, proposed_walker.frozen)
         # Metropolis-Hastings acceptance criterion
         kb = 8.617_333_262e-5  # eV K-1
-
         ΔE = proposed_energy - current_energy
-        if ΔE < 0 || rand() < exp(-ΔE / (kb * temperature))
+        if ΔE < 0*e_unit || rand() < exp(-ΔE.val / (kb * temperature))
             current_walker.configuration = proposed_walker.configuration
             current_energy = proposed_energy
             accepted_steps += 1
         end
-
-        # push!(df, (current_energy, deepcopy(current_lattice.components)))
         energies[i] = current_energy
         configurations[i] = current_walker
     end

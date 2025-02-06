@@ -17,11 +17,13 @@ using ..AbstractWalkers
 using ..EnergyEval
 
 export periodic_boundary_wrap!
-export MC_random_walk!, MC_new_sample!, MC_rejection_sampling!
+export MC_random_walk!, MC_new_sample!, MC_rejection_sampling!, MC_random_swap!
 export generate_random_new_lattice_sample!
 
 include("helpers.jl")
 
 include("random_walks.jl")
+
+include("atomistic_swaps.jl")
 
 end # module MonteCarloMoves

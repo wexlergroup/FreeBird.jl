@@ -122,7 +122,7 @@ function nvt_monte_carlo(
     for i in 1:num_steps
         proposed_walker = deepcopy(current_walker)
         # move the atoms by 1% of the average cell size
-        _, _, proposed_walker = MC_random_walk!(200, proposed_walker, lj, cell_size*0.01, Inf*unit(proposed_walker.energy))
+        _, _, proposed_walker = MC_random_walk!(1, proposed_walker, lj, cell_size*0.01, Inf*unit(proposed_walker.energy))
         # Calculate the proposed energy
         proposed_energy = interacting_energy(proposed_walker.configuration, lj, proposed_walker.list_num_par, proposed_walker.frozen)
         # Metropolis-Hastings acceptance criterion

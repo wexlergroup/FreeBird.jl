@@ -161,7 +161,8 @@
                 0.01,    # step_size_lo
                 1.0,     # step_size_up
                 0,       # fail_count
-                100      # allowed_fail_count
+                100,     # allowed_fail_count
+                1234     # random_seed
             )
             
             @test params isa SamplingSchemes.SamplingParameters
@@ -172,6 +173,7 @@
             @test params.step_size_up == 1.0
             @test params.fail_count == 0
             @test params.allowed_fail_count == 100
+            @test params.random_seed == 1234
             
             # Test mutability
             params.step_size = 0.2
@@ -186,7 +188,8 @@
                 1000,    # mc_steps
                 0.1,     # energy_perturbation
                 0,       # fail_count
-                100      # allowed_fail_count
+                100,     # allowed_fail_count
+                1234     # random_seed
             )
             
             @test params isa SamplingSchemes.SamplingParameters
@@ -194,6 +197,7 @@
             @test params.energy_perturbation == 0.1
             @test params.fail_count == 0
             @test params.allowed_fail_count == 100
+            @test params.random_seed == 1234
             
             # Test mutability
             params.fail_count = 1
@@ -311,7 +315,8 @@
                     0.01,    # step_size_lo
                     1.0,     # step_size_up
                     0,       # fail_count
-                    100      # allowed_fail_count
+                    100,     # allowed_fail_count
+                    1234     # random_seed
                 )
                 
                 @testset "MCRandomWalkMaxE" begin
@@ -369,7 +374,8 @@
                     1000,    # mc_steps
                     0.1,     # energy_perturbation
                     0,       # fail_count
-                    100      # allowed_fail_count
+                    100,     # allowed_fail_count
+                    1234     # random_seed
                 )
         
                 @testset "MCRandomWalkMaxE" begin
@@ -414,7 +420,8 @@
                     0.01,    # step_size_lo
                     1.0,     # step_size_up
                     0,       # fail_count
-                    100      # allowed_fail_count
+                    100,     # allowed_fail_count
+                    1234     # random_seed
                 )
 
             @testset "Step size increases" begin
@@ -479,7 +486,8 @@
                     0.01,    # step_size_lo
                     1.0,     # step_size_up
                     0,       # fail_count
-                    100      # allowed_fail_count
+                    100,     # allowed_fail_count
+                    1234     # random_seed
                 )
                 
                 save_strategy = SaveEveryN(
@@ -543,7 +551,7 @@
                 s_walkers = [deepcopy(s_walker) for _ in 1:3]
                 liveset = LatticeGasWalkers(s_walkers, ham)
                 
-                ns_params = LatticeNestedSamplingParameters(1000, 0.1, 0, 100)
+                ns_params = LatticeNestedSamplingParameters(1000, 0.1, 0, 100, 1234)
                 save_strategy = SaveEveryN("test_df.csv", "test.traj", "test.ls", 2, 2)
 
                 @testset "Basic functionality" begin
@@ -607,8 +615,8 @@
                 
                 energies, configs, accepted = nvt_monte_carlo(lattice, ham, 300.0, 100, 42)
                 
-                @test length(energies) == 101
-                @test length(configs) == 101
+                @test length(energies) == 100
+                @test length(configs) == 100
                 @test 0 ≤ accepted ≤ 100
                 @test all(isfinite, energies)
             end
@@ -644,40 +652,50 @@
                 components=[[true, false]]
             )
 
-            ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
-            energy_bins = range(-0.1, 0.1, length=20)
+            
+            adsorption_energy = -0.04
+            nn_energy = -0.01
+            nnn_energy = -0.0025
+
+            energy_min = 20.5 * nn_energy + nn_energy / 8
+            energy_max = 16 * nn_energy - nn_energy / 8
+            num_energy_bins = 100
+
+            ham = GenericLatticeHamiltonian(adsorption_energy, [nn_energy, nnn_energy], u"eV")
+
+            wl_params = WangLandauParameters(energy_min=energy_min, energy_max=energy_max, num_energy_bins=num_energy_bins)
 
             @testset "Basic functionality" begin
-                S, H, bins, energies, configs = wang_landau(
-                    lattice, ham, 100, 0.8, 2.7, 1.0001,
-                    collect(energy_bins), 42
+                energies_wl, wl_params, S, H = wang_landau(
+                    lattice, ham, wl_params
                 )
                 
-                @test length(S) == length(energy_bins)
-                @test length(H) == length(energy_bins)
-                @test length(energies) == 1401
-                @test length(configs) == 1401
+                @test length(S) == num_energy_bins
+                @test length(H) == num_energy_bins
+                @test length(energies_wl.energy) == 2701
+                @test length(energies_wl.config) == 2701
                 @test all(x -> x ≥ 0, H)
             end
 
             @testset "Energy conservation" begin
-                S, _, _, energies, configs = wang_landau(
-                    lattice, ham, 50, 0.8, 2.7, 1.001,
-                    collect(energy_bins), 42
+                energy_bins = range(-0.1, 0.1, length=20)
+                wl_params = WangLandauParameters(50, 0.8, 2.7, 1.001, energy_bins, 42)
+                energies_wl, wl_params, S, H = wang_landau(
+                    lattice, ham, wl_params
                 )
                 
-                @test all(e -> minimum(energy_bins) ≤ e ≤ maximum(energy_bins), energies)
-                @test all(c -> sum(c.components[1]) == sum(lattice.components[1]), configs)
+                @test all(e -> minimum(energy_bins) ≤ e ≤ maximum(energy_bins), energies_wl.energy)
+                @test all(c -> sum(c[1]) == sum(lattice.components[1]), energies_wl.config)
             end
 
             @testset "Modification factor" begin
-                S1, _, _, _, _ = wang_landau(
-                    lattice, ham, 50, 0.8, 2.7, 1.1,
-                    collect(energy_bins), 42
+                wl_params = WangLandauParameters(50, 0.8, 2.7, 1.1, energy_bins, 42)
+                _, _, S1, _ = wang_landau(
+                    lattice, ham, wl_params
                 )
-                S2, _, _, _, _ = wang_landau(
-                    lattice, ham, 50, 0.8, 2.7, 1.001,
-                    collect(energy_bins), 42
+                wl_params = WangLandauParameters(50, 0.8, 2.7, 1.001, energy_bins, 42)
+                _, _, S2, _ = wang_landau(
+                    lattice, ham, wl_params
                 )
                 
                 @test !isapprox(S1, S2)

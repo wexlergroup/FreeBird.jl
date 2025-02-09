@@ -689,6 +689,7 @@
             end
 
             @testset "Modification factor" begin
+                energy_bins = range(-0.1, 0.1, length=20)
                 wl_params = WangLandauParameters(50, 0.8, 2.7, 1.1, energy_bins, 42)
                 _, _, S1, _ = wang_landau(
                     lattice, ham, wl_params

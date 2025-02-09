@@ -17,7 +17,8 @@ using ..AbstractWalkers
 using ..EnergyEval
 
 export periodic_boundary_wrap!
-export MC_random_walk!, MC_new_sample!, MC_rejection_sampling!, MC_random_swap!
+export MC_random_walk!, MC_random_walk_2D!
+export MC_new_sample!, MC_rejection_sampling!, MC_random_swap!
 export generate_random_new_lattice_sample!
 
 include("helpers.jl")

@@ -18,6 +18,12 @@ function single_atom_random_walk!(pos::SVector{3,T}, step_size::Float64) where T
     return pos 
 end
 
+function single_atom_random_walk!(pos::SVector{3,T}, step_size::Float64, dims::Vector{Int}) where T
+    ds = (rand(Uniform(-step_size,step_size)) for _ in dims) .* unit(T)
+    ds = (ds..., 0.0* unit(T))
+    return pos  .+ ds
+end
+
 """
     MC_random_walk!(n_steps::Int, at::AtomWalker, lj::LJParameters, step_size::Float64, emax::typeof(0.0u"eV"))
 
@@ -52,6 +58,58 @@ function MC_random_walk!(
         pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
         orig_pos = deepcopy(pos)
         pos = single_atom_random_walk!(pos, step_size)
+        pos = periodic_boundary_wrap!(pos, config)
+        config.position[i_at] = pos
+        energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
+        if energy >= emax
+            # reject the move, revert to original position
+            config.position[i_at] = orig_pos
+        else
+            at.energy = energy
+            # accept the move
+            n_accept += 1
+            accept_this_walker = true
+        end
+    end
+    return accept_this_walker, n_accept/n_steps, at
+end
+
+"""
+    MC_random_walk_2D!(n_steps::Int, at::AtomWalker, lj::LJParameters, step_size::Float64, emax::typeof(0.0u"eV"); dims::Vector{Int}=[1,2])
+
+Perform a Monte Carlo random walk on the atomic/molecular system in 2D.
+
+# Arguments
+- `n_steps::Int`: The number of Monte Carlo steps to perform.
+- `at::AtomWalker{C}`: The walker to perform the random walk on.
+- `lj::LennardJonesParametersSets`: The Lennard-Jones potential parameters.
+- `step_size::Float64`: The maximum distance an atom can move in any direction.
+- `emax::typeof(0.0u"eV")`: The maximum energy allowed for accepting a move.
+- `dims::Vector{Int}=[1,2]`: The dimensions in which the random walk is performed.
+
+# Returns
+- `accept_this_walker::Bool`: Whether the walker is accepted or not.
+- `accept_rate::Float64`: The acceptance rate of the random walk.
+- `at::AtomWalker`: The updated walker.
+
+"""
+function MC_random_walk_2D!(
+                    n_steps::Int, 
+                    at::AtomWalker{C}, 
+                    lj::LennardJonesParametersSets, 
+                    step_size::Float64, 
+                    emax::typeof(0.0u"eV");
+                    dims::Vector{Int}=[1,2]
+                    ) where C
+    n_accept = 0
+    accept_this_walker = false
+    for i_mc_step in 1:n_steps
+        config = at.configuration
+        free_index = free_par_index(at)
+        i_at = rand(free_index)
+        pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
+        orig_pos = deepcopy(pos)
+        pos = single_atom_random_walk!(pos, step_size, dims)
         pos = periodic_boundary_wrap!(pos, config)
         config.position[i_at] = pos
         energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part

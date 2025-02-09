@@ -22,18 +22,19 @@ mutable struct NestedSamplingParameters <: SamplingParameters
     fail_count::Int64
     allowed_fail_count::Int64
     random_seed::Int64
-    function NestedSamplingParameters(;
-        mc_steps::Int64=200,
-        initial_step_size::Float64=0.01,
-        step_size::Float64=0.1,
-        step_size_lo::Float64=1e-6,
-        step_size_up::Float64=1.0,
-        fail_count::Int64=0,
-        allowed_fail_count::Int64=100,
-        random_seed::Int64=1234,
-        )
-        new(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, fail_count, allowed_fail_count, random_seed)  
-    end
+end
+
+function NestedSamplingParameters(;
+            mc_steps::Int64=200,
+            initial_step_size::Float64=0.01,
+            step_size::Float64=0.1,
+            step_size_lo::Float64=1e-6,
+            step_size_up::Float64=1.0,
+            fail_count::Int64=0,
+            allowed_fail_count::Int64=100,
+            random_seed::Int64=1234,
+            )
+    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, fail_count, allowed_fail_count, random_seed)  
 end
 
 """
@@ -54,15 +55,16 @@ mutable struct LatticeNestedSamplingParameters <: SamplingParameters
     fail_count::Int64
     allowed_fail_count::Int64
     random_seed::Int64
-    function LatticeNestedSamplingParameters(;
-        mc_steps::Int64=100,
-        energy_perturbation::Float64=1e-12,
-        fail_count::Int64=0,
-        allowed_fail_count::Int64=10,
-        random_seed::Int64=1234,
-        )
-        new(mc_steps, energy_perturbation, fail_count, allowed_fail_count, random_seed)  
-    end
+end
+
+function LatticeNestedSamplingParameters(;
+            mc_steps::Int64=100,
+            energy_perturbation::Float64=1e-12,
+            fail_count::Int64=0,
+            allowed_fail_count::Int64=10,
+            random_seed::Int64=1234,
+            )
+    LatticeNestedSamplingParameters(mc_steps, energy_perturbation, fail_count, allowed_fail_count, random_seed)  
 end
 
 
@@ -91,13 +93,23 @@ abstract type MCRoutine end
     struct MCRandomWalkMaxE <: MCRoutine
 A type for generating a new walker by performing a random walk for decorrelation on the highest-energy walker.
 """
-struct MCRandomWalkMaxE <: MCRoutine end
+struct MCRandomWalkMaxE <: MCRoutine 
+    dims::Vector{Int64}
+    function MCRandomWalkMaxE(dims::Vector{Int64}=[1, 2, 3])
+        new(dims)
+    end
+end
 
 """
     struct MCRandomWalkClone <: MCRoutine
 A type for generating a new walker by cloning an existing walker and performing a random walk for decorrelation.
 """
-struct MCRandomWalkClone <: MCRoutine end
+struct MCRandomWalkClone <: MCRoutine 
+    dims::Vector{Int64}
+    function MCRandomWalkClone(;dims::Vector{Int64}=[1, 2, 3])
+        new(dims)
+    end
+end
 
 """
     struct MCNewSample <: MCRoutine
@@ -193,7 +205,15 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     else
         error("Unsupported MCRoutine type: $mc_routine")
     end
-    accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
+    if mc_routine.dims == [1, 2, 3]
+        accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
+    elseif mc_routine.dims == [1, 2]
+        accept, rate, at = MC_random_walk_2D!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax; dims=mc_routine.dims)
+        @info "Doing a 2D random walk"
+    elseif mc_routine.dims == [1]
+        error("Unsupported dimensions: $(mc_routine.dims)")
+    end
+    # accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
     @info "iter: $(liveset.walkers[1].iter), acceptance rate: $rate, emax: $emax, is_accepted: $accept, step_size: $(ns_params.step_size)"
     if accept
         push!(ats, at)

@@ -18,7 +18,10 @@ mutable struct WangLandauParameters <: SamplingParameters
     f_min::Float64
     energy_bins::Vector{Float64}
     random_seed::Int64
-    function WangLandauParameters(;
+end
+
+"""
+    WangLandauParameters(; 
         num_steps::Int64=100,
         flatness_criterion::Float64=0.8,
         f_initial::Float64=Float64(MathConstants.e),
@@ -26,11 +29,36 @@ mutable struct WangLandauParameters <: SamplingParameters
         energy_min::Float64=0.0,
         energy_max::Float64=1.0,
         num_energy_bins::Int64=100,
-        random_seed::Int64=1234,
+        random_seed::Int64=1234
     )
-        energy_bins = collect(range(energy_min, stop=energy_max, length=num_energy_bins))
-        new(num_steps, flatness_criterion, f_initial, f_min, energy_bins, random_seed)   
-    end
+
+Create a `WangLandauParameters` object with the specified parameters.
+
+# Arguments
+- `num_steps::Int64`: The number of Monte Carlo steps.
+- `flatness_criterion::Float64`: The criterion for flatness of the histogram.
+- `f_initial::Float64`: The initial modification factor.
+- `f_min::Float64`: The minimum modification factor.
+- `energy_min::Float64`: The minimum energy.
+- `energy_max::Float64`: The maximum energy.
+- `num_energy_bins::Int64`: The number of energy bins.
+- `random_seed::Int64`: The seed for the random number generator.
+
+# Returns
+- `WangLandauParameters`: The parameters for the Wang-Landau sampling scheme.
+"""
+function WangLandauParameters(;
+            num_steps::Int64=100,
+            flatness_criterion::Float64=0.8,
+            f_initial::Float64=Float64(MathConstants.e),
+            f_min::Float64=exp(1e-8),
+            energy_min::Float64=0.0,
+            energy_max::Float64=1.0,
+            num_energy_bins::Int64=100,
+            random_seed::Int64=1234,
+            )
+    energy_bins = collect(range(energy_min, stop=energy_max, length=num_energy_bins))
+    WangLandauParameters(num_steps, flatness_criterion, f_initial, f_min, energy_bins, random_seed)   
 end
 
 

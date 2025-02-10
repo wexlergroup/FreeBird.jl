@@ -24,6 +24,6 @@ include("test-EnergyEval.jl")
 
 include("test-MonteCarloMoves.jl")
 
-include("test-SamplingSchemes.jl")
+include("test-SamplingSchemes/test-SamplingSchemes.jl")
 
 include("test-FreeBirdIO.jl")

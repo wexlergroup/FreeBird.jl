@@ -209,7 +209,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
     elseif mc_routine.dims == [1, 2]
         accept, rate, at = MC_random_walk_2D!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax; dims=mc_routine.dims)
-        @info "Doing a 2D random walk"
+        # @info "Doing a 2D random walk"
     elseif mc_routine.dims == [1]
         error("Unsupported dimensions: $(mc_routine.dims)")
     end

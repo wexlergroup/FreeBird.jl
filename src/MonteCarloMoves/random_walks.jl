@@ -19,8 +19,12 @@ function single_atom_random_walk!(pos::SVector{3,T}, step_size::Float64) where T
 end
 
 function single_atom_random_walk!(pos::SVector{3,T}, step_size::Float64, dims::Vector{Int}) where T
-    ds = (rand(Uniform(-step_size,step_size)) for _ in dims) .* unit(T)
-    ds = (ds..., 0.0* unit(T))
+    ds = [rand(Uniform(-step_size,step_size)) for _ in dims]
+    dds = zeros(3)
+    for (i, d) in enumerate(dims)
+        dds[d] = ds[i]
+    end
+    ds = dds .* unit(T)
     return pos  .+ ds
 end
 
@@ -238,10 +242,10 @@ function MC_rejection_sampling!(lattice::LatticeWalker{C},
     accept_this_walker = false
     emax = emax * unit(lattice.energy)
 
-    current_energy = lattice.energy + 1e-12 * unit(lattice.energy) # initialize to a value greater than emax
+    current_energy = lattice.energy # initialize to a value greater than emax
     current_lattice = lattice.configuration
 
-    while current_energy > emax
+    while current_energy >= emax
         
         proposed_lattice = deepcopy(current_lattice)
         generate_random_new_lattice_sample!(proposed_lattice)
@@ -254,7 +258,7 @@ function MC_rejection_sampling!(lattice::LatticeWalker{C},
 
         if proposed_energy <= emax
             lattice.configuration = proposed_lattice
-            lattice.energy = raw_energy
+            lattice.energy = proposed_energy
             accept_this_walker = true
             break
         end

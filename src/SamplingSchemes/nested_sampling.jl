@@ -121,20 +121,15 @@ struct MCNewSample <: MCRoutine end
     struct MCMixedMoves <: MCRoutine
 A type for generating a new walker by performing random walks and swapping atoms. Currently, it is intended to use this routine for
 multi-component systems. The actual number of random walks and swaps to perform is determined by the weights of the fields `walks_freq` and `swaps_freq`.
-For example, if `walks_freq=4` and `swaps_freq=1`, then the routine will perform 4 random walks and 1 atom swap in each cycle. The counters 
-`walks_counter` and `swaps_counter` are used to keep track of the number of random walks and swaps performed in the current cycle.
+For example, if `walks_freq=4` and `swaps_freq=1`, then the probability of performing a random walk is 4/5, and the probability of performing a swap is 1/5.
 
 # Fields
 - `walks_freq::Int`: The frequency of random walks to perform.
 - `swaps_freq::Int`: The frequency of atom swaps to perform.
-- `walks_counter::Int`: The counter for random walks.
-- `swaps_counter::Int`: The counter for atom swaps.
 """
 mutable struct MCMixedMoves <: MCRoutine
     walks_freq::Int
     swaps_freq::Int
-    walks_counter::Int
-    swaps_counter::Int
 end
 
 """
@@ -205,12 +200,12 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     else
         error("Unsupported MCRoutine type: $mc_routine")
     end
-    if mc_routine.dims == [1, 2, 3]
+    if length(mc_routine.dims) == 3
         accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
-    elseif mc_routine.dims == [1, 2]
+    elseif length(mc_routine.dims) == 2
         accept, rate, at = MC_random_walk_2D!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax; dims=mc_routine.dims)
         # @info "Doing a 2D random walk"
-    elseif mc_routine.dims == [1]
+    elseif length(mc_routine.dims) == 1
         error("Unsupported dimensions: $(mc_routine.dims)")
     end
     # accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
@@ -255,20 +250,15 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
 
     # clone one of the lower energy walkers
     to_walk = deepcopy(rand(ats[2:end]))
-
-    # if both moves are exhausted, reset the counters
-    if mc_routine.walks_counter  + mc_routine.swaps_counter == 0
-        mc_routine.walks_counter += mc_routine.walks_freq
-        mc_routine.swaps_counter += mc_routine.swaps_freq
-    end
+    # determine whether to perform a random walk or a swap
+    swap_prob = mc_routine.swaps_freq / (mc_routine.walks_freq + mc_routine.swaps_freq)
+    
     # @show mc_routine
-    if mc_routine.walks_counter > 0
+    if rand() > swap_prob
         accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
-        mc_routine.walks_counter -= 1
         @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: $(round(ns_params.step_size; sigdigits=4))"
-    elseif mc_routine.swaps_counter > 0
+    else
         accept, rate, at = MC_random_swap!(ns_params.mc_steps, to_walk, lj, emax)
-        mc_routine.swaps_counter -= 1
         @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: swap"
     end
     

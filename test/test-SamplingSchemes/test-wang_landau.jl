@@ -21,7 +21,7 @@
         wl_params = WangLandauParameters(energy_min=energy_min, energy_max=energy_max, num_energy_bins=num_energy_bins)
 
         @testset "Basic functionality" begin
-            energies_wl, wl_params, S, H = wang_landau(
+            energies_wl, configs, wl_params, S, H = wang_landau(
                 lattice, ham, wl_params
             )
             
@@ -46,11 +46,11 @@
         @testset "Modification factor" begin
             energy_bins = range(-0.1, 0.1, length=20)
             wl_params = WangLandauParameters(50, 0.8, 2.7, 1.1, energy_bins, 42)
-            _, _, S1, _ = wang_landau(
+            _, _, _, S1, _ = wang_landau(
                 lattice, ham, wl_params
             )
             wl_params = WangLandauParameters(50, 0.8, 2.7, 1.001, energy_bins, 42)
-            _, _, S2, _ = wang_landau(
+            _, _, _, S2, _ = wang_landau(
                 lattice, ham, wl_params
             )
             

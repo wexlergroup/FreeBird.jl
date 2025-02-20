@@ -95,6 +95,7 @@ Perform the Wang-Landau sampling scheme for a lattice or an atomistic system.
 
 # Returns
 - `df::DataFrame`/`energies::Vector{Float64}`: The energies of the system at each step.
+- `configs::Vector{AbstractLattice}`/`configs::Vector{AtomWalker}`: The configurations of the system at each step.
 - `wl_params::WangLandauParameters`: The parameters for the Wang-Landau sampling scheme.
 - `S::Vector{Float64}`: The entropy of the system.
 - `H::Vector{Int64}`: The histogram of the system.
@@ -115,6 +116,7 @@ function wang_landau(
     H = zeros(Int64, energy_bins_count)
 
     df = DataFrame(energy=Float64[], config=Vector{Vector{Bool}}[])
+    configs = AbstractLattice[]
     
     # Choose a modification factor
     f = wl_params.f_initial
@@ -163,6 +165,7 @@ function wang_landau(
             H[current_bin] += 1
 
             push!(df, (current_energy, deepcopy(current_lattice.components)))
+            push!(configs, deepcopy(current_lattice))
         end
 
         # If the histogram is flat, decrease f, e.g. f_{i + 1} = f_i^{1/2}
@@ -176,7 +179,7 @@ function wang_landau(
         end
     end
 
-    return df, wl_params, S, H
+    return df, configs, wl_params, S, H
 end
 
 
@@ -188,6 +191,11 @@ function wang_landau(
 
     # Set the random seed
     Random.seed!(wl_params.random_seed)
+
+    e_unit = unit(walker.energy)
+    cell_vec = walker.configuration.cell.cell_vectors
+    cell_volume = cell_vec[1][1] * cell_vec[2][2] * cell_vec[3][3]
+    cell_size = cbrt(cell_volume).val
     
     energy_bins_count = length(wl_params.energy_bins)
     
@@ -203,7 +211,7 @@ function wang_landau(
     f = wl_params.f_initial
 
     current_walker = deepcopy(walker)
-    current_energy = interacting_energy(current_walker.configuration, lj).val
+    current_energy = interacting_energy(current_walker.configuration, lj, current_walker.list_num_par, current_walker.frozen).val + current_walker.energy_frozen_part.val
 
     push!(energies, current_energy)
     push!(configs, deepcopy(current_walker))
@@ -217,10 +225,10 @@ function wang_landau(
             # Propose a swap in occupation state (only if it maintains constant N)
             proposed_walker = deepcopy(current_walker)
 
-            MC_random_walk!(200, proposed_walker, lj, 0.01, Inf*unit(proposed_walker.energy))
+            _, _, proposed_walker = MC_random_walk!(1, proposed_walker, lj, cell_size*0.01, Inf*unit(proposed_walker.energy))
 
             # Calculate the proposed energy
-            proposed_energy = interacting_energy(proposed_walker.configuration, lj).val
+            proposed_energy = interacting_energy(proposed_walker.configuration, lj, proposed_walker.list_num_par, proposed_walker.frozen).val + proposed_walker.energy_frozen_part.val
             
             current_bin = get_bin_index(current_energy, wl_params.energy_bins)
             proposed_bin = get_bin_index(proposed_energy, wl_params.energy_bins)
@@ -236,6 +244,7 @@ function wang_landau(
             if r < η
                 current_walker = deepcopy(proposed_walker)
                 current_energy = proposed_energy
+                # @info "Accepted, energy = $current_energy"
             end
 
             # Set g(E) = g(E) * f and H(E) = H(E) + 1

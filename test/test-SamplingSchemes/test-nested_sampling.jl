@@ -347,7 +347,7 @@
             @testset "Basic functionality" begin
                 n_steps = 5
                 ns_params_copy = deepcopy(ns_params)
-                df, updated_liveset, updated_params = nested_sampling_loop!(
+                df, updated_liveset, updated_params = nested_sampling(
                     liveset, ns_params_copy, n_steps, MCRandomWalkMaxE(), save_strategy)
                 
                 @test df isa DataFrame
@@ -361,7 +361,7 @@
             @testset "Failure handling" begin
                 ns_params_copy = deepcopy(ns_params)
                 ns_params_copy.allowed_fail_count = 1
-                df, updated_liveset, updated_params = nested_sampling_loop!(
+                df, updated_liveset, updated_params = nested_sampling(
                     liveset, ns_params_copy, 10, MCRandomWalkMaxE(), save_strategy)
                 
                 @test updated_params.fail_count == 0
@@ -369,7 +369,7 @@
     
             @testset "Data saving" begin
                 ns_params_copy = deepcopy(ns_params)
-                df, _, _ = nested_sampling_loop!(liveset, ns_params_copy, 4, MCRandomWalkMaxE(), save_strategy)
+                df, _, _ = nested_sampling(liveset, ns_params_copy, 4, MCRandomWalkMaxE(), save_strategy)
                 
                 @test isfile("test_df.csv")
                 @test isfile("test.traj.extxyz")
@@ -401,7 +401,7 @@
             save_strategy = SaveEveryN("test_df.csv", "test.traj", "test.ls", 2, 2)
 
             @testset "Basic functionality" begin
-                df, updated_liveset, updated_params = nested_sampling_loop!(
+                df, updated_liveset, updated_params = nested_sampling(
                     liveset, deepcopy(ns_params), 5, MCRandomWalkMaxE(), save_strategy)
                 
                 @test df isa DataFrame
@@ -414,7 +414,7 @@
             @testset "Failure handling" begin
                 fail_params = deepcopy(ns_params)
                 fail_params.allowed_fail_count = 1
-                df, _, updated_params = nested_sampling_loop!(
+                df, _, updated_params = nested_sampling(
                     liveset, fail_params, 10, MCRandomWalkMaxE(), save_strategy)
                 
                 @test updated_params.fail_count == 0
@@ -422,7 +422,7 @@
             end
 
             @testset "Data saving" begin
-                nested_sampling_loop!(liveset, deepcopy(ns_params), 4, MCRandomWalkMaxE(), save_strategy)
+                nested_sampling(liveset, deepcopy(ns_params), 4, MCRandomWalkMaxE(), save_strategy)
                 
                 @test isfile("test_df.csv")
                 @test isfile("test.ls")
@@ -432,7 +432,7 @@
             end
 
             @testset "Walker properties" begin
-                _, updated_liveset, _ = nested_sampling_loop!(
+                _, updated_liveset, _ = nested_sampling(
                     liveset, deepcopy(ns_params), 3, MCRandomWalkMaxE(), save_strategy)
                 
                 walker = updated_liveset.walkers[1]

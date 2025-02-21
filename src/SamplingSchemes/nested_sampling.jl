@@ -431,7 +431,7 @@ end
 
 
 """
-    nested_sampling_loop!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, n_steps::Int64, mc_routine::MCRoutine; args...)
+    nested_sampling(liveset::AtomWalkers, ns_params::NestedSamplingParameters, n_steps::Int64, mc_routine::MCRoutine; args...)
 
 Perform a nested sampling loop for a given number of steps.
 
@@ -446,7 +446,7 @@ Perform a nested sampling loop for a given number of steps.
 - `liveset`: The updated set of walkers.
 - `ns_params`: The updated nested sampling parameters.
 """
-function nested_sampling_loop!(liveset::AtomWalkers, 
+function nested_sampling(liveset::AtomWalkers, 
                                 ns_params::NestedSamplingParameters, 
                                 n_steps::Int64, 
                                 mc_routine::MCRoutine,
@@ -471,7 +471,7 @@ function nested_sampling_loop!(liveset::AtomWalkers,
 end
 
 """
-    nested_sampling_loop!(liveset::LatticeGasWalkers, ns_params::LatticeNestedSamplingParameters, n_steps::Int64, mc_routine::MCRoutine, save_strategy::DataSavingStrategy)
+    nested_sampling(liveset::LatticeGasWalkers, ns_params::LatticeNestedSamplingParameters, n_steps::Int64, mc_routine::MCRoutine, save_strategy::DataSavingStrategy)
 
 Perform a nested sampling loop on a lattice gas system for a given number of steps.
 
@@ -487,7 +487,7 @@ Perform a nested sampling loop on a lattice gas system for a given number of ste
 - `liveset`: The updated set of walkers.
 - `ns_params`: The updated nested sampling parameters.
 """
-function nested_sampling_loop!(liveset::LatticeGasWalkers,
+function nested_sampling(liveset::LatticeGasWalkers,
                                 ns_params::LatticeNestedSamplingParameters, 
                                 n_steps::Int64, 
                                 mc_routine::MCRoutine,

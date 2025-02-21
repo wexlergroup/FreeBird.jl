@@ -120,7 +120,7 @@ The [`SaveEveryN`](@ref) type is a struct that holds the parameters of the savin
 Now, we are ready to run the nested sampling simulation:
 
 ````@example quick_start
-energies, liveset, _ = nested_sampling_loop!(ls, ns_params, 20_000, mc, save)
+energies, liveset, _ = nested_sampling(ls, ns_params, 20_000, mc, save)
 ````
 
 The results of the simulation are stored in the `energies` and `liveset` variables.

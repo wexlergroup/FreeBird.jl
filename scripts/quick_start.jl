@@ -77,7 +77,7 @@ save = SaveEveryN(n_traj=10, n_snap=20_000)
 # The [`SaveEveryN`](@ref) type is a struct that holds the parameters of the saving routine. 
 
 # Now, we are ready to run the nested sampling simulation:
-energies, liveset, _ = nested_sampling_loop!(ls, ns_params, 20_000, mc, save)
+energies, liveset, _ = nested_sampling(ls, ns_params, 20_000, mc, save)
 # The results of the simulation are stored in the `energies` and `liveset` variables.
 # The `energies` variable is a `DataFrame` that contains the energies of the walkers at each iteration.
 # The `liveset` variable is the final liveset after the simulation.

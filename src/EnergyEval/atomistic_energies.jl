@@ -273,3 +273,62 @@ The energy is calculated by summing the pairwise interactions between the free p
 
 """
 interacting_energy(at::AbstractSystem, lj::LJParameters) = intra_component_energy(at, lj)
+
+"""
+    single_site_energy(index::Int, at::AbstractSystem, lj::LJParameters)
+    single_site_energy(index::Int, at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int})
+
+Calculate the energy of a single site in the system using the Lennard-Jones potential.
+The energy is calculated by summing the pairwise interactions between the site and all other sites in the system.
+
+# Arguments
+- `index::Int`: The index of the site for which the energy is calculated.
+- `at::AbstractSystem`: The system for which the energy is calculated.
+- `lj::LJParameters`: The Lennard-Jones parameters.
+- `ljs::CompositeLJParameters{C}`: The composite Lennard-Jones parameters.
+- `list_num_par::Vector{Int}`: The number of particles in each component.
+
+# Returns
+- `energy`: The energy of the site.
+
+"""
+function single_site_energy(index::Int,
+                            at::AbstractSystem, 
+                            lj::LJParameters,
+                            list_num_par::Vector{Int}
+                            )
+    energy = 0.0u"eV"
+    for i in 1:length(at)
+        if i != index
+            r = pbc_dist(position(at, index), position(at, i), at)
+            energy += lj_energy(r,lj)
+        end
+    end
+    return energy
+end
+
+function single_site_energy(index::Int,
+                            at::AbstractSystem, 
+                            ljs::CompositeLJParameters{C},
+                            list_num_par::Vector{Int},
+                            ) where {C}
+    energy = 0.0u"eV"
+    comp_cut = vcat([0],cumsum(list_num_par))
+    # @info "comp_cut: $comp_cut"
+    comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:length(list_num_par)]
+    # @info "comp_split: $comp_split"
+    from_comp = findfirst(x->index in x, comp_split)
+    # @info "from_comp: $from_comp"
+    for i in 1:length(at)
+        if i != index
+            r = pbc_dist(position(at, index), position(at, i), at)
+            if i in comp_split[from_comp]
+                energy += lj_energy(r,ljs.lj_param_sets[from_comp,from_comp])
+            else
+                to_comp = findfirst(x->i in x, comp_split)
+                energy += lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
+            end
+        end
+    end
+    return energy
+end

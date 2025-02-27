@@ -105,12 +105,12 @@ end
 function MLatticeHamiltonian(c::Int, hams::Vector{GenericLatticeHamiltonian{N,U}}) where {N,U}
     if length(hams) == c^2
         @info "Creating MLatticeHamiltonian from a flattened matrix. By specifying
-        $length(hams) sets of GenericLatticeHamiltonian, a $c x $c matrix is constructed. If this 
+        $(length(hams)) sets of GenericLatticeHamiltonian, a $c x $c matrix is constructed. If this 
         was not your intention, please check the documentation or raise an issue."
         return MLatticeHamiltonian{c,N,U}(reshape(hams, c, c))
     elseif length(hams) == c*(c+1)/2
         @info "Creating MLatticeHamiltonian from a vector of GenericLatticeHamiltonian. By specifying
-        $length(hams) sets of GenericLatticeHamiltonian, a $c x $c matrix is constructed. If this
+        $(length(hams)) sets of GenericLatticeHamiltonian, a $c x $c matrix is constructed. If this
         was not your intention, please check the documentation or raise an issue."
         ham_matrix = Matrix{GenericLatticeHamiltonian{N,U}}(undef, c, c)
         k = 1

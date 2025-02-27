@@ -46,37 +46,6 @@ Perform a Monte Carlo random walk on the atomic/molecular system.
 - `at::AtomWalker`: The updated walker.
 
 """
-# function MC_random_walk!(
-#                     n_steps::Int, 
-#                     at::AtomWalker{C}, 
-#                     lj::LennardJonesParametersSets, 
-#                     step_size::Float64, 
-#                     emax::typeof(0.0u"eV")
-#                     ) where C
-#     n_accept = 0
-#     accept_this_walker = false
-#     for i_mc_step in 1:n_steps
-#         config = at.configuration
-#         free_index = free_par_index(at)
-#         i_at = rand(free_index)
-#         pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
-#         orig_pos = deepcopy(pos)
-#         pos = single_atom_random_walk!(pos, step_size)
-#         pos = periodic_boundary_wrap!(pos, config)
-#         config.position[i_at] = pos
-#         energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
-#         if energy >= emax
-#             # reject the move, revert to original position
-#             config.position[i_at] = orig_pos
-#         else
-#             at.energy = energy
-#             # accept the move
-#             n_accept += 1
-#             accept_this_walker = true
-#         end
-#     end
-#     return accept_this_walker, n_accept/n_steps, at
-# end
 function MC_random_walk!(
                     n_steps::Int, 
                     at::AtomWalker{C}, 

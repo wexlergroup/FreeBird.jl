@@ -85,8 +85,10 @@ MLatticeHamiltonian(Hamiltonians::Vector{GenericLatticeHamiltonian{N,U}})
 ```
 ## Examples
 ```jldoctest
-julia> hams = [GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV") for i in 1:4]
+julia> hams = [GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV") for i in 1:4] # full flattened matrix
 julia> mlham = MLatticeHamiltonian(hams)
+julia> hams = [GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV") for i in 1:3] # upper triangular matrix
+julia> mlham = MLatticeHamiltonian(2, hams)
 ```    
 """
 struct MLatticeHamiltonian{C,N,U} <: ClassicalHamiltonian
@@ -102,8 +104,14 @@ end
 
 function MLatticeHamiltonian(c::Int, hams::Vector{GenericLatticeHamiltonian{N,U}}) where {N,U}
     if length(hams) == c^2
+        @info "Creating MLatticeHamiltonian from a flattened matrix. By specifying
+        $length(hams) sets of GenericLatticeHamiltonian, a $c x $c matrix is constructed. If this 
+        was not your intention, please check the documentation or raise an issue."
         return MLatticeHamiltonian{c,N,U}(reshape(hams, c, c))
     elseif length(hams) == c*(c+1)/2
+        @info "Creating MLatticeHamiltonian from a vector of GenericLatticeHamiltonian. By specifying
+        $length(hams) sets of GenericLatticeHamiltonian, a $c x $c matrix is constructed. If this
+        was not your intention, please check the documentation or raise an issue."
         ham_matrix = Matrix{GenericLatticeHamiltonian{N,U}}(undef, c, c)
         k = 1
         for i in 1:c

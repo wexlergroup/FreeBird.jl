@@ -212,3 +212,76 @@ function monte_carlo_sampling(
 
     return energies, cvs, acceptance_rates
 end
+
+"""
+    monte_carlo_sampling(
+        at::AtomWalker,
+        lj::LennardJonesParametersSets,
+        mc_params::MetropolisMCParameters
+    )
+
+Perform the Metropolis Monte Carlo sampling algorithm for a range of temperatures.
+
+Note: The Boltzmann constant is set to 8.617333262e-5 eV K\$^{-1}\$. Thus, the units of the temperature
+should be in Kelvin, and the units of the energy should be in eV.
+
+# Arguments
+- `at::AtomWalker`: The initial atom walker configuration.
+- `lj::LennardJonesParametersSets`: The Lennard-Jones parameters.
+- `mc_params::MetropolisMCParameters`: The parameters for the Metropolis Monte Carlo algorithm.
+
+# Returns
+- `energies::Vector{Float64}`: The energies of the system at each temperature.
+- `cvs::Vector{Float64}`: The heat capacities of the system at each temperature.
+- `acceptance_rates::Vector{Float64}`: The acceptance rates of the system at each temperature.
+"""
+function monte_carlo_sampling(
+    at::AtomWalker,
+    lj::LennardJonesParametersSets,
+    mc_params::MetropolisMCParameters
+)
+    energies = Vector{Float64}(undef, length(mc_params.temperatures))
+    cvs = Vector{Float64}(undef, length(mc_params.temperatures))
+    acceptance_rates = Vector{Float64}(undef, length(mc_params.temperatures))
+
+    kb = 8.617333262e-5 # eV/K
+
+    for (i, temp) in enumerate(mc_params.temperatures)
+
+        # Equilibrate the lattice
+        equilibration_energies, equilibration_configurations, equilibration_accepted_steps = nvt_monte_carlo(
+            at,
+            lj,
+            temp,
+            mc_params.equilibrium_steps,
+            mc_params.random_seed
+        )
+
+        # Sample the lattice
+        sampling_energies, sampling_configurations, sampling_accepted_steps = nvt_monte_carlo(
+            equilibration_configurations[end],
+            lj,
+            temp,
+            mc_params.sampling_steps,
+            mc_params.random_seed
+        )
+
+        # Compute the heat capacity
+        E = mean(sampling_energies)
+        Cv = var(sampling_energies) / (kb * temp^2)
+
+        # Compute the acceptance rate
+        acceptance_rate = sampling_accepted_steps / mc_params.sampling_steps
+
+        # Append the results to the DataFrame
+        energies[i] = E.val
+        cvs[i] = Cv.val
+        acceptance_rates[i] = acceptance_rate
+
+        at = sampling_configurations[end]
+
+        @info "Temperature: $temp K, Energy: $E eV, Cv: $Cv, Acceptance rate: $acceptance_rate"
+    end
+
+    return energies, cvs, acceptance_rates
+end

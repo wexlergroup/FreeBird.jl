@@ -209,7 +209,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         error("Unsupported dimensions: $(mc_routine.dims)")
     end
     # accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
-    @info "iter: $(liveset.walkers[1].iter), acceptance rate: $rate, emax: $emax, is_accepted: $accept, step_size: $(ns_params.step_size)"
+    # @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: $(round(ns_params.step_size; sigdigits=4))"
     if accept
         push!(ats, at)
         popfirst!(ats)
@@ -217,7 +217,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         ns_params.fail_count = 0
         iter = liveset.walkers[1].iter
     else
-        @warn "Failed to accept MC move"
+        # @warn "Failed to accept MC move"
         emax = missing
         ns_params.fail_count += 1
     end
@@ -256,10 +256,11 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     # @show mc_routine
     if rand() > swap_prob
         accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
-        @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: $(round(ns_params.step_size; sigdigits=4))"
+        @info "Swap move performed at iter: $(liveset.walkers[1].iter), accepted: $accept"
+        # @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: $(round(ns_params.step_size; sigdigits=4))"
     else
         accept, rate, at = MC_random_swap!(ns_params.mc_steps, to_walk, lj, emax)
-        @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: swap"
+        # @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: swap"
     end
     
     if accept
@@ -269,7 +270,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         ns_params.fail_count = 0
         iter = liveset.walkers[1].iter
     else
-        @warn "Failed to accept MC move"
+        # @warn "Failed to accept MC move"
         emax = missing
         ns_params.fail_count += 1
     end
@@ -311,7 +312,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     end
     accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, h, emax; energy_perturb=ns_params.energy_perturbation)
 
-    @info "iter: $(liveset.walkers[1].iter), acceptance rate: $rate, emax: $emax, is_accepted: $accept"
+    # @info "iter: $(liveset.walkers[1].iter), acceptance rate: $rate, emax: $emax, is_accepted: $accept"
     if accept
         push!(ats, at)
         popfirst!(ats)
@@ -319,7 +320,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         ns_params.fail_count = 0
         iter = liveset.walkers[1].iter
     else
-        @warn "Failed to accept MC move"
+        # @warn "Failed to accept MC move"
         emax = missing
         ns_params.fail_count += 1
     end
@@ -358,7 +359,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
 
     accept, at = MC_new_sample!(to_walk, h, emax; energy_perturb=ns_params.energy_perturbation)
 
-    @info "iter: $(liveset.walkers[1].iter), emax: $emax, is_accepted: $accept"
+    # @info "iter: $(liveset.walkers[1].iter), emax: $emax, is_accepted: $accept"
     if accept
         push!(ats, at)
         popfirst!(ats)
@@ -366,7 +367,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         ns_params.fail_count = 0
         iter = liveset.walkers[1].iter
     else
-        @warn "Failed to accept MC move"
+        # @warn "Failed to accept MC move"
         emax = missing
         ns_params.fail_count += 1
     end
@@ -388,7 +389,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
 
     accept, at = MC_rejection_sampling!(to_walk, h, emax; energy_perturb=ns_params.energy_perturbation)
 
-    @info "iter: $(liveset.walkers[1].iter), emax: $emax, is_accepted: $accept"
+    # @info "iter: $(liveset.walkers[1].iter), emax: $emax, is_accepted: $accept"
     if accept
         push!(ats, at)
         popfirst!(ats)
@@ -396,7 +397,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         ns_params.fail_count = 0
         iter = liveset.walkers[1].iter
     else
-        @warn "Failed to accept MC move"
+        # @warn "Failed to accept MC move"
         emax = missing
         ns_params.fail_count += 1
     end
@@ -463,6 +464,9 @@ function nested_sampling(liveset::AtomWalkers,
         end
         if !(iter isa typeof(missing))
             push!(df, (iter, emax.val))
+            @info "iter: $(liveset.walkers[1].iter), emax: $emax, step_size: $(round(ns_params.step_size; sigdigits=4))"
+        elseif iter isa typeof(missing)
+            @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy), step_size: $(round(ns_params.step_size; sigdigits=4))"
         end
         write_df_every_n(df, i, save_strategy)
         write_ls_every_n(liveset, i, save_strategy)
@@ -508,6 +512,9 @@ function nested_sampling(liveset::LatticeGasWalkers,
         end
         if !(iter isa typeof(missing))
             push!(df, (iter, emax, config))
+            @info "iter: $(liveset.walkers[1].iter), emax: $emax"
+        elseif iter isa typeof(missing)
+            @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy)"
         end
         write_df_every_n(df, i, save_strategy)
         write_ls_every_n(liveset, i, save_strategy)

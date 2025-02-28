@@ -454,6 +454,7 @@ function nested_sampling(liveset::AtomWalkers,
                                 save_strategy::DataSavingStrategy)
     df = DataFrame(iter=Int[], emax=Float64[])
     for i in 1:n_steps
+        print_info = i % save_strategy.n_info == 0
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
         iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
         @debug "n_step $i, iter: $iter, emax: $emax"
@@ -464,8 +465,10 @@ function nested_sampling(liveset::AtomWalkers,
         end
         if !(iter isa typeof(missing))
             push!(df, (iter, emax.val))
-            @info "iter: $(liveset.walkers[1].iter), emax: $emax, step_size: $(round(ns_params.step_size; sigdigits=4))"
-        elseif iter isa typeof(missing)
+            if print_info
+                @info "iter: $(liveset.walkers[1].iter), emax: $emax, step_size: $(round(ns_params.step_size; sigdigits=4))"
+            end
+        elseif iter isa typeof(missing) && print_info
             @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy), step_size: $(round(ns_params.step_size; sigdigits=4))"
         end
         write_df_every_n(df, i, save_strategy)

@@ -11,6 +11,7 @@ using DataFrames
 using Combinatorics
 using Random
 using Statistics
+using AtomsBase
 
 using ..MonteCarloMoves
 using ..AbstractPotentials

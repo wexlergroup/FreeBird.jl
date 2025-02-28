@@ -341,7 +341,8 @@
                 wk_filename = "test.traj.extxyz",
                 ls_filename = "test.ls.extxyz",
                 n_traj = 2,
-                n_snap = 2
+                n_snap = 2,
+                n_info = 2
             )
 
             @testset "Basic functionality" begin
@@ -398,7 +399,7 @@
             liveset = LatticeGasWalkers(s_walkers, ham)
             
             ns_params = LatticeNestedSamplingParameters(1000, 0.1, 0, 100, 1234)
-            save_strategy = SaveEveryN("test_df.csv", "test.traj", "test.ls", 2, 2)
+            save_strategy = SaveEveryN("test_df.csv", "test.traj", "test.ls", 2, 2, 2)
 
             @testset "Basic functionality" begin
                 df, updated_liveset, updated_params = nested_sampling(

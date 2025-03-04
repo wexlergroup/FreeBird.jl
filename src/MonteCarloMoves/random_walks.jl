@@ -28,6 +28,32 @@ function single_atom_random_walk!(pos::SVector{3,T}, step_size::Float64, dims::V
     return pos  .+ ds
 end
 
+function single_atom_random_walk!(at::AtomWalker{C}, lj::LennardJonesParametersSets, step_size::Float64) where C
+    config = at.configuration
+    # select a random free atom to move
+    free_index = free_par_index(at)
+    i_at = rand(free_index)
+    # calculate the energy before the move
+    prewalk_energy = single_site_energy(i_at, config, lj, at.list_num_par)
+    # prewalk_potential = interacting_energy(config, lj, at.list_num_par, at.frozen)
+    # get the current position of the atom
+    pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
+    # perform the random walk
+    pos = single_atom_random_walk!(pos, step_size)
+    # wrap the atom around the periodic boundary
+    pos = periodic_boundary_wrap!(pos, config)
+    # update the position of the atom
+    config.position[i_at] = pos
+    # calculate the energy after the move
+    postwalk_energy = single_site_energy(i_at, config, lj, at.list_num_par)
+    # postwalk_potential = interacting_energy(config, lj, at.list_num_par, at.frozen)
+    # calculate the energy difference
+    e_diff = postwalk_energy - prewalk_energy
+    # e_pot_diff = postwalk_potential - prewalk_potential
+
+    return at, e_diff
+end
+
 """
     MC_random_walk!(n_steps::Int, at::AtomWalker, lj::LJParameters, step_size::Float64, emax::typeof(0.0u"eV"))
 

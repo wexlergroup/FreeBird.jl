@@ -71,14 +71,22 @@ Compute the energy within a component of a system using the Lennard-Jones potent
 
 """
 function intra_component_energy(at::AbstractSystem, lj::LJParameters)
-    energy = 0.0u"eV"
+    # num_pairs = length(at) * (length(at) - 1) ÷ 2
+    pairs = Array{Tuple{Int,Int}, 1}()
     for i in 1:length(at)
         for j in (i+1):length(at)
-            r = pbc_dist(position(at, i), position(at, j), at)
-            energy += lj_energy(r,lj)
+            push!(pairs, (i, j))
         end
     end
-    return energy
+    # @info "num_pairs: $num_pairs, length(pairs): $(length(pairs))"
+    energies = Vector{typeof(0.0u"eV")}(undef, length(pairs))
+    Threads.@threads for k in eachindex(pairs)
+        (i, j) = pairs[k]
+        r = pbc_dist(position(at, i), position(at, j), at)
+        energies[k] = lj_energy(r,lj)
+        # @info "interacting pair: [$(i),$(j)] $(lj_energy(r,lj))"
+    end
+    return sum(energies)
 end
 
 
@@ -297,14 +305,15 @@ function single_site_energy(index::Int,
                             lj::LJParameters,
                             list_num_par::Vector{Int}
                             )
-    energy = 0.0u"eV"
-    for i in 1:length(at)
-        if i != index
-            r = pbc_dist(position(at, index), position(at, i), at)
-            energy += lj_energy(r,lj)
-        end
+    
+    all_index = collect(1:length(at))
+    popat!(all_index, index)
+    energies = Array{typeof(0.0u"eV"), 1}(undef, length(all_index))
+    Threads.@threads for i in eachindex(all_index)
+        r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+        energies[i] = lj_energy(r,lj)
     end
-    return energy
+    return sum(energies)
 end
 
 function single_site_energy(index::Int,
@@ -312,23 +321,25 @@ function single_site_energy(index::Int,
                             ljs::CompositeLJParameters{C},
                             list_num_par::Vector{Int},
                             ) where {C}
-    energy = 0.0u"eV"
     comp_cut = vcat([0],cumsum(list_num_par))
     # @info "comp_cut: $comp_cut"
     comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:length(list_num_par)]
     # @info "comp_split: $comp_split"
     from_comp = findfirst(x->index in x, comp_split)
     # @info "from_comp: $from_comp"
-    for i in 1:length(at)
-        if i != index
-            r = pbc_dist(position(at, index), position(at, i), at)
-            if i in comp_split[from_comp]
-                energy += lj_energy(r,ljs.lj_param_sets[from_comp,from_comp])
-            else
-                to_comp = findfirst(x->i in x, comp_split)
-                energy += lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
-            end
+    all_index = collect(1:length(at))
+    popat!(all_index, index)
+    energies = Array{typeof(0.0u"eV"), 1}(undef, length(all_index))
+    Threads.@threads for i in eachindex(all_index)
+        r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+        if all_index[i] in comp_split[from_comp]
+            energy = lj_energy(r,ljs.lj_param_sets[from_comp,from_comp])
+            energies[i] = energy
+        else
+            to_comp = findfirst(x->all_index[i] in x, comp_split)
+            energy = lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
+            energies[i] = energy
         end
     end
-    return energy
+    return sum(energies)
 end

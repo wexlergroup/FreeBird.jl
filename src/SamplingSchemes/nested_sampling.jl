@@ -9,6 +9,8 @@ The `NestedSamplingParameters` struct represents the parameters used in the nest
 - `step_size::Float64`: The on-the-fly step size used in the sampling process.
 - `step_size_lo::Float64`: The lower bound of the step size.
 - `step_size_up::Float64`: The upper bound of the step size.
+- `accept_range::Tuple{Float64, Float64}`: The range of acceptance rates for adjusting the step size.
+e.g. (0.25, 0.75) means that the step size will decrease if the acceptance rate is below 0.25 and increase if it is above 0.75.
 - `fail_count::Int64`: The number of failed MC moves in a row.
 - `allowed_fail_count::Int64`: The maximum number of failed MC moves allowed before resetting the step size.
 - `random_seed::Int64`: The seed for the random number generator.
@@ -19,6 +21,7 @@ mutable struct NestedSamplingParameters <: SamplingParameters
     step_size::Float64
     step_size_lo::Float64
     step_size_up::Float64
+    accept_range::Tuple{Float64, Float64}
     fail_count::Int64
     allowed_fail_count::Int64
     random_seed::Int64
@@ -30,11 +33,12 @@ function NestedSamplingParameters(;
             step_size::Float64=0.1,
             step_size_lo::Float64=1e-6,
             step_size_up::Float64=1.0,
+            accept_range::Tuple{Float64, Float64}=(0.25, 0.75),
             fail_count::Int64=0,
             allowed_fail_count::Int64=100,
             random_seed::Int64=1234,
             )
-    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, fail_count, allowed_fail_count, random_seed)  
+    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, accept_range, fail_count, allowed_fail_count, random_seed)  
 end
 
 """
@@ -403,30 +407,6 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     end
     # adjust_step_size(ns_params, rate)
     return iter, emax, liveset, ns_params
-end
-
-"""
-    adjust_step_size(ns_params::NestedSamplingParameters, rate::Float64)
-
-Adjusts the step size of the nested sampling algorithm based on the acceptance rate. 
-    If the acceptance rate is greater than 0.75, the step size is increased by 1%. 
-    If the acceptance rate is less than 0.25, the step size is decreased by 1%.
-
-# Arguments
-- `ns_params::NestedSamplingParameters`: The parameters of the nested sampling algorithm.
-- `rate::Float64`: The acceptance rate of the algorithm.
-- `range::Tuple{Float64, Float64}`: The range of acceptance rates for adjusting the step size. Default is (0.25, 0.75).
-
-# Returns
-- `ns_params::NestedSamplingParameters`: The updated parameters with adjusted step size.
-"""
-function adjust_step_size(ns_params::NestedSamplingParameters, rate::Float64; range::Tuple{Float64, Float64}=(0.25, 0.75))
-    if rate > range[2] && ns_params.step_size < ns_params.step_size_up
-        ns_params.step_size *= 1.05
-    elseif rate < range[1] && ns_params.step_size > ns_params.step_size_lo
-        ns_params.step_size *= 0.95
-    end
-    return ns_params
 end
 
 

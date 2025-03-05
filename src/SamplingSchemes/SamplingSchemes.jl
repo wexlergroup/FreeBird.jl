@@ -45,6 +45,8 @@ The `NestedSamplingParameters` struct represents the parameters for various samp
 """
 abstract type SamplingParameters end
 
+include("helpers.jl")
+
 include("nested_sampling.jl")
 
 include("exact_enumeration.jl")

@@ -5,21 +5,35 @@ Parameters for the Metropolis Monte Carlo algorithm.
 
 # Fields
 - `temperature::Float64`: The temperature of the system.
-- `num_steps::Int64`: The number of Monte Carlo steps.
+- `equilibrium_steps::Int64`: The number of steps to equilibrate the system.
+- `sampling_steps::Int64`: The number of steps to sample the system.
+- `step_size::Float64`: The step size for the random walk (for atomistic systems).
+- `step_size_lo::Float64`: The lower bound of the step size.
+- `step_size_up::Float64`: The upper bound of the step size.
+- `accept_range::Tuple{Float64, Float64}`: The range of acceptance rates for adjusting the step size.
+e.g. (0.25, 0.75) means that the step size will decrease if the acceptance rate is below 0.25 and increase if it is above 0.75.
 - `random_seed::Int64`: The seed for the random number generator.
 """
 mutable struct MetropolisMCParameters <: SamplingParameters
     temperatures::Vector{Float64}
     equilibrium_steps::Int64
     sampling_steps::Int64
+    step_size::Float64
+    step_size_lo::Float64
+    step_size_up::Float64
+    accept_range::Tuple{Float64, Float64}
     random_seed::Int64
     function MetropolisMCParameters(
         temperatures;
         equilibrium_steps::Int64=10_000,
         sampling_steps::Int64=10_000,
+        step_size::Float64=0.01,
+        step_size_lo::Float64=0.001,
+        step_size_up::Float64=1.0,
+        accept_range::Tuple{Float64, Float64}=(0.25, 0.75),
         random_seed::Int64=1234
     )
-        new(temperatures, equilibrium_steps, sampling_steps, random_seed)
+        new(temperatures, equilibrium_steps, sampling_steps, step_size, step_size_lo, step_size_up, accept_range, random_seed)
     end
 end
 
@@ -102,32 +116,30 @@ function nvt_monte_carlo(
     lj::LennardJonesParametersSets,
     temperature::Float64,
     num_steps::Int64,
+    step_size::Float64,
     random_seed::Int64
 )
     # Set the random seed
     Random.seed!(random_seed)
 
     e_unit = unit(walker.energy)
-    cell_vec = walker.configuration.cell.cell_vectors
-    cell_volume = cell_vec[1][1] * cell_vec[2][2] * cell_vec[3][3]
-    cell_size = cbrt(cell_volume).val
     
     energies = Vector{typeof(walker.energy)}(undef, num_steps)
     configurations = Vector{typeof(walker)}(undef, num_steps)
     accepted_steps = 0
 
     current_walker = deepcopy(walker)
-    current_energy = interacting_energy(current_walker.configuration, lj, current_walker.list_num_par, current_walker.frozen)
+    current_energy = interacting_energy(current_walker.configuration, lj, current_walker.list_num_par, current_walker.frozen) + current_walker.energy_frozen_part
     
     for i in 1:num_steps
         proposed_walker = deepcopy(current_walker)
         # move the atoms by 1% of the average cell size
-        _, _, proposed_walker = MC_random_walk!(1, proposed_walker, lj, cell_size*0.01, Inf*unit(proposed_walker.energy))
+        proposed_walker, ΔE = single_atom_random_walk!(proposed_walker, lj, step_size)
         # Calculate the proposed energy
-        proposed_energy = interacting_energy(proposed_walker.configuration, lj, proposed_walker.list_num_par, proposed_walker.frozen)
+        proposed_energy = current_energy + ΔE
         # Metropolis-Hastings acceptance criterion
         kb = 8.617_333_262e-5  # eV K-1
-        ΔE = proposed_energy - current_energy
+        # ΔE = proposed_energy - current_energy
         if ΔE < 0*e_unit || rand() < exp(-ΔE.val / (kb * temperature))
             current_walker.configuration = proposed_walker.configuration
             current_energy = proposed_energy
@@ -254,8 +266,18 @@ function monte_carlo_sampling(
             lj,
             temp,
             mc_params.equilibrium_steps,
+            mc_params.step_size,
             mc_params.random_seed
         )
+
+        equi_var = var(equilibration_energies)
+        equi_mean = mean(equilibration_energies)
+
+        equi_rate = equilibration_accepted_steps / mc_params.equilibrium_steps
+
+        adjust_step_size(mc_params, equi_rate; range=mc_params.accept_range)
+
+        @info "Temperature: $temp K, Equilibration energy: $equi_mean, Variance: $(round(equi_var.val; sigdigits=4)), Acceptance rate: $(round(equi_rate; sigdigits=4)), Step size: $(round(mc_params.step_size; sigdigits=4))"
 
         # Sample the lattice
         sampling_energies, sampling_configurations, sampling_accepted_steps = nvt_monte_carlo(
@@ -263,15 +285,18 @@ function monte_carlo_sampling(
             lj,
             temp,
             mc_params.sampling_steps,
+            mc_params.step_size,
             mc_params.random_seed
         )
 
         # Compute the heat capacity
         E = mean(sampling_energies)
-        Cv = var(sampling_energies) / (kb * temp^2)
+        E_var = var(sampling_energies)
+        Cv = E_var / (kb * temp^2)
 
         # Compute the acceptance rate
         acceptance_rate = sampling_accepted_steps / mc_params.sampling_steps
+        adjust_step_size(mc_params, acceptance_rate; range=mc_params.accept_range)
 
         # Append the results to the DataFrame
         energies[i] = E.val
@@ -280,7 +305,7 @@ function monte_carlo_sampling(
 
         at = sampling_configurations[end]
 
-        @info "Temperature: $temp K, Energy: $E eV, Cv: $Cv, Acceptance rate: $acceptance_rate"
+        @info "Temperature: $temp K, Energy: $E, Variance: $(round(E_var.val; sigdigits=4)), Cv: $(round(Cv.val; sigdigits=4)), Acceptance rate: $(round(acceptance_rate; sigdigits=4)), Step size: $(round(mc_params.step_size; sigdigits=4))"
     end
 
     return energies, cvs, acceptance_rates

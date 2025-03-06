@@ -171,6 +171,7 @@ should be in Kelvin, and the units of the energy should be in eV (defined in the
 
 # Returns
 - `energies::Vector{Float64}`: The energies of the system at each temperature.
+- `configs::Vector{typeof(lattice)}`: The configurations of the system at each temperature.
 - `cvs::Vector{Float64}`: The heat capacities of the system at each temperature.
 - `acceptance_rates::Vector{Float64}`: The acceptance rates of the system at each temperature.
 """
@@ -182,6 +183,7 @@ function monte_carlo_sampling(
     energies = Vector{Float64}(undef, length(mc_params.temperatures))
     cvs = Vector{Float64}(undef, length(mc_params.temperatures))
     acceptance_rates = Vector{Float64}(undef, length(mc_params.temperatures))
+    configs = Vector{typeof(lattice)}(undef, length(mc_params.temperatures))
 
     kb = 8.617333262e-5 # eV/K
 
@@ -217,12 +219,13 @@ function monte_carlo_sampling(
         cvs[i] = Cv
         acceptance_rates[i] = acceptance_rate
 
+        configs[i] = sampling_configurations[end]
         lattice = sampling_configurations[end]
 
         @info "Temperature: $temp K, Energy: $E eV, Cv: $Cv, Acceptance rate: $acceptance_rate"
     end
 
-    return energies, cvs, acceptance_rates
+    return energies, configs, cvs, acceptance_rates
 end
 
 """
@@ -244,6 +247,7 @@ should be in Kelvin, and the units of the energy should be in eV.
 
 # Returns
 - `energies::Vector{Float64}`: The energies of the system at each temperature.
+- `configs::Vector{typeof(at)}`: The configurations of the system at each temperature.
 - `cvs::Vector{Float64}`: The heat capacities of the system at each temperature.
 - `acceptance_rates::Vector{Float64}`: The acceptance rates of the system at each temperature.
 """
@@ -255,6 +259,7 @@ function monte_carlo_sampling(
     energies = Vector{Float64}(undef, length(mc_params.temperatures))
     cvs = Vector{Float64}(undef, length(mc_params.temperatures))
     acceptance_rates = Vector{Float64}(undef, length(mc_params.temperatures))
+    configs = Vector{typeof(at)}(undef, length(mc_params.temperatures))
 
     kb = 8.617333262e-5 # eV/K
 
@@ -303,10 +308,13 @@ function monte_carlo_sampling(
         cvs[i] = Cv.val
         acceptance_rates[i] = acceptance_rate
 
+        configs[i] = sampling_configurations[end]
         at = sampling_configurations[end]
 
         @info "Temperature: $temp K, Energy: $E, Variance: $(round(E_var.val; sigdigits=4)), Cv: $(round(Cv.val; sigdigits=4)), Acceptance rate: $(round(acceptance_rate; sigdigits=4)), Step size: $(round(mc_params.step_size; sigdigits=4))"
     end
 
-    return energies, cvs, acceptance_rates
+    ls = LJAtomWalkers(configs, lj)
+
+    return energies, ls, cvs, acceptance_rates
 end

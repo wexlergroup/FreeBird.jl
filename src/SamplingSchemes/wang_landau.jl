@@ -9,6 +9,8 @@ A structure to hold the parameters for the Wang-Landau sampling scheme.
 - `f_initial::Float64`: The initial modification factor.
 - `f_min::Float64`: The minimum modification factor.
 - `energy_bins::Vector{Float64}`: The pre-supplied energy bins.
+- `max_iter::Int64`: The maximum number of iterations in each flatness check.
+- `step_size::Float64`: The step size for the random walk (for atomistic systems).
 - `random_seed::Int64`: The seed for the random number generator.
 """
 mutable struct WangLandauParameters <: SamplingParameters
@@ -17,6 +19,8 @@ mutable struct WangLandauParameters <: SamplingParameters
     f_initial::Float64
     f_min::Float64
     energy_bins::Vector{Float64}
+    max_iter::Int64
+    step_size::Float64
     random_seed::Int64
 end
 
@@ -29,6 +33,8 @@ end
         energy_min::Float64=0.0,
         energy_max::Float64=1.0,
         num_energy_bins::Int64=100,
+        max_iter::Int64=1000,
+        step_size::Float64=0.01,
         random_seed::Int64=1234
     )
 
@@ -42,6 +48,7 @@ Create a `WangLandauParameters` object with the specified parameters.
 - `energy_min::Float64`: The minimum energy.
 - `energy_max::Float64`: The maximum energy.
 - `num_energy_bins::Int64`: The number of energy bins.
+- `max_iter::Int64`: The maximum number of iterations in each flatness check.
 - `random_seed::Int64`: The seed for the random number generator.
 
 # Returns
@@ -55,10 +62,12 @@ function WangLandauParameters(;
             energy_min::Float64=0.0,
             energy_max::Float64=1.0,
             num_energy_bins::Int64=100,
+            max_iter::Int64=1000,
+            step_size::Float64=0.01,
             random_seed::Int64=1234,
             )
     energy_bins = collect(range(energy_min, stop=energy_max, length=num_energy_bins))
-    WangLandauParameters(num_steps, flatness_criterion, f_initial, f_min, energy_bins, random_seed)   
+    WangLandauParameters(num_steps, flatness_criterion, f_initial, f_min, energy_bins, max_iter, step_size, random_seed)
 end
 
 
@@ -176,6 +185,9 @@ function wang_landau(
             # Print progress
             @info "f = $f, iterations = $counter"
             counter = 0
+        elseif counter > wl_params.max_iter
+            @warn "Maximum number of iterations reached!"
+            break
         end
     end
 
@@ -192,10 +204,10 @@ function wang_landau(
     # Set the random seed
     Random.seed!(wl_params.random_seed)
 
-    e_unit = unit(walker.energy)
-    cell_vec = walker.configuration.cell.cell_vectors
-    cell_volume = cell_vec[1][1] * cell_vec[2][2] * cell_vec[3][3]
-    cell_size = cbrt(cell_volume).val
+    # e_unit = unit(walker.energy)
+    # cell_vec = walker.configuration.cell.cell_vectors
+    # cell_volume = cell_vec[1][1] * cell_vec[2][2] * cell_vec[3][3]
+    # cell_size = cbrt(cell_volume).val
     
     energy_bins_count = length(wl_params.energy_bins)
     
@@ -211,9 +223,10 @@ function wang_landau(
     f = wl_params.f_initial
 
     current_walker = deepcopy(walker)
-    current_energy = interacting_energy(current_walker.configuration, lj, current_walker.list_num_par, current_walker.frozen).val + current_walker.energy_frozen_part.val
-
-    push!(energies, current_energy)
+    # current_energy = interacting_energy(current_walker.configuration, lj, current_walker.list_num_par, current_walker.frozen) + current_walker.energy_frozen_part
+    current_energy = current_walker.energy
+    println("Initial energy: ", current_energy)
+    push!(energies, current_energy.val)
     push!(configs, deepcopy(current_walker))
     counter = 0
 
@@ -221,17 +234,23 @@ function wang_landau(
 
         counter += 1
 
-        for _ in 1:wl_params.num_steps        
+        accepted = 0
+
+        for _ in 1:wl_params.num_steps
+            
             # Propose a swap in occupation state (only if it maintains constant N)
             proposed_walker = deepcopy(current_walker)
 
-            _, _, proposed_walker = MC_random_walk!(1, proposed_walker, lj, cell_size*0.01, Inf*unit(proposed_walker.energy))
+            proposed_walker, ΔE = single_atom_random_walk!(proposed_walker, lj, wl_params.step_size)
 
             # Calculate the proposed energy
-            proposed_energy = interacting_energy(proposed_walker.configuration, lj, proposed_walker.list_num_par, proposed_walker.frozen).val + proposed_walker.energy_frozen_part.val
+            proposed_energy = current_energy + ΔE
+            proposed_walker.energy = proposed_energy
+            # @info "Proposed energy: $proposed_energy"
             
-            current_bin = get_bin_index(current_energy, wl_params.energy_bins)
-            proposed_bin = get_bin_index(proposed_energy, wl_params.energy_bins)
+            
+            current_bin = get_bin_index(current_energy.val, wl_params.energy_bins)
+            proposed_bin = get_bin_index(proposed_energy.val, wl_params.energy_bins)
 
             # Calculate the ratio of the density of states which results if the occupation state is swapped
             # η = g[current_bin] / g[proposed_bin]
@@ -242,29 +261,35 @@ function wang_landau(
 
             # If r < η, swap the occupation state
             if r < η
-                current_walker = deepcopy(proposed_walker)
+                current_walker = proposed_walker
                 current_energy = proposed_energy
+                accepted += 1
                 # @info "Accepted, energy = $current_energy"
             end
 
             # Set g(E) = g(E) * f and H(E) = H(E) + 1
-            current_bin = get_bin_index(current_energy, wl_params.energy_bins)
+            current_bin = get_bin_index(current_energy.val, wl_params.energy_bins)
             # g[current_bin] *= f
             S[current_bin] += log(f)
             H[current_bin] += 1
 
-            push!(energies, current_energy)
+            push!(energies, current_energy.val)
             push!(configs, deepcopy(current_walker))
         end
+
+        @info "Iteration: $counter, f = $f, current_energy = $current_energy, acceptance rate = $(accepted/wl_params.num_steps)"
 
         # If the histogram is flat, decrease f, e.g. f_{i + 1} = f_i^{1/2}
         non_zero_histogram = H[H .> 0]
         if length(non_zero_histogram) > 0 && minimum(non_zero_histogram) > wl_params.flatness_criterion * mean(non_zero_histogram)
+            # Print progress
+            @info "Update f = $f, iterations = $counter"
             f = sqrt(f)
             H .= 0
-            # Print progress
-            @info "f = $f, iterations = $counter"
             counter = 0
+        elseif counter > wl_params.max_iter
+            @warn "Maximum number of iterations reached!"
+            break
         end
     end
 

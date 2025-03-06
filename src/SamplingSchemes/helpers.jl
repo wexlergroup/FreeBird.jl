@@ -2,8 +2,8 @@
     adjust_step_size(params::SamplingParameters, rate::Float64)
 
 Adjusts the step size of the sampling algorithm based on the acceptance rate. 
-    If the acceptance rate is greater than 0.75, the step size is increased by 1%. 
-    If the acceptance rate is less than 0.25, the step size is decreased by 1%.
+The step size is increased by 10% if the acceptance rate is above the upper limit of the range,
+and decreased by 10% if the acceptance rate is below the lower limit of the range.
 
 # Arguments
 - `params::SamplingParameters`: The parameters of the sampling algorithm.
@@ -15,9 +15,9 @@ Adjusts the step size of the sampling algorithm based on the acceptance rate.
 """
 function adjust_step_size(params::SamplingParameters, rate::Float64; range::Tuple{Float64, Float64}=(0.25, 0.75))
     if rate > range[2] && params.step_size < params.step_size_up
-        params.step_size *= 1.05
+        params.step_size *= 1.1
     elseif rate < range[1] && params.step_size > params.step_size_lo
-        params.step_size *= 0.95
+        params.step_size *= 0.9
     end
     return params
 end

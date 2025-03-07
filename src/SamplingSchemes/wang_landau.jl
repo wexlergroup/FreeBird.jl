@@ -73,12 +73,7 @@ end
 
 # Function to determine the bin index for a given energy
 function get_bin_index(energy::Float64, bins::Vector{Float64})
-    for i in 1:length(bins)-1
-        if energy >= bins[i] && energy < bins[i+1]
-            return i
-        end
-    end
-    return length(bins)
+    return searchsortedfirst(bins, energy)
 end
 
 
@@ -223,8 +218,8 @@ function wang_landau(
     f = wl_params.f_initial
 
     current_walker = deepcopy(walker)
-    # current_energy = interacting_energy(current_walker.configuration, lj, current_walker.list_num_par, current_walker.frozen) + current_walker.energy_frozen_part
-    current_energy = current_walker.energy
+    current_energy = interacting_energy(current_walker.configuration, lj, current_walker.list_num_par, current_walker.frozen) + current_walker.energy_frozen_part
+    # current_energy = current_walker.energy
     println("Initial energy: ", current_energy)
     push!(energies, current_energy.val)
     push!(configs, deepcopy(current_walker))
@@ -244,9 +239,13 @@ function wang_landau(
             proposed_walker, ΔE = single_atom_random_walk!(proposed_walker, lj, wl_params.step_size)
 
             # Calculate the proposed energy
-            proposed_energy = current_energy + ΔE
+            proposed_energy = interacting_energy(proposed_walker.configuration, lj, proposed_walker.list_num_par, proposed_walker.frozen) + proposed_walker.energy_frozen_part
             proposed_walker.energy = proposed_energy
             # @info "Proposed energy: $proposed_energy"
+
+            if proposed_energy.val > wl_params.energy_bins[end] || proposed_energy.val < wl_params.energy_bins[1]
+                continue
+            end
             
             
             current_bin = get_bin_index(current_energy.val, wl_params.energy_bins)
@@ -261,9 +260,10 @@ function wang_landau(
 
             # If r < η, swap the occupation state
             if r < η
-                current_walker = proposed_walker
+                current_walker = deepcopy(proposed_walker)
                 current_energy = proposed_energy
                 accepted += 1
+                push!(configs, deepcopy(current_walker))
                 # @info "Accepted, energy = $current_energy"
             end
 
@@ -274,7 +274,6 @@ function wang_landau(
             H[current_bin] += 1
 
             push!(energies, current_energy.val)
-            push!(configs, deepcopy(current_walker))
         end
 
         @info "Iteration: $counter, f = $f, current_energy = $current_energy, acceptance rate = $(accepted/wl_params.num_steps)"
@@ -282,9 +281,9 @@ function wang_landau(
         # If the histogram is flat, decrease f, e.g. f_{i + 1} = f_i^{1/2}
         non_zero_histogram = H[H .> 0]
         if length(non_zero_histogram) > 0 && minimum(non_zero_histogram) > wl_params.flatness_criterion * mean(non_zero_histogram)
+            f = sqrt(f)
             # Print progress
             @info "Update f = $f, iterations = $counter"
-            f = sqrt(f)
             H .= 0
             counter = 0
         elseif counter > wl_params.max_iter

@@ -211,6 +211,8 @@ function wang_landau(
     S = zeros(Float64, energy_bins_count)  # Entropy
     H = zeros(Int64, energy_bins_count)
 
+    df = DataFrame(energy=wl_params.energy_bins, entropy=S)
+
     energies = Float64[]
     configs = AtomWalker[]
     
@@ -295,6 +297,9 @@ function wang_landau(
             @info "Update f = $f, iterations = $counter"
             H .= 0
             counter = 0
+            @info "Saving the current entropy to entropy.csv"
+            df = DataFrame(energy=wl_params.energy_bins, entropy=S)
+            write_df("entropy.csv", df)
         elseif counter > wl_params.max_iter
             @warn "Maximum number of iterations reached!"
             break

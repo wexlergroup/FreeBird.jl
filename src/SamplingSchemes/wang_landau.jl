@@ -219,7 +219,7 @@ function wang_landau(
 
     current_walker = deepcopy(walker)
     current_energy = interacting_energy(current_walker.configuration, lj, current_walker.list_num_par, current_walker.frozen) + current_walker.energy_frozen_part
-    # current_energy = current_walker.energy
+    current_walker.energy = current_energy
     println("Initial energy: ", current_energy)
     push!(energies, current_energy.val)
     push!(configs, deepcopy(current_walker))
@@ -239,7 +239,9 @@ function wang_landau(
             proposed_walker, ΔE = single_atom_random_walk!(proposed_walker, lj, wl_params.step_size)
 
             # Calculate the proposed energy
-            proposed_energy = interacting_energy(proposed_walker.configuration, lj, proposed_walker.list_num_par, proposed_walker.frozen) + proposed_walker.energy_frozen_part
+            # proposed_energy = interacting_energy(proposed_walker.configuration, lj, proposed_walker.list_num_par, proposed_walker.frozen) + proposed_walker.energy_frozen_part
+            # proposed_walker.energy = proposed_energy
+            proposed_energy = current_energy + ΔE
             proposed_walker.energy = proposed_energy
             # @info "Proposed energy: $proposed_energy"
 
@@ -250,6 +252,10 @@ function wang_landau(
             
             current_bin = get_bin_index(current_energy.val, wl_params.energy_bins)
             proposed_bin = get_bin_index(proposed_energy.val, wl_params.energy_bins)
+
+            if current_bin == proposed_bin
+                continue
+            end
 
             # Calculate the ratio of the density of states which results if the occupation state is swapped
             # η = g[current_bin] / g[proposed_bin]
@@ -263,7 +269,7 @@ function wang_landau(
                 current_walker = deepcopy(proposed_walker)
                 current_energy = proposed_energy
                 accepted += 1
-                push!(configs, deepcopy(current_walker))
+                # push!(configs, current_walker)
                 # @info "Accepted, energy = $current_energy"
             end
 
@@ -277,6 +283,9 @@ function wang_landau(
         end
 
         @info "Iteration: $counter, f = $f, current_energy = $current_energy, acceptance rate = $(accepted/wl_params.num_steps)"
+        
+        # Save the last configuration
+        push!(configs, deepcopy(current_walker)) 
 
         # If the histogram is flat, decrease f, e.g. f_{i + 1} = f_i^{1/2}
         non_zero_histogram = H[H .> 0]

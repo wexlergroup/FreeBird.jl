@@ -156,5 +156,24 @@ function cv(df::DataFrame, βs::Vector{Float64}, dof::Int, n_walkers::Int; ω0::
     return cvs
 end
 
+function cv(Ts::Vector{Float64}, dof::Int, energy_bins::Vector{Float64}, entropy::Vector{Float64})
+    kb = 8.617333262e-5 # eV/K
+    β = 1 ./(kb.*Ts)
+    E_rel = energy_bins .- minimum(energy_bins)
+    S_shifted = entropy .- minimum(entropy[entropy .> 0])
+    g = exp.(S_shifted)
+    Z = zeros(length(Ts))
+    E_avg = zeros(length(Ts))
+    E2_avg = zeros(length(Ts))
+    Cv = zeros(length(Ts))
+    for (i, temp) in enumerate(Ts)
+        Z[i] = sum(exp.(-E_rel ./ (kb * temp)) .* g)
+        E_avg[i] = sum(E_rel .* exp.(-E_rel ./ (kb * temp)) .* g) / Z[i]
+        E2_avg[i] = sum(E_rel.^2 .* exp.(-E_rel ./ (kb * temp)) .* g) / Z[i]
+        Cv[i] = (E2_avg[i] .- E_avg[i].^2) ./ (kb * temp.^2) .+ dof*kb/2
+    end
+    return Cv
+end
+
 
 end # module AnalysisTools

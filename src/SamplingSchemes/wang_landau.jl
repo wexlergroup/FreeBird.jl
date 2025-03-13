@@ -73,7 +73,7 @@ end
 
 # Function to determine the bin index for a given energy
 function get_bin_index(energy::Float64, bins::Vector{Float64})
-    return searchsortedfirst(bins, energy)
+    return searchsortedfirst(bins, energy) - 1 # if hits the bin edge, it will be assigned to the previous bin
 end
 
 

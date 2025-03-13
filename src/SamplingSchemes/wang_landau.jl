@@ -119,7 +119,7 @@ function wang_landau(
     S = zeros(Float64, energy_bins_count)  # Entropy
     H = zeros(Int64, energy_bins_count)
 
-    df = DataFrame(energy=Float64[], config=Vector{Vector{Bool}}[])
+    energies = Float64[]
     configs = AbstractLattice[]
     
     # Choose a modification factor
@@ -130,12 +130,14 @@ function wang_landau(
     
     # push!(energies, current_energy)
     # push!(configurations, deepcopy(current_lattice))
-    push!(df, (current_energy, deepcopy(current_lattice.components)))
+    push!(energies, current_energy)
+    push!(configs, deepcopy(current_lattice))
     counter = 0
 
     while f > wl_params.f_min
 
         counter += 1
+        accepted = 0
 
         for _ in 1:wl_params.num_steps        
             # Propose a swap in occupation state (only if it maintains constant N)
@@ -145,6 +147,10 @@ function wang_landau(
 
             # Calculate the proposed energy
             proposed_energy = interacting_energy(proposed_lattice, h).val
+
+            if proposed_energy > wl_params.energy_bins[end] || proposed_energy < wl_params.energy_bins[1]
+                continue
+            end
             
             current_bin = get_bin_index(current_energy, wl_params.energy_bins)
             proposed_bin = get_bin_index(proposed_energy, wl_params.energy_bins)
@@ -160,6 +166,7 @@ function wang_landau(
             if r < η
                 current_lattice = deepcopy(proposed_lattice)
                 current_energy = proposed_energy
+                accepted += 1
             end
 
             # Set g(E) = g(E) * f and H(E) = H(E) + 1
@@ -168,9 +175,9 @@ function wang_landau(
             S[current_bin] += log(f)
             H[current_bin] += 1
 
-            push!(df, (current_energy, deepcopy(current_lattice.components)))
-            push!(configs, deepcopy(current_lattice))
         end
+
+        @info "Iteration: $counter, f = $f, current_energy = $current_energy, acceptance rate = $(accepted/wl_params.num_steps)"
 
         # If the histogram is flat, decrease f, e.g. f_{i + 1} = f_i^{1/2}
         non_zero_histogram = H[H .> 0]
@@ -178,15 +185,19 @@ function wang_landau(
             f = sqrt(f)
             H .= 0
             # Print progress
-            @info "f = $f, iterations = $counter"
+            @info "f = $f, iterations = $counter. Saving the current entropy to entropy.csv"
+            df = DataFrame(energy=wl_params.energy_bins, entropy=S)
+            write_df("entropy.csv", df)
             counter = 0
+            push!(configs, deepcopy(current_lattice))
+            push!(energies, current_energy)
         elseif counter > wl_params.max_iter
             @warn "Maximum number of iterations reached!"
             break
         end
     end
 
-    return df, configs, wl_params, S, H
+    return energies, configs, wl_params, S, H
 end
 
 
@@ -255,9 +266,9 @@ function wang_landau(
             current_bin = get_bin_index(current_energy.val, wl_params.energy_bins)
             proposed_bin = get_bin_index(proposed_energy.val, wl_params.energy_bins)
 
-            if current_bin == proposed_bin
-                continue
-            end
+            # if current_bin == proposed_bin
+            #     continue
+            # end
 
             # Calculate the ratio of the density of states which results if the occupation state is swapped
             # η = g[current_bin] / g[proposed_bin]

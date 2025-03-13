@@ -70,13 +70,14 @@
         @test save_every_n.n_traj == 100
         @test save_every_n.n_snap == 1000
 
-        save_every_n_custom = SaveEveryN("custom_df.csv", "custom.traj.extxyz", "custom.ls.extxyz", 200, 2000)
+        save_every_n_custom = SaveEveryN("custom_df.csv", "custom.traj.extxyz", "custom.ls.extxyz", 200, 2000, 200)
 
         @test save_every_n_custom.df_filename == "custom_df.csv"
         @test save_every_n_custom.wk_filename == "custom.traj.extxyz"
         @test save_every_n_custom.ls_filename == "custom.ls.extxyz"
         @test save_every_n_custom.n_traj == 200
         @test save_every_n_custom.n_snap == 2000
+        @test save_every_n_custom.n_info == 200
 
         save_free_part_every_n = SaveFreePartEveryN()
         @test save_every_n.df_filename == "output_df.csv"
@@ -84,8 +85,9 @@
         @test save_every_n.ls_filename == "output.ls.extxyz"
         @test save_every_n.n_traj == 100
         @test save_every_n.n_snap == 1000
+        @test save_every_n.n_info == 1
 
-        save_free_part_every_n_custom = SaveFreePartEveryN("custom_df.csv", "custom.traj.extxyz", "custom.ls.extxyz", 200, 2000)
+        save_free_part_every_n_custom = SaveFreePartEveryN("custom_df.csv", "custom.traj.extxyz", "custom.ls.extxyz", 200, 2000, 200)
         @test save_every_n_custom.df_filename == "custom_df.csv"
         @test save_every_n_custom.wk_filename == "custom.traj.extxyz"
         @test save_every_n_custom.ls_filename == "custom.ls.extxyz"

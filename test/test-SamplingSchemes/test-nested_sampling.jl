@@ -6,6 +6,7 @@
             0.1,     # step_size
             0.01,    # step_size_lo
             1.0,     # step_size_up
+            (0.5,0.5),  # acceptance ratio range
             0,       # fail_count
             100,     # allowed_fail_count
             1234     # random_seed
@@ -160,6 +161,7 @@
                 0.1,     # step_size
                 0.01,    # step_size_lo
                 1.0,     # step_size_up
+                (0.5,0.5),  # acceptance ratio range
                 0,       # fail_count
                 100,     # allowed_fail_count
                 1234     # random_seed
@@ -265,6 +267,7 @@
                 0.1,     # step_size
                 0.01,    # step_size_lo
                 1.0,     # step_size_up
+                (0.5,0.5),  # acceptance ratio range
                 0,       # fail_count
                 100,     # allowed_fail_count
                 1234     # random_seed
@@ -275,7 +278,7 @@
             updated_params = deepcopy(ns_params)
 
             updated_params = SamplingSchemes.adjust_step_size(updated_params, 0.8)
-            @test updated_params.step_size == ns_params.step_size * 1.05
+            @test updated_params.step_size == ns_params.step_size * 1.1 # 10% increase
             
             # Test upper boundary
             updated_params.step_size = 0.8
@@ -288,7 +291,7 @@
             updated_params = deepcopy(ns_params)
 
             updated_params = SamplingSchemes.adjust_step_size(updated_params, 0.2)
-            @test updated_params.step_size == 0.1 * 0.95
+            @test updated_params.step_size == 0.1 * 0.9 # 10% decrease
             
             # Test lower boundary
             updated_params.step_size = 0.106
@@ -331,6 +334,7 @@
                 0.1,     # step_size
                 0.01,    # step_size_lo
                 1.0,     # step_size_up
+                (0.5,0.5),  # acceptance ratio range
                 0,       # fail_count
                 100,     # allowed_fail_count
                 1234     # random_seed

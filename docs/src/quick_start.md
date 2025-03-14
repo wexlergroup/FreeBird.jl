@@ -87,7 +87,7 @@ Now, time to set up a simulation. We will be using nested sampling, a Bayesian-i
 First, we need to define the nested sampling parameters:
 
 ````@example quick_start
-ns_params = NestedSamplingParameters(200, 0.1, 0.01, 1e-5, 1.0, 0, 200, 1234)
+ns_params = NestedSamplingParameters((mc_steps=200, step_size=0.1))
 ````
 
 The [`NestedSamplingParameters`](@ref) type is a struct that holds the parameters of the nested sampling algorithm.
@@ -97,6 +97,7 @@ The fields are as follows:
 -  `step_size::Float64`: The on-the-fly step size used in the sampling process.
 -  `step_size_lo::Float64`: The lower bound of the step size.
 -  `step_size_up::Float64`: The upper bound of the step size.
+-  `accept_range::Tuple{Float64, Float64}`: The range of acceptance rates for adjusting the step size.
 -  `fail_count::Int64`: The number of failed MC moves in a row.
 -  `allowed_fail_count::Int64`: The maximum number of failed MC moves allowed before resetting the step size.
 -  `random_seed::Int64`: The seed for the random number generator.

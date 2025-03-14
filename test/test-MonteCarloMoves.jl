@@ -541,6 +541,21 @@
             atw_moved.configuration.position[1] += [1.0, 1.0, 1.0]u"Å"
             @test_throws UndefVarError mean_sq_displacement(atw_moved, atw_frozen)
         end
+
+        @testset "free_component_index function tests" begin
+
+            # Multi-atom system with different types
+            coor_list = [:H => [0.2, 0.3, 0.5], 
+                            :H => [0.8, 0.3, 0.5],
+                            :O => [0.5, 0.2, 0.3], 
+                            :O => [0.7, 0.8, 0.3]]
+            at = FastSystem(periodic_system(coor_list, box, fractional=true))
+            
+            # Test with different freezing configurations
+            @test length(MonteCarloMoves.free_component_index(AtomWalker(at, freeze_species=[:O]))) == 1
+            @test isempty(MonteCarloMoves.free_component_index(AtomWalker(at, freeze_species=[:H,:O])))
+            @test length(MonteCarloMoves.free_component_index(AtomWalker(at, freeze_species=Symbol[]))) == 2
+        end
     end
 
 end

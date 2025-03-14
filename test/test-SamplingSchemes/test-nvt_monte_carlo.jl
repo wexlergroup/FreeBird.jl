@@ -75,7 +75,7 @@ end
         cell_size = cbrt(cell_volume).val
 
         # N = 4
-        temperatures = collect(1000.0:-100:500.0)  # 200:-1:1
+        temperatures = collect(1000.0:-100:500.0)
         num_equilibration_steps = 1_000
         num_sampling_steps = 1_000
         step_size = cell_size / 50
@@ -93,6 +93,54 @@ end
 
         @test length(mc_energies) == length(temperatures)
         @test length(mc_ls.walkers) == length(temperatures)
+        @test length(mc_cvs) == length(temperatures)
+        @test length(acceptance_rates) == length(temperatures)
+
+        @test all(isfinite, mc_energies)
+        @test all(isfinite, mc_cvs)
+
+        @test all(0 ≤ x ≤ 1 for x in acceptance_rates)
+
+    end
+
+    @testset "nvt Monte Carlo lattice version" begin
+        lattice = SLattice{SquareLattice}(
+            supercell_dimensions=(2, 2, 1),
+            components=[[1,2]]
+        )
+
+        ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+
+        # Metropolis Monte Carlo
+        energies, configs, accepted = nvt_monte_carlo(lattice, ham, 300.0, 100, 42)
+
+        @test length(energies) == 100
+        @test length(configs) == 100
+        @test 0 ≤ accepted ≤ 100
+        @test all(isfinite, energies)
+
+        initial_lattice = SLattice{SquareLattice}(
+            supercell_dimensions=(2, 2, 1),
+            components=[[1,2]]
+        )
+
+        temperatures = collect(1000.0:-100:500.0)
+        num_equilibration_steps = 1_000
+        num_sampling_steps = 1_000
+
+        mc_params = MetropolisMCParameters(
+            temperatures,
+            equilibrium_steps=num_equilibration_steps,
+            sampling_steps=num_sampling_steps,
+            step_size=0.1,
+            step_size_up=0.2,
+            accept_range=(0.3, 0.4)
+        )
+
+        mc_energies, mc_configs, mc_cvs, acceptance_rates = monte_carlo_sampling(initial_lattice, ham, mc_params)
+
+        @test length(mc_energies) == length(temperatures)
+        @test length(mc_configs) == length(temperatures)
         @test length(mc_cvs) == length(temperatures)
         @test length(acceptance_rates) == length(temperatures)
 

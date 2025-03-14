@@ -60,20 +60,40 @@
 
     @testset "Wang Landau atomistic sampling" begin
         # Setup test system
-        at = generate_initial_configs(1, 562.5, 2; particle_type=:H)[1]
-        wk = AtomWalker(at)
-        lj = LJParameters(epsilon=0.1,sigma=2.5,cutoff=3.5,shift=false)
+        box = [[10.0u"Å", 0u"Å", 0u"Å"],
+                    [0u"Å", 10.0u"Å", 0u"Å"],
+                    [0u"Å", 0u"Å", 10.0u"Å"]]
+        lj = LJParameters(epsilon=0.1, sigma=2.5, cutoff=3.5, shift=false)
+        
+        coor_list = [:H => [0.2, 0.5, 0.5],
+                        :H => [0.4, 0.5, 0.5]]
+        at = FastSystem(periodic_system(coor_list, box, fractional=true))
+        
+        walkers = [AtomWalker(at) for _ in 1:3]
+        liveset = LJAtomWalkers(walkers, lj)
 
-        wl_params = WangLandauParameters(f_min=1.01, energy_min=-1.27, energy_max=10.0, num_energy_bins=1000)
+        wk = liveset.walkers[1]
+
+        wl_params = WangLandauParameters(f_min=1.01, energy_min=-1.27, energy_max=10.0, num_energy_bins=1000, max_iter=1)
 
         wl_energies, wl_configs, wl_params, S, H = wang_landau(wk, lj, wl_params)
-
-        ls = LJAtomWalkers([AtomWalker{1}(config.configuration) for config in wl_configs], lj)
 
         @test wl_energies isa Vector{Float64}
         @test wl_configs isa Vector{AtomWalker}
         @test length(S) == 1000
         @test length(H) == 1000
+
+        wl_params = WangLandauParameters(f_min=1.01, energy_min=-1.27, energy_max=15.0, num_energy_bins=2)
+        wl_energies, wl_configs, wl_params, S, H = wang_landau(wk, lj, wl_params)
+
+        @test wl_energies isa Vector{Float64}
+        @test wl_configs isa Vector{AtomWalker}
+        @test length(S) == 2
+        @test length(H) == 2
+
+        ls = LJAtomWalkers([AtomWalker{1}(config.configuration) for config in wl_configs], lj)
+
+
     end
 
 

@@ -104,7 +104,7 @@
         @test all(ChemicalSpecies(:O) in free.configuration.species)
     end
 
-    @testset "save configurations" begin
+    @testset "save and read configurations" begin
         volume_per_particle = 10.0
         num_particle = [3, 2]
         particle_types = [:H, :O]
@@ -123,6 +123,16 @@
         walkers  = [AtomWalker(FreeBirdIO.generate_multi_type_random_starting_config(volume_per_particle, num_particle; particle_types=particle_types)) for _ in 1:3]
         write_walkers("walkers.traj.extxyz", walkers)
         @test isfile("walkers.traj.extxyz")
+        readin_walkers = read_walkers("walkers.traj.extxyz"; resume=false)
+        @test length(readin_walkers) == 3
+        @test all(walker -> walker isa AtomWalker, readin_walkers)
+
+        readin_single = read_single_walker("walkers.traj.extxyz"; resume=false)
+        @test readin_single isa AtomWalker
+        @test periodicity(readin_single.configuration) == (true, true, true) # which is wrong
+        readin_single = read_single_walker("walkers.traj.extxyz", pbc="FFF"; resume=false)
+        @test periodicity(readin_single.configuration) == (false, false, false) # which is correct
+
         rm("walkers.traj.extxyz", force=true)
         
     end

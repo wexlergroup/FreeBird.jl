@@ -23,6 +23,28 @@
             @test typeof(MonteCarloMoves.single_atom_random_walk!(pos, step_size)) == typeof(pos)
         end
 
+        @testset "single_atom_random_walk 2D/1D tests" begin
+
+            # Test basic functionality
+            pos = SVector{3, typeof(0.0u"Å")}([1.0, 2.0, 3.0] .* u"Å")
+            step_size = 0.5
+            new_pos = MonteCarloMoves.single_atom_random_walk!(pos, step_size, [1,2])
+            
+            @test new_pos ≠ pos
+            @test new_pos[3] == pos[3] # Check that z-coordinate is unchanged
+            
+            # Test step size constraints
+            for _ in 1:10
+                pos = SVector{3, typeof(0.0u"Å")}([0.0, 0.0, 0.0] .* u"Å")
+                new_pos = MonteCarloMoves.single_atom_random_walk!(pos, step_size,[1,2])
+                
+                # Check that no component moved more than step_size
+                @test all(abs.(new_pos - pos) .<= step_size * u"Å")
+                @test new_pos[3] == pos[3] # Check that z-coordinate is unchanged
+            end
+        
+        end
+
 
         @testset "MC_random_walk functions tests" begin
             @testset "AtomWalker MC_random_walk tests" begin
@@ -47,6 +69,32 @@
                 @test 0.0 <= accept_rate <= 1.0
                 @test typeof(updated_atw) == typeof(atw)
                 @test updated_atw.energy <= emax
+            end
+
+            @testset "AtomWalker MC_random_walk_2D! tests" begin
+                
+                # Setup test parameters
+                n_steps = 100
+                step_size = 0.5
+                emax = 1.0u"eV"
+                
+                # Create a simple test system
+                at = FreeBirdIO.generate_multi_type_random_starting_config(10.0,[2,1,3,4,5,6];particle_types=[:H,:O,:H,:Fe,:Au,:Cl])    # Example values
+                atw = AtomWalker(at;freeze_species=[:H],merge_same_species=true)
+                lj = LJParameters()  # Create test LJ parameters
+                
+                # Run MC simulation
+                accept_this_walker, accept_rate, updated_atw = MC_random_walk_2D!(
+                    n_steps, atw, lj, step_size, emax
+                )
+                
+                # Tests
+                @test typeof(accept_this_walker) == Bool
+                @test 0.0 <= accept_rate <= 1.0
+                @test typeof(updated_atw) == typeof(atw)
+                @test updated_atw.energy <= emax
+
+                @test updated_atw.configuration.position[3] == atw.configuration.position[3] # Check that z-coordinate is unchanged
             end
 
             @testset "LatticeWalker MC_random_walk tests" begin
@@ -181,6 +229,62 @@
                 @test isa(result, Bool)
             end
 
+        end
+
+        @testset "MC_rejection_sampling function tests" begin
+
+            # Create base test lattices
+            square_lattice = MLattice{1,SquareLattice}(
+                lattice_constant=1.0,
+                basis=[(0.0, 0.0, 0.0)],
+                supercell_dimensions=(4, 4, 1),
+                periodicity=(true, true, false),
+                cutoff_radii=[1.1, 1.5],
+                components=:equal,
+                adsorptions=:full
+            )
+
+            lattice = LatticeWalker(
+                square_lattice,
+                energy=5.0u"eV",
+                iter=0
+            )
+            
+            h = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+
+            @testset "Basic functionality and energy constraints tests" begin
+
+                # Test with normal emax
+                emax = 2.0
+                result, updated_lattice = MC_rejection_sampling!(lattice, h, emax)
+                @test isa(result, Bool)
+                @test isa(updated_lattice, LatticeWalker)
+                @test unit(updated_lattice.energy) == u"eV"
+                
+                # Test with very low emax to force rejection
+                result_low, _ = MC_rejection_sampling!(lattice, h, -10.0)
+                @test result_low == false
+            end
+
+            @testset "Different lattice type tests" begin
+
+                # Test with triangular lattice
+                tri_lattice = MLattice{1,TriangularLattice}(
+                    lattice_constant=1.0,
+                    basis=[(0.0, 0.0, 0.0), (1/2, sqrt(3)/2, 0.0)],
+                    supercell_dimensions=(4
+                    , 2, 1),
+                    periodicity=(true, true, false),
+                    cutoff_radii=[1.1, 1.5],
+                    components=:equal,
+                    adsorptions=:full
+                )
+
+                t_walker = LatticeWalker(tri_lattice, energy=5.0u"eV", iter=0)
+                result, _ = MC_rejection_sampling!(t_walker, h, 2.0)
+                @test isa(result, Bool)
+
+            end
         end
 
 

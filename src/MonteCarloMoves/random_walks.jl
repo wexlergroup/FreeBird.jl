@@ -262,11 +262,28 @@ function MC_new_sample!(lattice::LatticeWalker{C},
     return accept_this_walker, lattice
 end
 
+"""
+    MC_rejection_sampling!(lattice::LatticeWalker, h::ClassicalHamiltonian, emax::Float64; energy_perturb::Float64=0.0, max_iter=10_000)
 
+Perform a Monte Carlo rejection sampling on the lattice system.
+
+# Arguments
+- `lattice::LatticeWalker`: The walker to perform the rejection sampling on.
+- `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
+- `emax::Float64`: The maximum energy allowed for accepting a move.
+- `energy_perturb::Float64=0.0`: The energy perturbation used to make degenerate configurations distinguishable.
+- `max_iter::Int=10_000`: The maximum number of iterations to perform.
+
+# Returns
+- `accept_this_walker::Bool`: Whether the walker is accepted or not.
+- `lattice::LatticeWalker`: The updated walker.
+
+"""
 function MC_rejection_sampling!(lattice::LatticeWalker{C},
                         h::ClassicalHamiltonian,
                         emax::Float64;
                         energy_perturb::Float64=0.0,
+                        max_iter::Int = 10_000,
                         ) where C
 
     accept_this_walker = false
@@ -274,6 +291,8 @@ function MC_rejection_sampling!(lattice::LatticeWalker{C},
 
     current_energy = lattice.energy # initialize to a value greater than emax
     current_lattice = lattice.configuration
+
+    counter = 0
 
     while current_energy >= emax
         
@@ -283,6 +302,12 @@ function MC_rejection_sampling!(lattice::LatticeWalker{C},
         perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
         raw_energy = interacting_energy(proposed_lattice, h)
         proposed_energy = raw_energy + perturbation_energy
+
+        counter += 1
+        if counter > max_iter
+            accept_this_walker = false
+            break
+        end
 
         @debug "proposed_energy = $proposed_energy, perturbed_energy = $(perturbation_energy), emax = $(emax)), accept = $(proposed_energy < emax)"
 

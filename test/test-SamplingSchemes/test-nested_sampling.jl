@@ -18,6 +18,7 @@
         @test params.step_size == 0.1
         @test params.step_size_lo == 0.01
         @test params.step_size_up == 1.0
+        @test params.accept_range == (0.5,0.5)
         @test params.fail_count == 0
         @test params.allowed_fail_count == 100
         @test params.random_seed == 1234
@@ -27,6 +28,19 @@
         params.fail_count = 1
         @test params.step_size == 0.2
         @test params.fail_count == 1
+
+        params = NestedSamplingParameters() # Default values
+
+        @test params.mc_steps == 200
+        @test params.initial_step_size == 0.01
+        @test params.step_size == 0.1
+        @test params.step_size_lo == 1e-6
+        @test params.step_size_up == 1.0
+        @test params.accept_range == (0.25,0.75)
+        @test params.fail_count == 0
+        @test params.allowed_fail_count == 100
+        @test params.random_seed == 1234
+
     end
     
 
@@ -49,6 +63,15 @@
         # Test mutability
         params.fail_count = 1
         @test params.fail_count == 1
+
+        params = LatticeNestedSamplingParameters() # Default values
+
+        @test params.mc_steps == 100
+        @test params.energy_perturbation == 1e-12
+        @test params.fail_count == 0
+        @test params.allowed_fail_count == 10
+        @test params.random_seed == 1234
+
     end
     
 
@@ -56,6 +79,7 @@
         @test MCRandomWalkMaxE() isa MCRoutine
         @test MCRandomWalkClone() isa MCRoutine
         @test MCNewSample() isa MCRoutine
+        @test MCMixedMoves(5,1) isa MCRoutine
         
         routines = [MCRandomWalkMaxE(), MCRandomWalkClone(), MCNewSample()]
         @test all(r -> r isa MCRoutine, routines)
@@ -179,6 +203,31 @@
     
             @testset "MCRandomWalkClone" begin
                 mc_routine = MCRandomWalkClone()
+                iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+                
+                @test iter isa Union{Missing,Int}
+                @test emax isa Union{Missing,typeof(0.0u"eV")}
+                @test length(updated_liveset.walkers) == length(liveset.walkers)
+                @test updated_params.fail_count >= 0
+            end
+
+            @testset "MCRandomWalkClone 2D" begin
+                mc_routine = MCRandomWalkClone(dims=[1,2])
+                @test mc_routine.dims == [1,2]
+                @test length(mc_routine.dims) == 2
+
+                original_ls = deepcopy(liveset)
+                iter, emax, updated_liveset, updated_params = nested_sampling_step!(deepcopy(original_ls), ns_params, mc_routine)
+                
+                @test iter isa Union{Missing,Int}
+                @test emax isa Union{Missing,typeof(0.0u"eV")}
+                @test length(updated_liveset.walkers) == length(original_ls.walkers)
+                @test updated_params.fail_count >= 0
+
+            end
+
+            @testset "MCMixedMoves" begin
+                mc_routine = MCMixedMoves(5, 1)
                 iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
                 
                 @test iter isa Union{Missing,Int}

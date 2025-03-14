@@ -55,4 +55,14 @@
         @test isnan(cv(β, Float64[], Float64[], dof))
         @test_throws DimensionMismatch cv(1.0, [0.5, 0.5], Ei, dof)
     end
+
+    # Test cv function (Wang-Landau sampling)
+    @testset "cv_wang_landau" begin
+        Ts = [300.0, 400.0]
+        dof = 3
+        energy_bins = [1.0, 2.0, 3.0]
+        entropy = [0.1, 0.2, 0.3]
+        cvs = cv(Ts, dof, energy_bins, entropy)
+        @test length(cvs) == 2
+    end
 end

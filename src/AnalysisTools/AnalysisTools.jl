@@ -128,7 +128,7 @@ end
 """
     cv(df::DataFrame, βs::Vector{Float64}, dof::Int, n_walkers::Int)
 
-Calculates the constant-volume heat capacity at constant volume for the given DataFrame, inverse temperatures, degrees of freedom, and number of walkers.
+(Nested Sampling) Calculates the constant-volume heat capacity at constant volume for the given DataFrame, inverse temperatures, degrees of freedom, and number of walkers.
 The heat capacity is defined as:
 ```math
 C_V(\\beta) = \\frac{\\mathrm{dof} \\cdot k_B}{2} + k_B \\beta^2 \\left(\\frac{\\sum_i \\omega_i E_i^2 \\exp(-E_i \\beta)}{Z(\\beta)} - U(\\beta)^2\\right)
@@ -139,7 +139,7 @@ where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann cons
 # Arguments
 - `df::DataFrame`: The DataFrame containing the output data.
 - `βs::Vector{Float64}`: The inverse temperatures.
-- `dof::Int`: The degrees of freedom, equals to the number of dimensions times the number of particles.
+- `dof::Int`: The degrees of freedom, equals to the number of dimensions times the number of particles. For a lattice, it is zero.
 - `n_walkers::Int`: The number of walkers.
 - `ω0::Float64`: The initial \$\\omega\$ factor. Default is 1.0.
 
@@ -156,6 +156,21 @@ function cv(df::DataFrame, βs::Vector{Float64}, dof::Int, n_walkers::Int; ω0::
     return cvs
 end
 
+"""
+    cv(Ts::Vector{Float64}, dof::Int, energy_bins::Vector{Float64}, entropy::Vector{Float64})
+
+(Wang-Landau Sampling) Calculates the constant-volume heat capacity at constant volume for the given temperatures, degrees of 
+freedom, energy bins, and entropy. The kinetic energy is treated classically, and is added to the heat capacity as \$dof \\cdot k_B/2\$.
+
+# Arguments
+- `Ts::Vector{Float64}`: The temperatures in Kelvin.
+- `dof::Int`: The degrees of freedom, equals to the number of dimensions times the number of particles. For a lattice, it is zero.
+- `energy_bins::Vector{Float64}`: The energy bins in eV.
+- `entropy::Vector{Float64}`: The entropy.
+
+# Returns
+- A vector of constant-volume heat capacities.
+"""
 function cv(Ts::Vector{Float64}, dof::Int, energy_bins::Vector{Float64}, entropy::Vector{Float64})
     kb = 8.617333262e-5 # eV/K
     β = 1 ./(kb.*Ts)

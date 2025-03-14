@@ -87,4 +87,8 @@
         @test SamplingSchemes.get_bin_index(1.5, bins) == 5  # Edge case: above max, insert at end
         @test SamplingSchemes.get_bin_index(0.0, bins) == 2  # Edge case: exact boundary, put in bin 2
     end
+
+    if isfile("entropy.csv")
+        rm("entropy.csv", force=true)
+    end
 end

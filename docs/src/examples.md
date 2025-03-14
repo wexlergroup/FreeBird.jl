@@ -143,6 +143,83 @@ Viola! We can now run the Wang-Landau simulation.
 energies_wl, configs, wl_params, S, H = wang_landau(at, lj, wl_params)
 ````
 
+## Lattice system
+
+We can also perform simulations on lattice systems.
+
+Let's set up a 2D square lattice with a supercell of dimensions 4x4x1.
+Make the first four sites occupied.
+
+````@example examples
+initial_lattice = SLattice{SquareLattice}(components=[[1,2,3,4]])
+````
+
+Define the Hamiltonian with the adsorption energy and the nearest-neighbor and next-nearest-neighbor energies.
+
+````@example examples
+adsorption_energy = -0.04
+nn_energy = -0.01
+nnn_energy = -0.0025
+h = GenericLatticeHamiltonian(adsorption_energy, [nn_energy, nnn_energy], u"eV")
+````
+
+### Wang-Landau Sampling
+This time, let's do a Wang-Landau simulation first, as it's the most straightforward to set up.
+
+````@example examples
+energy_min = 20.5 * nn_energy + nn_energy / 8
+energy_max = 16 * nn_energy - nn_energy / 8
+num_energy_bins = 100
+````
+
+Pass the parameters to the `WangLandauParameters` object.
+
+````@example examples
+wl_params = WangLandauParameters(
+    energy_min=energy_min,
+    energy_max=energy_max,
+    random_seed=Int(round(time() * 1000)),)
+````
+
+Run the Wang-Landau simulation.
+
+````@example examples
+energies_wl, configs, wl_params, S, H = wang_landau(initial_lattice, h, wl_params)
+````
+
+### Metroplis Monte Carlo
+
+Let's make a Metropolis Monte Carlo simulation on the same lattice system.
+
+````@example examples
+mc_lattice = deepcopy(initial_lattice)
+````
+
+Define the temperature grid, the number of equilibration steps, and the number of sampling steps.
+
+````@example examples
+temperatures = collect(200.0:-10:10)  # 200:-1:1
+num_equilibration_steps = 25_000
+num_sampling_steps = 25_000
+````
+
+Pass the parameters to the `MetropolisMCParameters` object.
+
+````@example examples
+mc_params = MetropolisMCParameters(
+    temperatures,
+    equilibrium_steps=num_equilibration_steps,
+    sampling_steps=num_sampling_steps,
+    random_seed=Int(round(time()))
+)
+````
+
+Run the Monte Carlo simulation.
+
+````@example examples
+mc_energies, mc_configs, mc_cvs, acceptance_rates = monte_carlo_sampling(mc_lattice, h, mc_params)
+````
+
 ---
 
 *This page was generated using [Literate.jl](https://github.com/fredrikekre/Literate.jl).*

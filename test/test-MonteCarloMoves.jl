@@ -416,6 +416,59 @@
         end
     end
 
+    @testset "Monte Carlo swap moves tests" begin
+        @testset "two_atoms_swap! function tests" begin
+            
+            # Create a simple test system
+            at = FreeBirdIO.generate_multi_type_random_starting_config(10.0,[1,1,1,1,1];particle_types=[:H,:O,:Fe,:Au,:Cl])    # Example values
+            atw = AtomWalker(at)
+            lj = LJParameters()  # Create test LJ parameters
+            
+            # Run MC simulation
+            atw_new = MonteCarloMoves.two_atoms_swap!(deepcopy(atw), 1, 2)
+            
+            # Tests
+            @test atw_new.configuration.species[1] == :O
+            @test atw_new.configuration.species[2] == :H
+            @test atw_new.configuration.position[1] == atw.configuration.position[2]
+            @test atw_new.configuration.position[2] == atw.configuration.position[1]
+        end
+
+        @testset "MC_random_swap! function tests" begin
+            
+            # Create a simple test system
+            at = FreeBirdIO.generate_multi_type_random_starting_config(10.0,[1,1,1,1,1];particle_types=[:H,:O,:Fe,:Au,:Cl])    # Example values
+            atw = AtomWalker(at;freeze_species=[:Fe,:Au,:Cl],merge_same_species=true) # only H and O are free
+            lj = LJParameters()  # Create test LJ parameters
+            
+            # Run MC simulation
+            accepted, rate, atw_new = MonteCarloMoves.MC_random_swap!(1, deepcopy(atw), lj, Inf*u"eV") # Inf energy limit, so always accept
+            
+            # Tests
+            @test atw_new.configuration.species[1] == :O
+            @test atw_new.configuration.species[2] == :H
+            @test atw_new.configuration.position[1] == atw.configuration.position[2]
+            @test atw_new.configuration.position[2] == atw.configuration.position[1]
+            @test atw_new.configuration.position[3] == atw.configuration.position[3] # Check if other atoms are unchanged
+
+            @test typeof(accepted) == Bool
+            @test rate == 1.0
+            @test accepted == true
+
+            accepted, rate, atw_new = MonteCarloMoves.MC_random_swap!(1, deepcopy(atw), lj, -Inf*u"eV") # -Inf energy limit, so always reject
+
+            @test atw_new.configuration.species[1] == :H # Check if species are unchanged
+            @test atw_new.configuration.species[2] == :O # Check if species are unchanged
+            @test atw_new.configuration.position[1] == atw.configuration.position[1] # Check if positions are unchanged
+            @test atw_new.configuration.position[2] == atw.configuration.position[2] # Check if positions are unchanged
+            @test atw_new.configuration.position[3] == atw.configuration.position[3] # Check if other atoms are unchanged
+
+            @test typeof(accepted) == Bool
+            @test rate == 0.0
+            @test accepted == false
+        end
+    end
+
 
     @testset "helpers.jl tests" begin
 

@@ -6,6 +6,7 @@ makedocs(;
     pages=[
             "FreeBird.jl" => "index.md",
             "Tutorials" => "tutorials.md",
+            "Examples" => "examples.md",
             "Modules and Documentation" => [
             "`AbstractLiveSets`" => "AbstractLiveSets.md",
             "`AbstractWalkers`" => "AbstractWalkers.md",

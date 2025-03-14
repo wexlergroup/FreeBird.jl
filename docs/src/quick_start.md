@@ -87,7 +87,7 @@ Now, time to set up a simulation. We will be using nested sampling, a Bayesian-i
 First, we need to define the nested sampling parameters:
 
 ````@example quick_start
-ns_params = NestedSamplingParameters((mc_steps=200, step_size=0.1))
+ns_params = NestedSamplingParameters(mc_steps=200, step_size=0.1)
 ````
 
 The [`NestedSamplingParameters`](@ref) type is a struct that holds the parameters of the nested sampling algorithm.

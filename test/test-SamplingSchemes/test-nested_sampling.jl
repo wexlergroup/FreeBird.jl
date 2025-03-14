@@ -226,6 +226,17 @@
 
             end
 
+            @testset "MCRandomWalkClone 1D" begin
+                mc_routine = MCRandomWalkClone(dims=[1])
+                @test mc_routine.dims == [1]
+                @test length(mc_routine.dims) == 1
+
+                @test_throws ErrorException begin
+                    nested_sampling_step!(liveset, ns_params, mc_routine)
+                end
+
+            end
+
             @testset "MCMixedMoves" begin
                 mc_routine = MCMixedMoves(5, 1)
                 iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
@@ -297,6 +308,16 @@
     
             @testset "MCNewSample" begin
                 mc_routine = MCNewSample()
+                iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+                
+                @test iter isa Union{Missing,Int}
+                @test emax isa Union{Missing,Float64}
+                @test length(updated_liveset.walkers) == length(liveset.walkers)
+                @test updated_params.fail_count >= 0
+            end
+
+            @testset "MCRejection" begin
+                mc_routine = MCRejectionSampling()
                 iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
                 
                 @test iter isa Union{Missing,Int}

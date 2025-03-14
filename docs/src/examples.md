@@ -140,7 +140,7 @@ wl_params = WangLandauParameters(num_steps=10_000,
 Viola! We can now run the Wang-Landau simulation.
 
 ````@example examples
-energies_wl, configs, wl_params, S, H = wang_landau(initial_walker, lj, wl_params)
+energies_wl, configs, wl_params, S, H = wang_landau(at, lj, wl_params)
 ````
 
 ---

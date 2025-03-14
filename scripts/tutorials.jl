@@ -1,6 +1,6 @@
-# # Quick start guide to FreeBird.jl
+# # FreeBird.jl Tutorial
 
-# This is a quick start guide to using the FreeBird.jl package.
+# This is a tutorial to using the FreeBird.jl package.
 # It covers the basic functionalities of the package, such as 
 # generating atomistic and lattice walkers, defining a potential energy function or
 # Hamiltonian, and running a sampling simulation.

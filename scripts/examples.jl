@@ -19,10 +19,13 @@ configs = generate_initial_configs(120, 562.5, 6)
 # They contain the information about the system's configuration.
 # Let's warp the configurations into walkers.
 walkers = AtomWalker.(generate_initial_configs(120, 562.5, 6))
+nothing #hide
+
 # Let's define the Lennard-Jones potential
 lj = LJParameters(epsilon=0.1, sigma=2.5, cutoff=4.0)
 # We then create a `LJAtomWalkers` object that contains the walkers and the Lennard-Jones potential.
 ls = LJAtomWalkers(walkers, lj)
+nothing #hide
 
 # We then set up a `NestedSamplingParameters` object with the desired parameters. See the documentation for more information.
 ns_params = NestedSamplingParameters(mc_steps=200, step_size=0.1, random_seed=1234*rand(Int))
@@ -156,10 +159,12 @@ end
 
 # Warp the walkers into `LatticeWalker` objects.
 walkers = [LatticeWalker(walker) for walker in walkers]
+nothing #hide
 
 # Again, we use the same Hamiltonian as before.
 # We then create a `LatticeGasWalkers` object that contains the walkers and the Hamiltonian.
 ls = LatticeGasWalkers(walkers, h)
+nothing #hide
 
 # The rejection routine for nested sampling is the best choice for lattice systems.
 mc = MCRejectionSampling()
@@ -174,4 +179,4 @@ ns_params = LatticeNestedSamplingParameters(mc_steps=100,allowed_fail_count=1_00
 save = SaveEveryN(df_filename="output_ns_lattice2d.csv")
 
 # And finally, we can run the nested sampling simulation
-ns_energies, ls, _ = nested_sampling(ls, ns_params, 10_000, mc, save) # src
+ns_energies, ls, _ = nested_sampling(ls, ns_params, 10_000, mc, save)

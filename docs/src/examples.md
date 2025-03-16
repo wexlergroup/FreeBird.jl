@@ -29,7 +29,7 @@ They contain the information about the system's configuration.
 Let's warp the configurations into walkers.
 
 ````@example examples
-walkers = AtomWalker.(generate_initial_configs(120, 562.5, 6))
+walkers = AtomWalker.(generate_initial_configs(120, 562.5, 6));
 ````
 
 Let's define the Lennard-Jones potential
@@ -41,7 +41,7 @@ lj = LJParameters(epsilon=0.1, sigma=2.5, cutoff=4.0)
 We then create a `LJAtomWalkers` object that contains the walkers and the Lennard-Jones potential.
 
 ````@example examples
-ls = LJAtomWalkers(walkers, lj)
+ls = LJAtomWalkers(walkers, lj);
 ````
 
 We then set up a `NestedSamplingParameters` object with the desired parameters. See the documentation for more information.
@@ -234,7 +234,7 @@ using Distributions
 Make 1000 copies of the initial lattice.
 
 ````@example examples
-walkers = [deepcopy(initial_lattice) for i in 1:1000]
+walkers = [deepcopy(initial_lattice) for i in 1:1000];
 ````
 
 Now using the `sample` function from the Distributions.jl package, we can randomly select 4 sites to be occupied.
@@ -251,7 +251,7 @@ end
 Warp the walkers into `LatticeWalker` objects.
 
 ````@example examples
-walkers = [LatticeWalker(walker) for walker in walkers]
+walkers = [LatticeWalker(walker) for walker in walkers];
 ````
 
 Again, we use the same Hamiltonian as before.

@@ -64,7 +64,7 @@ save = SaveEveryN(n_traj=10, n_snap=20_000, df_filename="output_df_lj6_run3.csv"
 
 Finally, we run the nested sampling simulation.
 
-````@example examples
+````julia
 energies, liveset, _ = nested_sampling(ls, ns_params, 1_000, mc, save)
 ````
 
@@ -103,7 +103,7 @@ mc_params = MetropolisMCParameters(
 
 Run the Monte Carlo simulation.
 
-````@example examples
+````julia
 mc_energies, mc_ls, mc_cvs, acceptance_rates = monte_carlo_sampling(at, lj, mc_params)
 ````
 
@@ -139,7 +139,7 @@ wl_params = WangLandauParameters(num_steps=10_000,
 
 Viola! We can now run the Wang-Landau simulation.
 
-````@example examples
+````julia
 energies_wl, configs, wl_params, S, H = wang_landau(at, lj, wl_params)
 ````
 
@@ -183,7 +183,7 @@ wl_params = WangLandauParameters(
 
 Run the Wang-Landau simulation.
 
-````@example examples
+````julia
 energies_wl, configs, wl_params, S, H = wang_landau(initial_lattice, h, wl_params)
 ````
 
@@ -216,7 +216,7 @@ mc_params = MetropolisMCParameters(
 
 Run the Monte Carlo simulation.
 
-````@example examples
+````julia
 mc_energies, mc_configs, mc_cvs, acceptance_rates = monte_carlo_sampling(mc_lattice, h, mc_params)
 ````
 

@@ -29,7 +29,7 @@ ns_params = NestedSamplingParameters(mc_steps=200, step_size=0.1, random_seed=12
 # We then set up how we want to perform the Monte Carlo moves. `MCRandomWalkClone` is a routine that clones an existing walker and performs random walks.
 mc = MCRandomWalkClone()
 # We also set up a `SaveEveryN` object for saving the output.
-save = SaveEveryN(n_traj=10, n_snap=20_000, df_filename="output_df_lj6_run3.csv", n_info=10)
+save = SaveEveryN(n_traj=10, n_snap=20_000, df_filename="output_df_lj6.csv", n_info=10)
 # Finally, we run the nested sampling simulation.
 energies, liveset, _ = nested_sampling(ls, ns_params, 1_000, mc, save)
 
@@ -61,7 +61,7 @@ mc_params = MetropolisMCParameters(
 mc_energies, mc_ls, mc_cvs, acceptance_rates = monte_carlo_sampling(at, lj, mc_params)
 
 
-# ### Wang-Landau
+# ### Wang-Landau Sampling
 
 # It's also very easy to set up a Wang-Landau simulation.
 # We will use the same Lennard-Jones potential and initial configuration.
@@ -135,3 +135,43 @@ mc_params = MetropolisMCParameters(
 # Run the Monte Carlo simulation.
 mc_energies, mc_configs, mc_cvs, acceptance_rates = monte_carlo_sampling(mc_lattice, h, mc_params)
 
+# ### Nested Sampling
+
+# Finally, let's set up a nested sampling simulation. It's a bit more complicated than the previous two, 
+# and nested sampling is not the optimal method for lattice systems with many degenerate states.
+
+# Let's use the Distributions.jl package to generate the random initial configurations.
+using Distributions
+
+# Make 1000 copies of the initial lattice.
+walkers = [deepcopy(initial_lattice) for i in 1:1000]
+
+# Now using the `sample` function from the Distributions.jl package, we can randomly select 4 sites to be occupied.
+for walker in walkers
+    walker.components[1] = [false for i in 1:length(walker.components[1])]
+    for i in sample(1:length(walker.components[1]), 4, replace=false)
+        walker.components[1][i] = true
+    end
+end
+
+# Warp the walkers into `LatticeWalker` objects.
+walkers = [LatticeWalker(walker) for walker in walkers]
+
+# Again, we use the same Hamiltonian as before.
+# We then create a `LatticeGasWalkers` object that contains the walkers and the Hamiltonian.
+ls = LatticeGasWalkers(walkers, h)
+
+# The rejection routine for nested sampling is the best choice for lattice systems.
+mc = MCRejectionSampling()
+
+# We then set up a `LatticeNestedSamplingParameters` object with the desired parameters.
+# We will use the same parameters as before, but we will set the number of Monte Carlo steps to 100.
+# We will also set the allowed fail count to 1_000_000, which is a bit high to make sure we explore the configuration space.
+# We will also set the random seed to a random number.
+ns_params = LatticeNestedSamplingParameters(mc_steps=100,allowed_fail_count=1_000_000,random_seed=Int(floor(1234*rand())))
+
+# Redefine the output file name.
+save = SaveEveryN(df_filename="output_ns_lattice2d.csv")
+
+# And finally, we can run the nested sampling simulation
+ns_energies, ls, _ = nested_sampling(ls, ns_params, 10_000, mc, save) # src

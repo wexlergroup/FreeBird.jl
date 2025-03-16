@@ -175,7 +175,7 @@
 </code></pre><p>Let&#39;s define the Lennard-Jones potential</p><pre><code class="language-julia hljs">lj = LJParameters(epsilon=0.1, sigma=2.5, cutoff=4.0)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)</code></pre><p>We then create a <code>LJAtomWalkers</code> object that contains the walkers and the Lennard-Jones potential.</p><pre><code class="language-julia hljs">ls = LJAtomWalkers(walkers, lj)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">LJAtomWalkers(AtomWalker{1}, LJParameters):
 [1] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.04316263819346322 eV
+    energy             : -0.03888548916558283 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -183,7 +183,7 @@
 
 [2] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : 2.9740307580618413 eV
+    energy             : -0.0073939192924940235 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -191,7 +191,7 @@
 
 [3] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.0032890755237508004 eV
+    energy             : -0.08730785980776828 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -199,7 +199,7 @@
 
 [4] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.019065511056146518 eV
+    energy             : 1.2626835628799349 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -207,7 +207,7 @@
 
 [5] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.09150406314840184 eV
+    energy             : -0.11518310078688056 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -219,7 +219,7 @@ Omitted 110 walkers
 
 [116] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.040533371648181854 eV
+    energy             : 1.6374297443046228 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -227,7 +227,7 @@ Omitted 110 walkers
 
 [117] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.022125787086423643 eV
+    energy             : -0.0342401643423091 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -235,7 +235,7 @@ Omitted 110 walkers
 
 [118] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.007603753818257157 eV
+    energy             : -0.1036045646885217 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -243,7 +243,7 @@ Omitted 110 walkers
 
 [119] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.08974874029451413 eV
+    energy             : -0.08557624127647583 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -251,16 +251,16 @@ Omitted 110 walkers
 
 [120] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : 0.12134498567714874 eV
+    energy             : 0.609008536628049 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
     energy_frozen_part : 0.0 eV)
 
 LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
-</code></pre><p>We then set up a <code>NestedSamplingParameters</code> object with the desired parameters. See the documentation for more information.</p><pre><code class="language-julia hljs">ns_params = NestedSamplingParameters(mc_steps=200, step_size=0.1, random_seed=1234*rand(Int))</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">NestedSamplingParameters(200, 0.01, 0.1, 1.0e-6, 1.0, (0.25, 0.75), 0, 100, -7184857839136534502)</code></pre><p>We then set up how we want to perform the Monte Carlo moves. <code>MCRandomWalkClone</code> is a routine that clones an existing walker and performs random walks.</p><pre><code class="language-julia hljs">mc = MCRandomWalkClone()</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">MCRandomWalkClone([1, 2, 3])</code></pre><p>We also set up a <code>SaveEveryN</code> object for saving the output.</p><pre><code class="language-julia hljs">save = SaveEveryN(n_traj=10, n_snap=20_000, df_filename=&quot;output_df_lj6.csv&quot;, n_info=10)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">SaveEveryN(&quot;output_df_lj6.csv&quot;, &quot;output.traj.extxyz&quot;, &quot;output.ls.extxyz&quot;, 10, 20000, 10)</code></pre><p>Finally, we run the nested sampling simulation.</p><pre><code class="language-julia hljs">energies, liveset, _ = nested_sampling(ls, ns_params, 1_000, mc, save)</code></pre><h3 id="Metropolis-Monte-Carlo"><a class="docs-heading-anchor" href="#Metropolis-Monte-Carlo">Metropolis Monte Carlo</a><a id="Metropolis-Monte-Carlo-1"></a><a class="docs-heading-anchor-permalink" href="#Metropolis-Monte-Carlo" title="Permalink"></a></h3><p>Similarly to nested sampling, we need to define some MC parameters. We will use the same Lennard-Jones potential and initial configurations.</p><p>Let&#39;s use a walker from the previous example as the initial configuration.</p><pre><code class="language-julia hljs">at = ls.walkers[1]</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">AtomWalker{1}(
+</code></pre><p>We then set up a <code>NestedSamplingParameters</code> object with the desired parameters. See the documentation for more information.</p><pre><code class="language-julia hljs">ns_params = NestedSamplingParameters(mc_steps=200, step_size=0.1, random_seed=1234*rand(Int))</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">NestedSamplingParameters(200, 0.01, 0.1, 1.0e-6, 1.0, (0.25, 0.75), 0, 100, 2515575322143207762)</code></pre><p>We then set up how we want to perform the Monte Carlo moves. <code>MCRandomWalkClone</code> is a routine that clones an existing walker and performs random walks.</p><pre><code class="language-julia hljs">mc = MCRandomWalkClone()</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">MCRandomWalkClone([1, 2, 3])</code></pre><p>We also set up a <code>SaveEveryN</code> object for saving the output.</p><pre><code class="language-julia hljs">save = SaveEveryN(n_traj=10, n_snap=20_000, df_filename=&quot;output_df_lj6.csv&quot;, n_info=10)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">SaveEveryN(&quot;output_df_lj6.csv&quot;, &quot;output.traj.extxyz&quot;, &quot;output.ls.extxyz&quot;, 10, 20000, 10)</code></pre><p>Finally, we run the nested sampling simulation.</p><pre><code class="language-julia hljs">energies, liveset, _ = nested_sampling(ls, ns_params, 1_000, mc, save)</code></pre><h3 id="Metropolis-Monte-Carlo"><a class="docs-heading-anchor" href="#Metropolis-Monte-Carlo">Metropolis Monte Carlo</a><a id="Metropolis-Monte-Carlo-1"></a><a class="docs-heading-anchor-permalink" href="#Metropolis-Monte-Carlo" title="Permalink"></a></h3><p>Similarly to nested sampling, we need to define some MC parameters. We will use the same Lennard-Jones potential and initial configurations.</p><p>Let&#39;s use a walker from the previous example as the initial configuration.</p><pre><code class="language-julia hljs">at = ls.walkers[1]</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.04316263819346322 eV
+    energy             : -0.03888548916558283 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -277,7 +277,7 @@ step_size = 1.0</code></pre><pre class="documenter-example-output"><code class="
     accept_range=(0.5,0.5)
 )</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">MetropolisMCParameters([1000.0, 950.0, 900.0, 850.0, 800.0, 750.0, 700.0, 650.0, 600.0, 550.0  …  450.0, 400.0, 350.0, 300.0, 250.0, 200.0, 150.0, 100.0, 50.0, 0.0], 100000, 100000, 1.0, 0.001, 1.0, (0.5, 0.5), 1234)</code></pre><p>Run the Monte Carlo simulation.</p><pre><code class="language-julia hljs">mc_energies, mc_ls, mc_cvs, acceptance_rates = monte_carlo_sampling(at, lj, mc_params)</code></pre><h3 id="Wang-Landau-Sampling"><a class="docs-heading-anchor" href="#Wang-Landau-Sampling">Wang-Landau Sampling</a><a id="Wang-Landau-Sampling-1"></a><a class="docs-heading-anchor-permalink" href="#Wang-Landau-Sampling" title="Permalink"></a></h3><p>It&#39;s also very easy to set up a Wang-Landau simulation. We will use the same Lennard-Jones potential and initial configuration.</p><pre><code class="language-julia hljs">at = ls.walkers[1]</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.04316263819346322 eV
+    energy             : -0.03888548916558283 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -315,7 +315,7 @@ energy_max = 16 * nn_energy - nn_energy / 8
 num_energy_bins = 100</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">100</code></pre><p>Pass the parameters to the <code>WangLandauParameters</code> object.</p><pre><code class="language-julia hljs">wl_params = WangLandauParameters(
     energy_min=energy_min,
     energy_max=energy_max,
-    random_seed=Int(round(time() * 1000)),)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">WangLandauParameters(100, 0.8, 2.718281828459045, 1.00000001, [-0.20625000000000002, -0.20577020202020205, -0.20529040404040405, -0.20481060606060608, -0.20433080808080809, -0.20385101010101012, -0.20337121212121215, -0.20289141414141415, -0.20241161616161618, -0.20193181818181818  …  -0.16306818181818183, -0.16258838383838384, -0.16210858585858587, -0.16162878787878787, -0.1611489898989899, -0.16066919191919193, -0.16018939393939394, -0.15970959595959597, -0.15922979797979797, -0.15875], 1000, 0.01, 1742094297134)</code></pre><p>Run the Wang-Landau simulation.</p><pre><code class="language-julia hljs">energies_wl, configs, wl_params, S, H = wang_landau(initial_lattice, h, wl_params)</code></pre><h3 id="Metroplis-Monte-Carlo"><a class="docs-heading-anchor" href="#Metroplis-Monte-Carlo">Metroplis Monte Carlo</a><a id="Metroplis-Monte-Carlo-1"></a><a class="docs-heading-anchor-permalink" href="#Metroplis-Monte-Carlo" title="Permalink"></a></h3><p>Let&#39;s make a Metropolis Monte Carlo simulation on the same lattice system.</p><pre><code class="language-julia hljs">mc_lattice = deepcopy(initial_lattice)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">SLattice{SquareLattice}
+    random_seed=Int(round(time() * 1000)),)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">WangLandauParameters(100, 0.8, 2.718281828459045, 1.00000001, [-0.20625000000000002, -0.20577020202020205, -0.20529040404040405, -0.20481060606060608, -0.20433080808080809, -0.20385101010101012, -0.20337121212121215, -0.20289141414141415, -0.20241161616161618, -0.20193181818181818  …  -0.16306818181818183, -0.16258838383838384, -0.16210858585858587, -0.16162878787878787, -0.1611489898989899, -0.16066919191919193, -0.16018939393939394, -0.15970959595959597, -0.15922979797979797, -0.15875], 1000, 0.01, 1742094713012)</code></pre><p>Run the Wang-Landau simulation.</p><pre><code class="language-julia hljs">energies_wl, configs, wl_params, S, H = wang_landau(initial_lattice, h, wl_params)</code></pre><h3 id="Metroplis-Monte-Carlo"><a class="docs-heading-anchor" href="#Metroplis-Monte-Carlo">Metroplis Monte Carlo</a><a id="Metroplis-Monte-Carlo-1"></a><a class="docs-heading-anchor-permalink" href="#Metroplis-Monte-Carlo" title="Permalink"></a></h3><p>Let&#39;s make a Metropolis Monte Carlo simulation on the same lattice system.</p><pre><code class="language-julia hljs">mc_lattice = deepcopy(initial_lattice)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">SLattice{SquareLattice}
     lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
     positions            : 16 grid points
     supercell_dimensions : (4, 4, 1)
@@ -335,7 +335,7 @@ num_sampling_steps = 25_000</code></pre><pre class="documenter-example-output"><
     equilibrium_steps=num_equilibration_steps,
     sampling_steps=num_sampling_steps,
     random_seed=Int(round(time()))
-)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">MetropolisMCParameters([200.0, 190.0, 180.0, 170.0, 160.0, 150.0, 140.0, 130.0, 120.0, 110.0, 100.0, 90.0, 80.0, 70.0, 60.0, 50.0, 40.0, 30.0, 20.0, 10.0], 25000, 25000, 0.01, 0.001, 1.0, (0.25, 0.75), 1742094297)</code></pre><p>Run the Monte Carlo simulation.</p><pre><code class="language-julia hljs">mc_energies, mc_configs, mc_cvs, acceptance_rates = monte_carlo_sampling(mc_lattice, h, mc_params)</code></pre><h3 id="Nested-Sampling-2"><a class="docs-heading-anchor" href="#Nested-Sampling-2">Nested Sampling</a><a class="docs-heading-anchor-permalink" href="#Nested-Sampling-2" title="Permalink"></a></h3><p>Finally, let&#39;s set up a nested sampling simulation. It&#39;s a bit more complicated than the previous two, and nested sampling is not the optimal method for lattice systems with many degenerate states.</p><p>Let&#39;s use the Distributions.jl package to generate the random initial configurations.</p><pre><code class="language-julia hljs">using Distributions</code></pre><p>Make 1000 copies of the initial lattice.</p><pre><code class="language-julia hljs">walkers = [deepcopy(initial_lattice) for i in 1:1000]</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">1000-element Vector{SLattice{SquareLattice}}:
+)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">MetropolisMCParameters([200.0, 190.0, 180.0, 170.0, 160.0, 150.0, 140.0, 130.0, 120.0, 110.0, 100.0, 90.0, 80.0, 70.0, 60.0, 50.0, 40.0, 30.0, 20.0, 10.0], 25000, 25000, 0.01, 0.001, 1.0, (0.25, 0.75), 1742094713)</code></pre><p>Run the Monte Carlo simulation.</p><pre><code class="language-julia hljs">mc_energies, mc_configs, mc_cvs, acceptance_rates = monte_carlo_sampling(mc_lattice, h, mc_params)</code></pre><h3 id="Nested-Sampling-2"><a class="docs-heading-anchor" href="#Nested-Sampling-2">Nested Sampling</a><a class="docs-heading-anchor-permalink" href="#Nested-Sampling-2" title="Permalink"></a></h3><p>Finally, let&#39;s set up a nested sampling simulation. It&#39;s a bit more complicated than the previous two, and nested sampling is not the optimal method for lattice systems with many degenerate states.</p><p>Let&#39;s use the Distributions.jl package to generate the random initial configurations.</p><pre><code class="language-julia hljs">using Distributions</code></pre><p>Make 1000 copies of the initial lattice.</p><pre><code class="language-julia hljs">walkers = [deepcopy(initial_lattice) for i in 1:1000]</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">1000-element Vector{SLattice{SquareLattice}}:
  SLattice{SquareLattice}
     lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
     positions            : 16 grid points
@@ -617,10 +617,10 @@ end</code></pre><p>Warp the walkers into <code>LatticeWalker</code> objects.</p>
     periodicity          : (true, true, false)
     cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
     occupations          : 
-      ○ ○ ● ○ 
-      ○ ● ○ ○ 
-      ○ ● ● ○ 
+      ● ○ ○ ○ 
       ○ ○ ○ ○ 
+      ○ ○ ○ ● 
+      ○ ● ● ○ 
     adsorptions          : full adsorption
 
     energy: 0.0 eV
@@ -635,10 +635,10 @@ end</code></pre><p>Warp the walkers into <code>LatticeWalker</code> objects.</p>
     periodicity          : (true, true, false)
     cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
     occupations          : 
-      ○ ○ ○ ○ 
       ○ ● ○ ● 
-      ○ ● ○ ○ 
-      ○ ○ ● ○ 
+      ○ ○ ○ ○ 
+      ● ● ○ ○ 
+      ○ ○ ○ ○ 
     adsorptions          : full adsorption
 
     energy: 0.0 eV
@@ -653,9 +653,63 @@ end</code></pre><p>Warp the walkers into <code>LatticeWalker</code> objects.</p>
     periodicity          : (true, true, false)
     cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
     occupations          : 
-      ○ ○ ○ ● 
+      ● ○ ○ ○ 
+      ● ○ ● ○ 
+      ● ○ ○ ○ 
+      ○ ○ ○ ○ 
+    adsorptions          : full adsorption
+
+    energy: 0.0 eV
+    iter: 0)
+
+ LatticeWalker(
+    configuration: SLattice{SquareLattice}
+    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
+    positions            : 16 grid points
+    supercell_dimensions : (4, 4, 1)
+    basis                : [(0.0, 0.0, 0.0)]
+    periodicity          : (true, true, false)
+    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
+    occupations          : 
+      ○ ○ ○ ○ 
       ○ ● ● ○ 
+      ○ ● ○ ● 
       ○ ○ ○ ○ 
+    adsorptions          : full adsorption
+
+    energy: 0.0 eV
+    iter: 0)
+
+ LatticeWalker(
+    configuration: SLattice{SquareLattice}
+    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
+    positions            : 16 grid points
+    supercell_dimensions : (4, 4, 1)
+    basis                : [(0.0, 0.0, 0.0)]
+    periodicity          : (true, true, false)
+    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
+    occupations          : 
+      ○ ● ○ ○ 
+      ○ ○ ○ ○ 
+      ○ ● ● ○ 
+      ● ○ ○ ○ 
+    adsorptions          : full adsorption
+
+    energy: 0.0 eV
+    iter: 0)
+
+ LatticeWalker(
+    configuration: SLattice{SquareLattice}
+    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
+    positions            : 16 grid points
+    supercell_dimensions : (4, 4, 1)
+    basis                : [(0.0, 0.0, 0.0)]
+    periodicity          : (true, true, false)
+    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
+    occupations          : 
+      ● ○ ○ ○ 
+      ○ ○ ○ ○ 
+      ● ● ○ ○ 
       ○ ○ ○ ● 
     adsorptions          : full adsorption
 
@@ -672,9 +726,27 @@ end</code></pre><p>Warp the walkers into <code>LatticeWalker</code> objects.</p>
     cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
     occupations          : 
       ○ ○ ○ ○ 
-      ● ○ ○ ● 
-      ○ ● ● ○ 
+      ● ● ○ ○ 
+      ● ● ○ ○ 
       ○ ○ ○ ○ 
+    adsorptions          : full adsorption
+
+    energy: 0.0 eV
+    iter: 0)
+
+ LatticeWalker(
+    configuration: SLattice{SquareLattice}
+    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
+    positions            : 16 grid points
+    supercell_dimensions : (4, 4, 1)
+    basis                : [(0.0, 0.0, 0.0)]
+    periodicity          : (true, true, false)
+    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
+    occupations          : 
+      ● ○ ○ ○ 
+      ○ ○ ● ○ 
+      ○ ○ ● ○ 
+      ○ ● ○ ○ 
     adsorptions          : full adsorption
 
     energy: 0.0 eV
@@ -691,7 +763,7 @@ end</code></pre><p>Warp the walkers into <code>LatticeWalker</code> objects.</p>
     occupations          : 
       ○ ○ ● ○ 
       ○ ○ ○ ○ 
-      ○ ● ○ ○ 
+      ○ ○ ● ○ 
       ● ● ○ ○ 
     adsorptions          : full adsorption
 
@@ -708,32 +780,15 @@ end</code></pre><p>Warp the walkers into <code>LatticeWalker</code> objects.</p>
     cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
     occupations          : 
       ● ○ ○ ○ 
-      ● ○ ● ○ 
-      ○ ○ ○ ● 
-      ○ ○ ○ ○ 
-    adsorptions          : full adsorption
-
-    energy: 0.0 eV
-    iter: 0)
-
- LatticeWalker(
-    configuration: SLattice{SquareLattice}
-    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
-    positions            : 16 grid points
-    supercell_dimensions : (4, 4, 1)
-    basis                : [(0.0, 0.0, 0.0)]
-    periodicity          : (true, true, false)
-    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
-    occupations          : 
       ○ ○ ○ ○ 
       ● ○ ○ ● 
-      ○ ○ ● ○ 
-      ○ ○ ○ ● 
+      ● ○ ○ ○ 
     adsorptions          : full adsorption
 
     energy: 0.0 eV
     iter: 0)
 
+ ⋮
  LatticeWalker(
     configuration: SLattice{SquareLattice}
     lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
@@ -745,7 +800,115 @@ end</code></pre><p>Warp the walkers into <code>LatticeWalker</code> objects.</p>
     occupations          : 
       ● ○ ● ○ 
       ○ ○ ● ○ 
+      ○ ○ ● ○ 
       ○ ○ ○ ○ 
+    adsorptions          : full adsorption
+
+    energy: 0.0 eV
+    iter: 0)
+
+ LatticeWalker(
+    configuration: SLattice{SquareLattice}
+    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
+    positions            : 16 grid points
+    supercell_dimensions : (4, 4, 1)
+    basis                : [(0.0, 0.0, 0.0)]
+    periodicity          : (true, true, false)
+    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
+    occupations          : 
+      ○ ● ● ○ 
+      ● ○ ● ○ 
+      ○ ○ ○ ○ 
+      ○ ○ ○ ○ 
+    adsorptions          : full adsorption
+
+    energy: 0.0 eV
+    iter: 0)
+
+ LatticeWalker(
+    configuration: SLattice{SquareLattice}
+    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
+    positions            : 16 grid points
+    supercell_dimensions : (4, 4, 1)
+    basis                : [(0.0, 0.0, 0.0)]
+    periodicity          : (true, true, false)
+    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
+    occupations          : 
+      ○ ● ○ ● 
+      ○ ○ ○ ○ 
+      ○ ○ ○ ○ 
+      ● ● ○ ○ 
+    adsorptions          : full adsorption
+
+    energy: 0.0 eV
+    iter: 0)
+
+ LatticeWalker(
+    configuration: SLattice{SquareLattice}
+    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
+    positions            : 16 grid points
+    supercell_dimensions : (4, 4, 1)
+    basis                : [(0.0, 0.0, 0.0)]
+    periodicity          : (true, true, false)
+    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
+    occupations          : 
+      ○ ● ○ ○ 
+      ○ ○ ○ ○ 
+      ○ ○ ● ○ 
+      ● ● ○ ○ 
+    adsorptions          : full adsorption
+
+    energy: 0.0 eV
+    iter: 0)
+
+ LatticeWalker(
+    configuration: SLattice{SquareLattice}
+    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
+    positions            : 16 grid points
+    supercell_dimensions : (4, 4, 1)
+    basis                : [(0.0, 0.0, 0.0)]
+    periodicity          : (true, true, false)
+    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
+    occupations          : 
+      ○ ○ ○ ● 
+      ○ ○ ○ ● 
+      ○ ○ ○ ○ 
+      ○ ● ● ○ 
+    adsorptions          : full adsorption
+
+    energy: 0.0 eV
+    iter: 0)
+
+ LatticeWalker(
+    configuration: SLattice{SquareLattice}
+    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
+    positions            : 16 grid points
+    supercell_dimensions : (4, 4, 1)
+    basis                : [(0.0, 0.0, 0.0)]
+    periodicity          : (true, true, false)
+    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
+    occupations          : 
+      ○ ○ ○ ● 
+      ● ● ○ ● 
+      ○ ○ ○ ○ 
+      ○ ○ ○ ○ 
+    adsorptions          : full adsorption
+
+    energy: 0.0 eV
+    iter: 0)
+
+ LatticeWalker(
+    configuration: SLattice{SquareLattice}
+    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
+    positions            : 16 grid points
+    supercell_dimensions : (4, 4, 1)
+    basis                : [(0.0, 0.0, 0.0)]
+    periodicity          : (true, true, false)
+    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
+    occupations          : 
+      ● ○ ○ ○ 
+      ○ ○ ○ ○ 
+      ● ○ ○ ● 
       ○ ○ ○ ● 
     adsorptions          : full adsorption
 
@@ -761,8 +924,8 @@ end</code></pre><p>Warp the walkers into <code>LatticeWalker</code> objects.</p>
     periodicity          : (true, true, false)
     cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
     occupations          : 
-      ○ ○ ● ○ 
       ○ ○ ○ ○ 
+      ● ○ ○ ○ 
       ○ ○ ○ ○ 
       ● ○ ● ● 
     adsorptions          : full adsorption
@@ -779,173 +942,10 @@ end</code></pre><p>Warp the walkers into <code>LatticeWalker</code> objects.</p>
     periodicity          : (true, true, false)
     cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
     occupations          : 
-      ● ○ ○ ○ 
+      ○ ○ ○ ○ 
+      ○ ● ○ ○ 
       ○ ● ● ○ 
       ○ ● ○ ○ 
-      ○ ○ ○ ○ 
-    adsorptions          : full adsorption
-
-    energy: 0.0 eV
-    iter: 0)
-
- ⋮
- LatticeWalker(
-    configuration: SLattice{SquareLattice}
-    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
-    positions            : 16 grid points
-    supercell_dimensions : (4, 4, 1)
-    basis                : [(0.0, 0.0, 0.0)]
-    periodicity          : (true, true, false)
-    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
-    occupations          : 
-      ○ ○ ● ● 
-      ○ ○ ○ ● 
-      ● ○ ○ ○ 
-      ○ ○ ○ ○ 
-    adsorptions          : full adsorption
-
-    energy: 0.0 eV
-    iter: 0)
-
- LatticeWalker(
-    configuration: SLattice{SquareLattice}
-    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
-    positions            : 16 grid points
-    supercell_dimensions : (4, 4, 1)
-    basis                : [(0.0, 0.0, 0.0)]
-    periodicity          : (true, true, false)
-    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
-    occupations          : 
-      ○ ○ ● ○ 
-      ○ ○ ● ○ 
-      ○ ○ ○ ○ 
-      ● ○ ○ ● 
-    adsorptions          : full adsorption
-
-    energy: 0.0 eV
-    iter: 0)
-
- LatticeWalker(
-    configuration: SLattice{SquareLattice}
-    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
-    positions            : 16 grid points
-    supercell_dimensions : (4, 4, 1)
-    basis                : [(0.0, 0.0, 0.0)]
-    periodicity          : (true, true, false)
-    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
-    occupations          : 
-      ● ○ ○ ○ 
-      ○ ○ ○ ○ 
-      ○ ○ ● ○ 
-      ● ○ ○ ● 
-    adsorptions          : full adsorption
-
-    energy: 0.0 eV
-    iter: 0)
-
- LatticeWalker(
-    configuration: SLattice{SquareLattice}
-    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
-    positions            : 16 grid points
-    supercell_dimensions : (4, 4, 1)
-    basis                : [(0.0, 0.0, 0.0)]
-    periodicity          : (true, true, false)
-    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
-    occupations          : 
-      ○ ○ ○ ● 
-      ○ ○ ● ○ 
-      ○ ○ ○ ○ 
-      ○ ○ ● ● 
-    adsorptions          : full adsorption
-
-    energy: 0.0 eV
-    iter: 0)
-
- LatticeWalker(
-    configuration: SLattice{SquareLattice}
-    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
-    positions            : 16 grid points
-    supercell_dimensions : (4, 4, 1)
-    basis                : [(0.0, 0.0, 0.0)]
-    periodicity          : (true, true, false)
-    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
-    occupations          : 
-      ○ ● ○ ○ 
-      ○ ○ ○ ● 
-      ○ ○ ○ ○ 
-      ○ ○ ● ● 
-    adsorptions          : full adsorption
-
-    energy: 0.0 eV
-    iter: 0)
-
- LatticeWalker(
-    configuration: SLattice{SquareLattice}
-    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
-    positions            : 16 grid points
-    supercell_dimensions : (4, 4, 1)
-    basis                : [(0.0, 0.0, 0.0)]
-    periodicity          : (true, true, false)
-    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
-    occupations          : 
-      ○ ○ ● ○ 
-      ○ ○ ○ ● 
-      ● ○ ○ ○ 
-      ○ ● ○ ○ 
-    adsorptions          : full adsorption
-
-    energy: 0.0 eV
-    iter: 0)
-
- LatticeWalker(
-    configuration: SLattice{SquareLattice}
-    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
-    positions            : 16 grid points
-    supercell_dimensions : (4, 4, 1)
-    basis                : [(0.0, 0.0, 0.0)]
-    periodicity          : (true, true, false)
-    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
-    occupations          : 
-      ○ ○ ○ ○ 
-      ● ○ ● ○ 
-      ○ ○ ● ○ 
-      ● ○ ○ ○ 
-    adsorptions          : full adsorption
-
-    energy: 0.0 eV
-    iter: 0)
-
- LatticeWalker(
-    configuration: SLattice{SquareLattice}
-    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
-    positions            : 16 grid points
-    supercell_dimensions : (4, 4, 1)
-    basis                : [(0.0, 0.0, 0.0)]
-    periodicity          : (true, true, false)
-    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
-    occupations          : 
-      ● ○ ○ ● 
-      ○ ● ○ ○ 
-      ○ ○ ○ ○ 
-      ○ ○ ● ○ 
-    adsorptions          : full adsorption
-
-    energy: 0.0 eV
-    iter: 0)
-
- LatticeWalker(
-    configuration: SLattice{SquareLattice}
-    lattice_vectors      : [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
-    positions            : 16 grid points
-    supercell_dimensions : (4, 4, 1)
-    basis                : [(0.0, 0.0, 0.0)]
-    periodicity          : (true, true, false)
-    cutoff radii         : 2 nearest neighbors cutoffs [1.1, 1.5]
-    occupations          : 
-      ○ ○ ● ○ 
-      ○ ○ ○ ○ 
-      ○ ● ○ ● 
-      ○ ○ ○ ● 
     adsorptions          : full adsorption
 
     energy: 0.0 eV
@@ -955,63 +955,63 @@ end</code></pre><p>Warp the walkers into <code>LatticeWalker</code> objects.</p>
     supercell_dimensions: (4, 4, 1)
     periodicity:          (true, true, false)
     basis:                [(0.0, 0.0, 0.0)]
-[1] energy = -0.185 eV, iter = 0
+[1] energy = -0.175 eV, iter = 0
     occupations:
       components:
         component 1:
-          Bool[0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0]
-[2] energy = -0.17250000000000001 eV, iter = 0
+          Bool[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0]
+[2] energy = -0.17 eV, iter = 0
     occupations:
       components:
         component 1:
-          Bool[0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0]
-[3] energy = -0.1825 eV, iter = 0
+          Bool[0, 1, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0]
+[3] energy = -0.18 eV, iter = 0
     occupations:
       components:
         component 1:
-          Bool[0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+          Bool[1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0]
 [4] energy = -0.185 eV, iter = 0
     occupations:
       components:
         component 1:
-          Bool[0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0]
-[5] energy = -0.185 eV, iter = 0
+          Bool[0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0]
+[5] energy = -0.175 eV, iter = 0
     occupations:
       components:
         component 1:
-          Bool[0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0]
+          Bool[0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0]
 ⋮
 Omitted 990 walkers
 ⋮
 
-[996] energy = -0.17250000000000001 eV, iter = 0
+[996] energy = -0.1825 eV, iter = 0
     occupations:
       components:
         component 1:
-          Bool[0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1]
-[997] energy = -0.17 eV, iter = 0
+          Bool[0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0]
+[997] energy = -0.1925 eV, iter = 0
     occupations:
       components:
         component 1:
-          Bool[0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0]
-[998] energy = -0.17 eV, iter = 0
+          Bool[0, 0, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+[998] energy = -0.185 eV, iter = 0
     occupations:
       components:
         component 1:
-          Bool[0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0]
-[999] energy = -0.175 eV, iter = 0
+          Bool[1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1]
+[999] energy = -0.18 eV, iter = 0
     occupations:
       components:
         component 1:
-          Bool[1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]
-[1000] energy = -0.17250000000000001 eV, iter = 0
+          Bool[0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1]
+[1000] energy = -0.195 eV, iter = 0
     occupations:
       components:
         component 1:
-          Bool[0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1]
+          Bool[0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0]
 
 GenericLatticeHamiltonian{2,Quantity{Float64, 𝐋^2 𝐌 𝐓^-2, Unitful.FreeUnits{(eV,), 𝐋^2 𝐌 𝐓^-2, nothing}}}:
     on_site_interaction:      -0.04 eV
     nth_neighbor_interactions: [-0.01, -0.0025] eV
 
-</code></pre><p>The rejection routine for nested sampling is the best choice for lattice systems.</p><pre><code class="language-julia hljs">mc = MCRejectionSampling()</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">MCRejectionSampling()</code></pre><p>We then set up a <code>LatticeNestedSamplingParameters</code> object with the desired parameters. We will use the same parameters as before, but we will set the number of Monte Carlo steps to 100. We will also set the allowed fail count to 1<em>000</em>000, which is a bit high to make sure we explore the configuration space. We will also set the random seed to a random number.</p><pre><code class="language-julia hljs">ns_params = LatticeNestedSamplingParameters(mc_steps=100,allowed_fail_count=1_000_000,random_seed=Int(floor(1234*rand())))</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">LatticeNestedSamplingParameters(100, 1.0e-12, 0, 1000000, 670)</code></pre><p>Redefine the output file name.</p><pre><code class="language-julia hljs">save = SaveEveryN(df_filename=&quot;output_ns_lattice2d.csv&quot;)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">SaveEveryN(&quot;output_ns_lattice2d.csv&quot;, &quot;output.traj.extxyz&quot;, &quot;output.ls.extxyz&quot;, 100, 1000, 1)</code></pre><p>And finally, we can run the nested sampling simulation</p><pre><code class="language-julia hljs">ns_energies, ls, _ = nested_sampling(ls, ns_params, 10_000, mc, save) # src</code></pre><hr/><p><em>This page was generated using <a href="https://github.com/fredrikekre/Literate.jl">Literate.jl</a>.</em></p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../tutorials/">« Tutorials</a><a class="docs-footer-nextpage" href="../AbstractLiveSets/"><code>AbstractLiveSets</code> »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.8.0 on <span class="colophon-date" title="Sunday 16 March 2025 03:05">Sunday 16 March 2025</span>. Using Julia version 1.11.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</code></pre><p>The rejection routine for nested sampling is the best choice for lattice systems.</p><pre><code class="language-julia hljs">mc = MCRejectionSampling()</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">MCRejectionSampling()</code></pre><p>We then set up a <code>LatticeNestedSamplingParameters</code> object with the desired parameters. We will use the same parameters as before, but we will set the number of Monte Carlo steps to 100. We will also set the allowed fail count to 1<em>000</em>000, which is a bit high to make sure we explore the configuration space. We will also set the random seed to a random number.</p><pre><code class="language-julia hljs">ns_params = LatticeNestedSamplingParameters(mc_steps=100,allowed_fail_count=1_000_000,random_seed=Int(floor(1234*rand())))</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">LatticeNestedSamplingParameters(100, 1.0e-12, 0, 1000000, 1165)</code></pre><p>Redefine the output file name.</p><pre><code class="language-julia hljs">save = SaveEveryN(df_filename=&quot;output_ns_lattice2d.csv&quot;)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">SaveEveryN(&quot;output_ns_lattice2d.csv&quot;, &quot;output.traj.extxyz&quot;, &quot;output.ls.extxyz&quot;, 100, 1000, 1)</code></pre><p>And finally, we can run the nested sampling simulation</p><pre><code class="language-julia hljs">ns_energies, ls, _ = nested_sampling(ls, ns_params, 10_000, mc, save) # src</code></pre><hr/><p><em>This page was generated using <a href="https://github.com/fredrikekre/Literate.jl">Literate.jl</a>.</em></p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../tutorials/">« Tutorials</a><a class="docs-footer-nextpage" href="../AbstractLiveSets/"><code>AbstractLiveSets</code> »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.8.0 on <span class="colophon-date" title="Sunday 16 March 2025 03:12">Sunday 16 March 2025</span>. Using Julia version 1.11.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

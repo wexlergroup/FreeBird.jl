@@ -7,6 +7,7 @@ module AbstractPotentials
 
 using Unitful
 
+export AbstractPotential
 export LJParameters, lj_energy
 export CompositeLJParameters
 export LennardJonesParametersSets

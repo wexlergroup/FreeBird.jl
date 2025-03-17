@@ -877,7 +877,7 @@
                     LatticeWalker(square_lattice, energy=2.0u"eV", iter=2)
                 ]
                 output_vec = sprint(show, walkers)
-                @test contains(output_vec, "LatticeWalker{2}[")
+                @test contains(output_vec, "LatticeWalker{2}")
             end
         
             @testset "Mutable behavior" begin

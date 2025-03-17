@@ -11,6 +11,7 @@ using DataFrames
 using Combinatorics
 using Random
 using Statistics
+using AtomsBase
 
 using ..MonteCarloMoves
 using ..AbstractPotentials
@@ -20,14 +21,31 @@ using ..EnergyEval
 using ..FreeBirdIO
 using ..AbstractHamiltonians
 
-export NestedSamplingParameters, LatticeNestedSamplingParameters
+# Abstract types for the sampling parameters
+export NestedSamplingParameters
+export LatticeNestedSamplingParameters
+export WangLandauParameters
+export MetropolisMCParameters
+
+# nested sampling related functions
 export sort_by_energy!, nested_sampling_step!
-export nested_sampling_loop!
-export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCDemonWalk, MixedMCRoutine, MCNewSample
+export nested_sampling
+export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCNewSample, MCRejectionSampling, MCMixedMoves
 
-export exact_enumeration, nvt_monte_carlo, wang_landau
+# other sampling schemes
+export exact_enumeration
+export wang_landau
+export nvt_monte_carlo, monte_carlo_sampling
 
+
+"""
+    struct NestedSamplingParameters
+
+The `NestedSamplingParameters` struct represents the parameters for various sampling algorithm.
+"""
 abstract type SamplingParameters end
+
+include("helpers.jl")
 
 include("nested_sampling.jl")
 

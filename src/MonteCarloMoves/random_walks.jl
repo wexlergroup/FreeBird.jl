@@ -18,6 +18,42 @@ function single_atom_random_walk!(pos::SVector{3,T}, step_size::Float64) where T
     return pos 
 end
 
+function single_atom_random_walk!(pos::SVector{3,T}, step_size::Float64, dims::Vector{Int}) where T
+    ds = [rand(Uniform(-step_size,step_size)) for _ in dims]
+    dds = zeros(3)
+    for (i, d) in enumerate(dims)
+        dds[d] = ds[i]
+    end
+    ds = dds .* unit(T)
+    return pos  .+ ds
+end
+
+function single_atom_random_walk!(at::AtomWalker{C}, lj::LennardJonesParametersSets, step_size::Float64) where C
+    config = at.configuration
+    # select a random free atom to move
+    free_index = free_par_index(at)
+    i_at = rand(free_index)
+    # calculate the energy before the move
+    prewalk_energy = single_site_energy(i_at, config, lj, at.list_num_par)
+    # prewalk_potential = interacting_energy(config, lj, at.list_num_par, at.frozen)
+    # get the current position of the atom
+    pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
+    # perform the random walk
+    pos = single_atom_random_walk!(pos, step_size)
+    # wrap the atom around the periodic boundary
+    pos = periodic_boundary_wrap!(pos, config)
+    # update the position of the atom
+    config.position[i_at] = pos
+    # calculate the energy after the move
+    postwalk_energy = single_site_energy(i_at, config, lj, at.list_num_par)
+    # postwalk_potential = interacting_energy(config, lj, at.list_num_par, at.frozen)
+    # calculate the energy difference
+    e_diff = postwalk_energy - prewalk_energy
+    # e_pot_diff = postwalk_potential - prewalk_potential
+
+    return at, e_diff
+end
+
 """
     MC_random_walk!(n_steps::Int, at::AtomWalker, lj::LJParameters, step_size::Float64, emax::typeof(0.0u"eV"))
 
@@ -49,9 +85,65 @@ function MC_random_walk!(
         config = at.configuration
         free_index = free_par_index(at)
         i_at = rand(free_index)
+        prewalk_energy = single_site_energy(i_at, config, lj, at.list_num_par)
         pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
         orig_pos = deepcopy(pos)
         pos = single_atom_random_walk!(pos, step_size)
+        pos = periodic_boundary_wrap!(pos, config)
+        config.position[i_at] = pos
+        postwalk_energy = single_site_energy(i_at, config, lj, at.list_num_par)
+        e_diff = postwalk_energy - prewalk_energy
+        # energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
+        energy = at.energy + e_diff
+        if energy >= emax
+            # reject the move, revert to original position
+            config.position[i_at] = orig_pos
+        else
+            at.energy = energy
+            # accept the move
+            n_accept += 1
+            accept_this_walker = true
+        end
+    end
+    return accept_this_walker, n_accept/n_steps, at
+end
+
+"""
+    MC_random_walk_2D!(n_steps::Int, at::AtomWalker, lj::LJParameters, step_size::Float64, emax::typeof(0.0u"eV"); dims::Vector{Int}=[1,2])
+
+Perform a Monte Carlo random walk on the atomic/molecular system in 2D.
+
+# Arguments
+- `n_steps::Int`: The number of Monte Carlo steps to perform.
+- `at::AtomWalker{C}`: The walker to perform the random walk on.
+- `lj::LennardJonesParametersSets`: The Lennard-Jones potential parameters.
+- `step_size::Float64`: The maximum distance an atom can move in any direction.
+- `emax::typeof(0.0u"eV")`: The maximum energy allowed for accepting a move.
+- `dims::Vector{Int}=[1,2]`: The dimensions in which the random walk is performed.
+
+# Returns
+- `accept_this_walker::Bool`: Whether the walker is accepted or not.
+- `accept_rate::Float64`: The acceptance rate of the random walk.
+- `at::AtomWalker`: The updated walker.
+
+"""
+function MC_random_walk_2D!(
+                    n_steps::Int, 
+                    at::AtomWalker{C}, 
+                    lj::LennardJonesParametersSets, 
+                    step_size::Float64, 
+                    emax::typeof(0.0u"eV");
+                    dims::Vector{Int}=[1,2]
+                    ) where C
+    n_accept = 0
+    accept_this_walker = false
+    for i_mc_step in 1:n_steps
+        config = at.configuration
+        free_index = free_par_index(at)
+        i_at = rand(free_index)
+        pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
+        orig_pos = deepcopy(pos)
+        pos = single_atom_random_walk!(pos, step_size, dims)
         pos = periodic_boundary_wrap!(pos, config)
         config.position[i_at] = pos
         energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
@@ -165,6 +257,66 @@ function MC_new_sample!(lattice::LatticeWalker{C},
         lattice.configuration = proposed_lattice
         lattice.energy = proposed_energy
         accept_this_walker = true
+    end
+
+    return accept_this_walker, lattice
+end
+
+"""
+    MC_rejection_sampling!(lattice::LatticeWalker, h::ClassicalHamiltonian, emax::Float64; energy_perturb::Float64=0.0, max_iter=10_000)
+
+Perform a Monte Carlo rejection sampling on the lattice system.
+
+# Arguments
+- `lattice::LatticeWalker`: The walker to perform the rejection sampling on.
+- `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
+- `emax::Float64`: The maximum energy allowed for accepting a move.
+- `energy_perturb::Float64=0.0`: The energy perturbation used to make degenerate configurations distinguishable.
+- `max_iter::Int=10_000`: The maximum number of iterations to perform.
+
+# Returns
+- `accept_this_walker::Bool`: Whether the walker is accepted or not.
+- `lattice::LatticeWalker`: The updated walker.
+
+"""
+function MC_rejection_sampling!(lattice::LatticeWalker{C},
+                        h::ClassicalHamiltonian,
+                        emax::Float64;
+                        energy_perturb::Float64=0.0,
+                        max_iter::Int = 10_000,
+                        ) where C
+
+    accept_this_walker = false
+    emax = emax * unit(lattice.energy)
+
+    current_energy = lattice.energy # initialize to a value greater than emax
+    current_lattice = lattice.configuration
+
+    counter = 0
+
+    while current_energy >= emax
+        
+        proposed_lattice = deepcopy(current_lattice)
+        generate_random_new_lattice_sample!(proposed_lattice)
+
+        perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
+        raw_energy = interacting_energy(proposed_lattice, h)
+        proposed_energy = raw_energy + perturbation_energy
+
+        counter += 1
+        if counter > max_iter
+            accept_this_walker = false
+            break
+        end
+
+        @debug "proposed_energy = $proposed_energy, perturbed_energy = $(perturbation_energy), emax = $(emax)), accept = $(proposed_energy < emax)"
+
+        if proposed_energy <= emax
+            lattice.configuration = proposed_lattice
+            lattice.energy = proposed_energy
+            accept_this_walker = true
+            break
+        end
     end
 
     return accept_this_walker, lattice

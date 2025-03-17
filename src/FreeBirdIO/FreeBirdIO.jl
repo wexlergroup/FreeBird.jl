@@ -23,6 +23,9 @@ export write_df, write_df_every_n, write_walker_every_n, write_ls_every_n
 export generate_initial_configs
 export convert_system_to_walker, convert_walker_to_system
 
+# include the save strategies
+include("save_strategies.jl")
+
 """
     set_pbc(at::Atoms, pbc::Vector)
 
@@ -58,12 +61,11 @@ function convert_system_to_walker(at::FlexibleSystem, resume::Bool)
     energy = (haskey(data, :energy) && resume) ? data[:energy]*u"eV" : 0.0u"eV"
     iter = (haskey(data, :iter) && resume && data[:iter]>=0) ? data[:iter] : 0
     list_num_par = (haskey(data, :list_num_par) && resume) ? data[:list_num_par] : [length(at)]
-    frozen = (haskey(data, :frozen) && resume) ? data[:frozen] : [false]
+    C = length(list_num_par)
+    frozen = (haskey(data, :frozen) && resume) ? [data[:frozen]] : zeros(Bool, C)
     e_frozen = (haskey(data, :energy_frozen_part) && resume) ? data[:energy_frozen_part]*u"eV" : 0.0u"eV"
     new_list = [Atom(atomic_symbol(i),position(i)) for i in at.particles]
     at = FastSystem(new_list, cell_vectors(at), periodicity(at))
-    C = length(list_num_par)
-    @show frozen
     return AtomWalker{C}(at; energy=energy, iter=iter, list_num_par=list_num_par, frozen=frozen, energy_frozen_part=e_frozen)
 end
 
@@ -397,133 +399,6 @@ An array of initial configurations for each walker.
 """
 function generate_initial_configs(num_walkers::Int, volume_per_particle::Float64, num_particle::Int; particle_type::Symbol=:H)
     [generate_random_starting_config(volume_per_particle, num_particle; particle_type=particle_type) for _ in 1:num_walkers]
-end
-
-"""
-    abstract type DataSavingStrategy
-
-Abstract type representing a strategy for saving data.
-"""
-abstract type DataSavingStrategy end
-
-"""
-    struct SaveEveryN <: DataSavingStrategy
-
-SaveEveryN is a concrete subtype of DataSavingStrategy that specifies saving data every N steps.
-
-# Fields
-- `df_filename::String`: The name of the file to save the DataFrame to.
-- `wk_filename::String`: The name of the file to save the atom walker to.
-- `ls_filename::String`: The name of the file to save the liveset to.
-- `n_traj::Int`: The number of steps between each save of the culled walker into a trajectory file.
-- `n_snap::Int`: The number of steps between each save of the liveset into a snapshot file.
-
-"""
-@kwdef struct SaveEveryN <: DataSavingStrategy
-    df_filename::String = "output_df.csv"
-    wk_filename::String = "output.traj.extxyz"
-    ls_filename::String = "output.ls.extxyz"
-    n_traj::Int = 100
-    n_snap::Int = 1000
-end
-
-"""
-    struct SaveFreePartEveryN <: DataSavingStrategy
-
-SaveFreePartEveryN is a concrete subtype of DataSavingStrategy that specifies saving data every N steps.
-Only the free particles are saved into the trajectory and snapshot files.
-
-# Fields
-- `df_filename::String`: The name of the file to save the DataFrame to.
-- `wk_filename::String`: The name of the file to save the atom walker to.
-- `ls_filename::String`: The name of the file to save the liveset to.
-- `n_traj::Int`: The number of steps between each save of the culled walker into a trajectory file.
-- `n_snap::Int`: The number of steps between each save of the liveset into a snapshot file.
-
-"""
-@kwdef struct SaveFreePartEveryN <: DataSavingStrategy
-    df_filename::String = "output_df.csv"
-    wk_filename::String = "output.traj.extxyz"
-    ls_filename::String = "output.ls.extxyz"
-    n_traj::Int = 100
-    n_snap::Int = 1000
-end
-
-"""
-    write_df(filename::String, df::DataFrame)
-
-Write a DataFrame to a CSV file.
-
-# Arguments
-- `filename::String`: The name of the file to write to.
-- `df::DataFrame`: The DataFrame to write.
-
-"""
-write_df(filename::String, df::DataFrame) = CSV.write(filename, df; append=false)
-
-"""
-    write_df_every_n(df::DataFrame, step::Int, d_strategy::SaveEveryN)
-
-Write the DataFrame `df` to a file specified by `d_strategy.filename` every `d_strategy.n` steps.
-
-# Arguments
-- `df::DataFrame`: The DataFrame to be written.
-- `step::Int`: The current step number.
-- `d_strategy::SaveEveryN`: The save strategy specifying the filename and the step interval.
-
-"""
-function write_df_every_n(df::DataFrame, step::Int, d_strategy::DataSavingStrategy)
-    if step % d_strategy.n_traj == 0
-        write_df(d_strategy.df_filename, df)
-    end
-end
-
-"""
-    write_walker_every_n(at::AtomWalker, step::Int, d_strategy::SaveEveryN)
-
-Write the atom walker `at` to a file specified by `d_strategy.wk_filename` every `d_strategy.n` steps.
-
-# Arguments
-- `at::AtomWalker`: The atom walker to be written.
-- `step::Int`: The current step number.
-- `d_strategy::SaveEveryN`: The save strategy specifying the file name and the interval.
-
-"""
-function write_walker_every_n(at::AtomWalker, step::Int, d_strategy::SaveEveryN)
-    if step % d_strategy.n_traj == 0
-        write_single_walker(d_strategy.wk_filename, at, true)
-    end
-end
-
-function write_walker_every_n(at::AtomWalker, step::Int, d_strategy::SaveFreePartEveryN)
-    if step % d_strategy.n_traj == 0
-        at = extract_free_par(at)
-        write_single_walker(d_strategy.wk_filename, at, true)
-    end
-end
-
-"""
-    write_ls_every_n(ls::AtomWalkers, step::Int, d_strategy::SaveEveryN)
-
-Write the liveset `ls` to file every `n` steps, as specified by the `d_strategy`.
-
-# Arguments
-- `ls::AbstractLiveSet`: The liveset to be written.
-- `step::Int`: The current step number.
-- `d_strategy::SaveEveryN`: The save strategy specifying the frequency of writing.
-
-"""
-function write_ls_every_n(ls::AbstractLiveSet, step::Int, d_strategy::SaveEveryN)
-    if step % d_strategy.n_snap == 0
-        write_walkers(d_strategy.ls_filename, ls.walkers)
-    end
-end
-
-function write_ls_every_n(ls::AbstractLiveSet, step::Int, d_strategy::SaveFreePartEveryN)
-    if step % d_strategy.n_snap == 0
-        wks = extract_free_par.(ls.walkers)
-        write_walkers(d_strategy.ls_filename, wks)
-    end
 end
 
 end # module

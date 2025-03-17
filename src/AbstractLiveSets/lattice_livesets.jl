@@ -84,3 +84,23 @@ function print_lattice_walker_in_walkers(io::IO, walker::LatticeWalker{C}) where
         AbstractWalkers.print_lattice(io, walker.configuration, walker.configuration.occupations)
     end
 end
+
+function Base.show(io::IO, list::Vector{LatticeWalker{C}}) where C
+    println(io, "Vector{LatticeWalker{$C}}(", length(list), "):")
+    if length(list) > 10
+        for i in 1:5
+            println(io, "[$i] ", "energy = ", list[i].energy, ", iter = ", list[i].iter)
+            AbstractWalkers.print_occupation(io, list[i].configuration)
+        end
+        println(io, "⋮\nOmitted ", length(list)-10, " walkers\n⋮\n")
+        for i in length(list)-4:length(list)
+            println(io, "[$i] ", "energy = ", list[i].energy, ", iter = ", list[i].iter)
+            AbstractWalkers.print_occupation(io, list[i].configuration)
+        end
+    else
+        for (i, walker) in enumerate(list)
+            println(io, "[$i] ", "energy = ", list[i].energy, ", iter = ", list[i].iter)
+            AbstractWalkers.print_occupation(io, list[i].configuration)
+        end
+    end
+end

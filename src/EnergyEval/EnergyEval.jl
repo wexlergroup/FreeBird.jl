@@ -14,6 +14,7 @@ using ..AbstractHamiltonians
 
 export pbc_dist
 export interacting_energy, frozen_energy
+export single_site_energy
 
 
 include("atomistic_energies.jl")

@@ -170,6 +170,17 @@
                 # Test error handling
                 @test_throws ArgumentError interacting_energy(sys3, ljp1, [2, 2], [true, false, false])
             end
+
+            @testset "single site energy function tests" begin
+                # Test single LJ potential
+                @test single_site_energy(1, sys3, lj, [length(sys3)]) ≈ -0.12184883176851288u"eV" rtol=1e-7
+
+                # Test composite LJ potential
+                @test single_site_energy(1, sys3, ljp1, [length(sys3)]) ≈ -0.09615777513293565u"eV" rtol=1e-7
+                @test single_site_energy(2, sys3, ljp1, [3,3]) ≈ -0.1597175167721998u"eV" rtol=1e-7
+
+
+            end
         end
     end
 

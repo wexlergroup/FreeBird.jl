@@ -23,6 +23,7 @@ function enumerate_lattices(init_lattice::MLattice{C,G}) where {C,G}
     for i in 1:C
         comp_list += init_lattice.components[i] * i
     end
+    sort!(comp_list)
     # Generate all possible occupation configurations
     all_configs = unique_permutations(comp_list)
 

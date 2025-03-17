@@ -49,6 +49,8 @@ function Base.show(io::IO, lattice::MLattice{C,G}) where {C,G}
     print_occupation(io, lattice)
     if prod(lattice.adsorptions) == true
         println(io, "    adsorptions          : full adsorption")
+    elseif sum(lattice.adsorptions) == false
+        println(io, "    adsorptions          : no adsorption")
     else
         println(io, "    adsorptions          : "), print_adsorption(io, lattice, lattice.adsorptions)
     end

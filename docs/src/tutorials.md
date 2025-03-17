@@ -1,10 +1,10 @@
 ```@meta
-EditURL = "../../scripts/quick_start.jl"
+EditURL = "../../scripts/tutorials.jl"
 ```
 
-# Quick start guide to FreeBird.jl
+# FreeBird.jl Tutorial
 
-This is a quick start guide to using the FreeBird.jl package.
+This is a tutorial to using the FreeBird.jl package.
 It covers the basic functionalities of the package, such as
 generating atomistic and lattice walkers, defining a potential energy function or
 Hamiltonian, and running a sampling simulation.
@@ -29,10 +29,10 @@ The function above has generated a single configuration, with 562.5 Å$^3$ volum
 Note that the `particle_type` keyword argument can be used to specify the type of particle, i.e., chemical element. By default, the type is set to `:H`.
 Use `?generate_initial_configs` in the REPL to see the documentation of the function. Or see [`generate_initial_configs`](@ref).
 
-Let's inspect the generated configuration:
+Let's inspect the generated configuration using the `vew_structure` function:
 
 ````@example quick_start
-single_config[1]
+single_config[1] |> view_structure
 ````
 
 It's of a `FastSystem` type from `AtomsBase`. The dimensions of the box are 15 Å x 15 Å x 15 Å, following the volume per particle specified.
@@ -87,7 +87,7 @@ Now, time to set up a simulation. We will be using nested sampling, a Bayesian-i
 First, we need to define the nested sampling parameters:
 
 ````@example quick_start
-ns_params = NestedSamplingParameters(200, 0.1, 0.01, 1e-5, 1.0, 0, 200)
+ns_params = NestedSamplingParameters(mc_steps=200, step_size=0.1)
 ````
 
 The [`NestedSamplingParameters`](@ref) type is a struct that holds the parameters of the nested sampling algorithm.
@@ -97,8 +97,10 @@ The fields are as follows:
 -  `step_size::Float64`: The on-the-fly step size used in the sampling process.
 -  `step_size_lo::Float64`: The lower bound of the step size.
 -  `step_size_up::Float64`: The upper bound of the step size.
+-  `accept_range::Tuple{Float64, Float64}`: The range of acceptance rates for adjusting the step size.
 -  `fail_count::Int64`: The number of failed MC moves in a row.
 -  `allowed_fail_count::Int64`: The maximum number of failed MC moves allowed before resetting the step size.
+-  `random_seed::Int64`: The seed for the random number generator.
 
 Speaking of the Monte Carlo moves, we need to define that too:
 
@@ -119,7 +121,7 @@ The [`SaveEveryN`](@ref) type is a struct that holds the parameters of the savin
 Now, we are ready to run the nested sampling simulation:
 
 ````@example quick_start
-energies, liveset, _ = nested_sampling_loop!(ls, ns_params, 20_000, mc, save)
+energies, liveset, _ = nested_sampling(ls, ns_params, 20_000, mc, save)
 ````
 
 The results of the simulation are stored in the `energies` and `liveset` variables.
@@ -128,7 +130,7 @@ The `liveset` variable is the final liveset after the simulation.
 Let's see how the walkers look like after the simulation:
 
 ````@example quick_start
-liveset.walkers[1].configuration
+liveset.walkers[1].configuration |> view_structure
 ````
 
 They should be in a more ordered state, in this case, a cluster, than the initial gaseous state.

@@ -34,12 +34,13 @@ where \$N\$ is the number of walkers and \$i\$ is the iteration number.
 # Arguments
 - `iters::Vector{Int}`: The iteration numbers.
 - `n_walkers::Int`: The number of walkers.
+- `ω0::Float64`: The initial \$\\omega\$ factor. Default is 1.0.
 
 # Returns
 - A vector of \$\\omega\$ factors.
 """
-function ωᵢ(iters::Vector{Int}, n_walkers::Int)
-    ωi = (1/(n_walkers+1))*(n_walkers/(n_walkers+1)).^iters
+function ωᵢ(iters::Vector{Int}, n_walkers::Int; ω0::Float64=1.0)
+    ωi = ω0 * (1/(n_walkers+1)) * (n_walkers/(n_walkers+1)).^iters
     return ωi
 end
 
@@ -127,7 +128,7 @@ end
 """
     cv(df::DataFrame, βs::Vector{Float64}, dof::Int, n_walkers::Int)
 
-Calculates the constant-volume heat capacity at constant volume for the given DataFrame, inverse temperatures, degrees of freedom, and number of walkers.
+(Nested Sampling) Calculates the constant-volume heat capacity at constant volume for the given DataFrame, inverse temperatures, degrees of freedom, and number of walkers.
 The heat capacity is defined as:
 ```math
 C_V(\\beta) = \\frac{\\mathrm{dof} \\cdot k_B}{2} + k_B \\beta^2 \\left(\\frac{\\sum_i \\omega_i E_i^2 \\exp(-E_i \\beta)}{Z(\\beta)} - U(\\beta)^2\\right)
@@ -138,17 +139,55 @@ where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann cons
 # Arguments
 - `df::DataFrame`: The DataFrame containing the output data.
 - `βs::Vector{Float64}`: The inverse temperatures.
-- `dof::Int`: The degrees of freedom, equals to the number of dimensions times the number of particles.
+- `dof::Int`: The degrees of freedom, equals to the number of dimensions times the number of particles. For a lattice, it is zero.
 - `n_walkers::Int`: The number of walkers.
+- `ω0::Float64`: The initial \$\\omega\$ factor. Default is 1.0.
 
 # Returns
 - A vector of constant-volume heat capacities.
 """
-function cv(df::DataFrame, βs::Vector{Float64}, dof::Int, n_walkers::Int)
-    ωi = ωᵢ(df.iter, n_walkers)
+function cv(df::DataFrame, βs::Vector{Float64}, dof::Int, n_walkers::Int; ω0::Float64=1.0)
+    ωi = ωᵢ(df.iter, n_walkers; ω0=ω0)
     Ei = df.emax .- minimum(df.emax)
-    cvs = [cv(b, ωi, Ei, dof) for b in βs]
+    cvs = Vector{Float64}(undef, length(βs))
+    Threads.@threads for (i, b) in collect(enumerate(βs))
+        cvs[i] = cv(b, ωi, Ei, dof)
+    end
     return cvs
+end
+
+"""
+    cv(Ts::Vector{Float64}, dof::Int, energy_bins::Vector{Float64}, entropy::Vector{Float64})
+
+(Wang-Landau Sampling) Calculates the constant-volume heat capacity at constant volume for the given temperatures, degrees of 
+freedom, energy bins, and entropy. The kinetic energy is treated classically, and is added to the heat capacity as \$dof \\cdot k_B/2\$.
+
+# Arguments
+- `Ts::Vector{Float64}`: The temperatures in Kelvin.
+- `dof::Int`: The degrees of freedom, equals to the number of dimensions times the number of particles. For a lattice, it is zero.
+- `energy_bins::Vector{Float64}`: The energy bins in eV.
+- `entropy::Vector{Float64}`: The entropy.
+
+# Returns
+- A vector of constant-volume heat capacities.
+"""
+function cv(Ts::Vector{Float64}, dof::Int, energy_bins::Vector{Float64}, entropy::Vector{Float64})
+    kb = 8.617333262e-5 # eV/K
+    β = 1 ./(kb.*Ts)
+    E_rel = energy_bins .- minimum(energy_bins)
+    S_shifted = entropy .- minimum(entropy[entropy .> 0])
+    g = exp.(S_shifted)
+    Z = zeros(length(Ts))
+    E_avg = zeros(length(Ts))
+    E2_avg = zeros(length(Ts))
+    Cv = zeros(length(Ts))
+    for (i, temp) in enumerate(Ts)
+        Z[i] = sum(exp.(-E_rel ./ (kb * temp)) .* g)
+        E_avg[i] = sum(E_rel .* exp.(-E_rel ./ (kb * temp)) .* g) / Z[i]
+        E2_avg[i] = sum(E_rel.^2 .* exp.(-E_rel ./ (kb * temp)) .* g) / Z[i]
+        Cv[i] = (E2_avg[i] .- E_avg[i].^2) ./ (kb * temp.^2) .+ dof*kb/2
+    end
+    return Cv
 end
 
 

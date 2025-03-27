@@ -115,6 +115,14 @@ struct MCRandomWalkClone <: MCRoutine
     end
 end
 
+
+struct MCRandomWalkCloneParallel <: MCRoutine 
+    dims::Vector{Int64}
+    function MCRandomWalkCloneParallel(;dims::Vector{Int64}=[1, 2, 3])
+        new(dims)
+    end
+end
+
 """
     struct MCNewSample <: MCRoutine
 A type for generating a new walker from a random configuration. Currently, it is intended to use this routine for lattice gas systems.
@@ -225,6 +233,52 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         emax = missing
         ns_params.fail_count += 1
     end
+    adjust_step_size(ns_params, rate)
+    return iter, emax, liveset, ns_params
+end
+
+
+
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRandomWalkCloneParallel)
+    sort_by_energy!(liveset)
+    ats = liveset.walkers
+    lj = liveset.lj_potential
+    iter::Union{Missing,Int} = missing
+    emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
+
+    to_walk_inds = sort!(sample(2:length(ats), nworkers()))
+
+
+    to_walks = deepcopy.(ats[to_walk_inds])
+    walked = [remotecall_fetch(MC_random_walk!, workers()[i], ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax) for (i,to_walk) in enumerate(to_walks)]
+    # walked = fetch.(walking)
+
+    accepted_at = findall(x -> x[1], walked)
+    accepted_inds = to_walk_inds[accepted_at]
+
+    accepted_rates = [x[2] for x in walked]
+    rate = mean(accepted_rates)
+
+    filter!(x -> x[1], walked)
+
+    if isempty(walked)
+        emax = missing
+        ns_params.fail_count += 1
+    elseif length(walked) == 1
+        ats[1] = walked[1][3]
+        update_iter!(liveset)
+        ns_params.fail_count = 0
+        iter = liveset.walkers[1].iter
+    else
+        ats[1] = walked[1][3]
+        for i in 2:length(walked)
+            ats[accepted_inds[i]] = walked[i][3]
+        end
+        update_iter!(liveset)
+        ns_params.fail_count = 0
+        iter = liveset.walkers[1].iter
+    end
+
     adjust_step_size(ns_params, rate)
     return iter, emax, liveset, ns_params
 end

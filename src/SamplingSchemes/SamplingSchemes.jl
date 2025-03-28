@@ -15,7 +15,6 @@ using AtomsBase
 using Distributions
 
 using Distributed
-using Dagger
 
 using ..MonteCarloMoves
 using ..AbstractPotentials

@@ -497,10 +497,10 @@ function nested_sampling(liveset::AtomWalkers,
         if !(iter isa typeof(missing))
             push!(df, (iter, emax.val))
             if print_info
-                @info "iter: $(liveset.walkers[1].iter), emax: $emax, step_size: $(round(ns_params.step_size; sigdigits=4))"
+                @info "iter: $(liveset.walkers[1].iter), emax: $(emax-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
             end
         elseif iter isa typeof(missing) && print_info
-            @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy), step_size: $(round(ns_params.step_size; sigdigits=4))"
+            @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
         end
         write_df_every_n(df, i, save_strategy)
         write_ls_every_n(liveset, i, save_strategy)
@@ -528,11 +528,11 @@ function nested_sampling(liveset::AtomWalkers,
             for (i, e) in enumerate(emax)
                 push!(df, (iter, e.val))
                 if print_info
-                    @info "iter: $(liveset.walkers[1].iter), emax: $e, step_size: $(round(ns_params.step_size; sigdigits=4))"
+                    @info "iter: $(liveset.walkers[1].iter), emax: $(e-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
                 end
             end
         elseif iter isa typeof(missing) && print_info
-            @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy), step_size: $(round(ns_params.step_size; sigdigits=4))"
+            @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
         end
         write_df_every_n(df, i, save_strategy)
         write_ls_every_n(liveset, i, save_strategy)

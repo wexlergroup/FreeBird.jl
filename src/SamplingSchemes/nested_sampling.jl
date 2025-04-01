@@ -248,7 +248,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
 
     to_walk_inds = sort!(sample(2:length(ats), nworkers()))
     to_walks = deepcopy.(ats[to_walk_inds])
-    walked = [remotecall(MC_random_walk!, workers()[i], ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax[i]) for (i,to_walk) in enumerate(to_walks)]
+    walked = [remotecall(MC_random_walk!, workers()[i], ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax[end]) for (i,to_walk) in enumerate(to_walks)]
     walked = fetch.(walked)
 
     # walked = []
@@ -261,6 +261,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     accepted_rates = [x[2] for x in walked]
     rate = mean(accepted_rates)
 
+    sort!(walked, by = x -> x[3].energy, rev=true)
     filter!(x -> x[1], walked) # remove the failed ones
 
     if isempty(walked)

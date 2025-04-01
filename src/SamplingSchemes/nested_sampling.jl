@@ -528,7 +528,7 @@ function nested_sampling(liveset::AtomWalkers,
             for (i, e) in enumerate(emax)
                 push!(df, (iter, e.val))
                 if print_info
-                    @info "iter: $(liveset.walkers[1].iter), emax: $(e-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
+                    @info "iter: $(liveset.walkers[1].iter)_$i, emax: $(e-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
                 end
             end
         elseif iter isa typeof(missing) && print_info

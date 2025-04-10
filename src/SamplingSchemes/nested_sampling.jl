@@ -94,6 +94,12 @@ to use this routine for lattice gas systems.
 abstract type MCRoutine end
 
 """
+    abstract type MCRoutineParallel <: MCRoutine
+(Internal) An abstract type representing a parallel Monte Carlo routine.
+"""
+abstract type MCRoutineParallel <: MCRoutine end
+
+"""
     struct MCRandomWalkMaxE <: MCRoutine
 A type for generating a new walker by performing a random walk for decorrelation on the highest-energy walker.
 """
@@ -115,10 +121,20 @@ struct MCRandomWalkClone <: MCRoutine
     end
 end
 
-
-struct MCRandomWalkCloneParallel <: MCRoutine 
+"""
+    MCRandomWalkMaxEParallel <: MCRoutineParallel
+A type for generating a new walker by performing a random walk for decorrelation on the highest-energy walker(s) in parallel.
+"""
+struct MCRandomWalkCloneParallel <: MCRoutineParallel
     dims::Vector{Int64}
     function MCRandomWalkCloneParallel(;dims::Vector{Int64}=[1, 2, 3])
+        new(dims)
+    end
+end
+
+struct MCRandomWalkMaxEParallel <: MCRoutineParallel
+    dims::Vector{Int64}
+    function MCRandomWalkMaxEParallel(;dims::Vector{Int64}=[1, 2, 3])
         new(dims)
     end
 end
@@ -182,6 +198,16 @@ function update_iter!(liveset::AbstractLiveSet)
     end
 end
 
+"""
+    estimate_temperature(n_walker::Int, n_cull::Int, ediff::Float64)
+Estimate the temperature for the nested sampling algorithm from dlog(ω)/dE.
+"""
+function estimate_temperature(n_walker::Int, n_cull::Int, ediff::Float64)
+    log_alpha = log((n_walker - n_cull + 1) / (n_walker + 1))
+    beta = log_alpha / ediff
+    return beta
+end
+
 
 """
     nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine)
@@ -239,14 +265,19 @@ end
 
 
 
-function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRandomWalkCloneParallel)
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutineParallel)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.lj_potential
     iter::Union{Missing,Int} = missing
     emax::Union{Vector{Missing},Vector{typeof(0.0u"eV")}} = [liveset.walkers[i].energy for i in 1:nworkers()]
 
-    to_walk_inds = sort!(sample(2:length(ats), nworkers()))
+    if mc_routine isa MCRandomWalkMaxEParallel
+        to_walk_inds = 1:nworkers()
+    elseif mc_routine isa MCRandomWalkCloneParallel
+        to_walk_inds = sort!(sample(2:length(ats), nworkers()))
+    end
+    
     to_walks = deepcopy.(ats[to_walk_inds])
 
     if length(mc_routine.dims) == 3
@@ -515,7 +546,7 @@ end
 function nested_sampling(liveset::AtomWalkers, 
                                 ns_params::NestedSamplingParameters, 
                                 n_steps::Int64, 
-                                mc_routine::MCRandomWalkCloneParallel,
+                                mc_routine::MCRoutineParallel,
                                 save_strategy::DataSavingStrategy)
     df = DataFrame(iter=Int[], emax=Float64[])
     for i in 1:n_steps

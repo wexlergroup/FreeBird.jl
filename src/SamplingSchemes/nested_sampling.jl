@@ -203,7 +203,7 @@ end
 Estimate the temperature for the nested sampling algorithm from dlog(ω)/dE.
 """
 function estimate_temperature(n_walkers::Int, n_cull::Int, ediff::Float64, iter::Int=1)
-    ω = ((n_walkers - n_cull + 1) / (n_walkers + 1))^iter
+    ω = (n_cull / (n_walkers + n_cull)) * (n_walkers / (n_walkers + n_cull))^iter
     β = log(ω) / ediff
     kb = 8.617333262145e-5 # eV/K
     T = 1 / (kb * β) # in Kelvin
@@ -570,7 +570,7 @@ function nested_sampling(liveset::AtomWalkers,
                     if i == 1
                         @info "iter: $(liveset.walkers[1].iter)_$n, emax: $(e-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
                     else
-                        T_est = estimate_temperature(length(liveset.walkers), nworkers(), df.emax[end] - df.emax[end-1])
+                        T_est = estimate_temperature(length(liveset.walkers), nworkers(), df.emax[end] - df.emax[end-nworkers()])
                         @info "iter: $(liveset.walkers[1].iter)_$n, emax: $(e-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4)), estimated T: $(T_est) K"
                     end
                 end

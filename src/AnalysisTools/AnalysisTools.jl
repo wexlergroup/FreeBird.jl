@@ -21,26 +21,28 @@ function read_output(filename::String)
 end
 
 """
-    ωᵢ(iters::Vector{Int}, n_walkers::Int)
+    ωᵢ(iters::Vector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
 
 Calculates the \$\\omega\$ factors for the given number of iterations and walkers.
 The \$\\omega\$ factors account for the fractions of phase-space volume sampled during
 each nested sampling iteration, defined as:
 ```math
-\\omega_i = \\frac{1}{N+1} \\left(\\frac{N}{N+1}\\right)^i
+\\omega_i = \\frac{C}{K+C} \\left(\\frac{K}{K+C}\\right)^i
 ```
-where \$N\$ is the number of walkers and \$i\$ is the iteration number.
+where \$K\$ is the number of walkers, \$C\$ is the number of culled walkers, 
+and \$i\$ is the iteration number.
 
 # Arguments
 - `iters::Vector{Int}`: The iteration numbers.
 - `n_walkers::Int`: The number of walkers.
+- `n_cull::Int`: The number of culled walkers. Default is 1.
 - `ω0::Float64`: The initial \$\\omega\$ factor. Default is 1.0.
 
 # Returns
 - A vector of \$\\omega\$ factors.
 """
-function ωᵢ(iters::Vector{Int}, n_walkers::Int; ω0::Float64=1.0)
-    ωi = ω0 * (1/(n_walkers+1)) * (n_walkers/(n_walkers+1)).^iters
+function ωᵢ(iters::Vector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
+    ωi = ω0 * (n_cull/(n_walkers+n_cull)) * (n_walkers/(n_walkers+n_cull)).^iters
     return ωi
 end
 

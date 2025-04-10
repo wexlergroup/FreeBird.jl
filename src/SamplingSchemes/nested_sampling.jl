@@ -202,10 +202,12 @@ end
     estimate_temperature(n_walker::Int, n_cull::Int, ediff::Float64)
 Estimate the temperature for the nested sampling algorithm from dlog(ω)/dE.
 """
-function estimate_temperature(n_walker::Int, n_cull::Int, ediff::Float64)
-    log_alpha = log((n_walker - n_cull + 1) / (n_walker + 1))
-    beta = log_alpha / ediff
-    return beta
+function estimate_temperature(n_walkers::Int, n_cull::Int, ediff::Float64, iter::Int=1)
+    ω = ((n_walkers - n_cull + 1) / (n_walkers + 1))^iter
+    β = log(ω) / ediff
+    kb = 8.617333262145e-5 # eV/K
+    T = 1 / (kb * β) # in Kelvin
+    return T
 end
 
 
@@ -549,26 +551,34 @@ function nested_sampling(liveset::AtomWalkers,
                                 mc_routine::MCRoutineParallel,
                                 save_strategy::DataSavingStrategy)
     df = DataFrame(iter=Int[], emax=Float64[])
-    for i in 1:n_steps
+    for i in 1:n_steps # main loop
         print_info = i % save_strategy.n_info == 0
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
         iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
         @debug "n_step $i, iter: $iter, emax: $emax"
+
         if ns_params.fail_count >= ns_params.allowed_fail_count
             @warn "Failed to accept MC move $(ns_params.allowed_fail_count) times in a row. Reset step size!"
             ns_params.fail_count = 0
             ns_params.step_size = ns_params.initial_step_size
         end
+
         if !(iter isa typeof(missing))
-            for (i, e) in enumerate(emax)
+            for (n, e) in enumerate(emax)
                 push!(df, (iter, e.val))
                 if print_info
-                    @info "iter: $(liveset.walkers[1].iter)_$i, emax: $(e-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
+                    if i == 1
+                        @info "iter: $(liveset.walkers[1].iter)_$n, emax: $(e-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
+                    else
+                        T_est = estimate_temperature(length(liveset.walkers), nworkers(), df.emax[end] - df.emax[end-1])
+                        @info "iter: $(liveset.walkers[1].iter)_$n, emax: $(e-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4)), estimated T: $(T_est) K"
+                    end
                 end
             end
         elseif iter isa typeof(missing) && print_info
             @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
         end
+
         write_df_every_n(df, i, save_strategy)
         write_ls_every_n(liveset, i, save_strategy)
     end

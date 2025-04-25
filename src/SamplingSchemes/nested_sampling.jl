@@ -291,8 +291,9 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     end
 
 
-    walked = [remotecall(random_walk_function, workers()[i], ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax[end]) for (i,to_walk) in enumerate(to_walks)]
-    walked = fetch.(walked)
+    walking = [remotecall(random_walk_function, workers()[i], ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax[end]) for (i,to_walk) in enumerate(to_walks)]
+    walked = fetch.(walking)
+    finalize.(walking) # finalize the remote calls, clear the memory
 
     accepted_rates = [x[2] for x in walked]
     rate = mean(accepted_rates)

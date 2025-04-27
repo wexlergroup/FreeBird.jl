@@ -29,7 +29,7 @@ The function above has generated a single configuration, with 562.5 Å$^3$ volum
 Note that the `particle_type` keyword argument can be used to specify the type of particle, i.e., chemical element. By default, the type is set to `:H`.
 Use `?generate_initial_configs` in the REPL to see the documentation of the function. Or see [`generate_initial_configs`](@ref).
 
-Let's inspect the generated configuration using the `vew_structure` function:
+Let's inspect the generated configuration using the `view_structure` function:
 
 ````@example quick_start
 single_config[1] |> view_structure
@@ -45,7 +45,7 @@ configs = generate_initial_configs(120, 562.5, 6)
 ````
 
 The function above has generated 120 configurations, again, with 562.5 Å$^3$ volume per particle, and 6 particles of type H.
-These configurations will be served as the initial walkers for a sampling run, but first, we need to warp them into the [`AtomWalker`](@ref) type defined in FreeBird.jl.
+These configurations will be served as the initial walkers for a sampling run, but first, we need to wrap them into the [`AtomWalker`](@ref) type defined in FreeBird.jl.
 
 ````@example quick_start
 walkers = AtomWalker.(generate_initial_configs(120, 562.5, 6));
@@ -227,7 +227,7 @@ Now, let's create a simple square lattice system with single component:
 ml = MLattice{1,SquareLattice}(components=[[1,2,3,4]])
 ````
 
-When you run the above code, the outer constructor of `MLattice` will be called.
+When you run the code above, the outer constructor of `MLattice` will be called.
 Many of the arguments are optional and have default values.
 The `components` argument is a vector of vectors that defines the components of the system.
 The `components=[[1,2,3,4]]` argument specifies that the system has a single component,
@@ -242,7 +242,7 @@ MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
     adsorptions::Union{Vector{Int},Symbol}=:full)
 ```
 
-You may notice that the above code returns a `SLattice` type.
+You may notice that the code above returns a `SLattice` type.
 The `SLattice` type is simply an alias for the `MLattice{1,G}`,
 where `G` is the geometry of the lattice and the number of components is fixed to 1.
 You can also directly call the `SLattice`, it will give the same result:
@@ -261,7 +261,7 @@ The [`GenericLatticeHamiltonian`](@ref) type is a struct that holds the paramete
 The first argument is the on-site energy, and the second argument is the list of n-th nearest-neighbors energy.
 The third argument is the unit of the energy.
 
-To run exact enumeration, we only need a initial walker/lattice configuration, and
+To run exact enumeration, we only need a initial walker/lattice configuration and
 the Hamiltonian. Let's run the exact enumeration:
 
 ````@example quick_start
@@ -288,7 +288,7 @@ Be warned that the exact enumeration can be computationally expensive for large 
 
 ### Calculating heat capacity
 
-Since we enumerated all possible configurations of the lattice system, we can calculate the partition function, then heat capacity directly.
+Since we enumerated all possible configurations of the lattice system, we can calculate the partition function, then the heat capacity directly.
 
 Let's calculate the heat capacity for the lattice system:
 Define the temperatures that we are interested in, in units of Kelvin.

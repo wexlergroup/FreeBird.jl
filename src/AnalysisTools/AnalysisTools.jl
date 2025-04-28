@@ -120,10 +120,13 @@ function cv(β::Float64,
             ωi::Vector{Float64}, 
             Ei::Vector{Float64},
             dof::Int64)
-    z = partition_function(β, ωi, Ei)
-    u = internal_energy(β, ωi, Ei)
     kb = 8.617333262e-5 # eV/K
-    cv = dof*kb/2.0 + kb*β^2 * (sum(ωi.*Ei.^2 .*exp.(-Ei.*β))/z - u^2)
+    expo = ωi.*exp.(-Ei.*β)
+    ei_expo = Ei.*expo
+    ei2_expo = Ei.*ei_expo
+    z = sum(expo)
+    u = sum(ei_expo)/z
+    cv = dof*kb/2.0 + kb*β^2 * (sum(ei2_expo)/z - u^2)
     return cv
 end
 
@@ -143,13 +146,14 @@ where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann cons
 - `βs::Vector{Float64}`: The inverse temperatures.
 - `dof::Int`: The degrees of freedom, equals to the number of dimensions times the number of particles. For a lattice, it is zero.
 - `n_walkers::Int`: The number of walkers.
+- `n_cull::Int`: The number of culled walkers. Default is 1.
 - `ω0::Float64`: The initial \$\\omega\$ factor. Default is 1.0.
 
 # Returns
 - A vector of constant-volume heat capacities.
 """
-function cv(df::DataFrame, βs::Vector{Float64}, dof::Int, n_walkers::Int; ω0::Float64=1.0)
-    ωi = ωᵢ(df.iter, n_walkers; ω0=ω0)
+function cv(df::DataFrame, βs::Vector{Float64}, dof::Int, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
+    ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
     Ei = df.emax .- minimum(df.emax)
     cvs = Vector{Float64}(undef, length(βs))
     Threads.@threads for (i, b) in collect(enumerate(βs))

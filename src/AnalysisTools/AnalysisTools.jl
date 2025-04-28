@@ -119,8 +119,8 @@ where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann cons
 function cv(β::Float64,
             ωi::Vector{Float64}, 
             Ei::Vector{Float64},
-            dof::Int64)
-    kb = 8.617333262e-5 # eV/K
+            dof::Int64;
+            kb::Float64=8.617333262e-5)
     expo = ωi.*exp.(-Ei.*β)
     ei_expo = Ei.*expo
     ei2_expo = Ei.*ei_expo
@@ -152,12 +152,17 @@ where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann cons
 # Returns
 - A vector of constant-volume heat capacities.
 """
-function cv(df::DataFrame, βs::Vector{Float64}, dof::Int, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
+function cv(df::DataFrame, 
+            βs::Vector{Float64}, 
+            dof::Int, n_walkers::Int; 
+            n_cull::Int=1, 
+            ω0::Float64=1.0, 
+            kb::Float64=8.617333262e-5)
     ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
     Ei = df.emax .- minimum(df.emax)
     cvs = Vector{Float64}(undef, length(βs))
     Threads.@threads for (i, b) in collect(enumerate(βs))
-        cvs[i] = cv(b, ωi, Ei, dof)
+        cvs[i] = cv(b, ωi, Ei, dof; kb=kb)
     end
     return cvs
 end

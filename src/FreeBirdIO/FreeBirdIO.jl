@@ -7,6 +7,7 @@ module FreeBirdIO
 
 using AtomsIO, ExtXYZ, DataFrames, CSV
 using AtomsBase, Unitful
+using Arrow
 
 using ..AbstractWalkers
 using ..AbstractLiveSets

@@ -53,14 +53,22 @@ end
 """
     write_df(filename::String, df::DataFrame)
 
-Write a DataFrame to a CSV file.
+Write a DataFrame to a CSV/Arrow file.
 
 # Arguments
 - `filename::String`: The name of the file to write to.
 - `df::DataFrame`: The DataFrame to write.
 
 """
-write_df(filename::String, df::DataFrame) = CSV.write(filename, df; append=false)
+function write_df(filename::String, df::DataFrame)
+    if splitext(filename)[end] == ".csv"
+        CSV.write(filename, df)
+    elseif splitext(filename)[end] == ".arrow"
+        Arrow.write(filename, df)
+    else
+        error("Unsupported file format. Only CSV is supported.")
+    end
+end
 
 """
     write_df_every_n(df::DataFrame, step::Int, d_strategy::SaveEveryN)

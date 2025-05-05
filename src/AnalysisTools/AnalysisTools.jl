@@ -6,7 +6,7 @@ Module for analyzing the output of the sampling.
 module AnalysisTools
 
 using DataFrames
-using CSV
+using CSV, Arrow
 
 export read_output
 export ωᵢ, partition_function, internal_energy, cv
@@ -17,7 +17,14 @@ export ωᵢ, partition_function, internal_energy, cv
 Reads the output file and returns a DataFrame.
 """
 function read_output(filename::String)
-    return DataFrame(CSV.File(filename))
+    if splitext(filename)[end] == ".csv"
+        data = CSV.File(filename)
+    elseif splitext(filename)[end] == ".arrow"
+        data = Arrow.Table(filename)
+    else
+        error("Unsupported file format. Please provide a .csv or .arrow file.")
+    end
+    return DataFrame(data)
 end
 
 """

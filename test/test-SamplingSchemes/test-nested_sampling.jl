@@ -490,6 +490,27 @@
                 rm("test.traj.extxyz", force=true)
                 rm("test.ls.extxyz", force=true)
             end
+
+            @testset "Data saving with .arrow and SaveFreePartEveryN" begin
+                ns_params_copy = deepcopy(ns_params)
+                save_strategy = SaveFreePartEveryN(
+                    df_filename = "test_df.arrow",
+                    wk_filename = "test.traj.extxyz",
+                    ls_filename = "test.ls.extxyz",
+                    n_traj = 2,
+                    n_snap = 2,
+                    n_info = 2
+                )
+                df, _, _ = nested_sampling(liveset, ns_params_copy, 4, MCRandomWalkMaxE(), save_strategy)
+                
+                @test isfile("test_df.arrow")
+                @test isfile("test.traj.extxyz")
+                @test isfile("test.ls.extxyz")
+                
+                rm("test_df.arrow", force=true)
+                rm("test.traj.extxyz", force=true)
+                rm("test.ls.extxyz", force=true)
+            end
         end
 
         @testset "LatticeGasWalkers cases tests" begin
@@ -551,6 +572,18 @@
                 @test typeof(walker.energy) <: Quantity
                 @test unit(walker.energy) == u"eV"
                 @test walker.configuration isa SLattice{SquareLattice}
+            end
+
+            # clean up
+            if isfile("test_df.csv")
+                rm("test_df.csv", force=true)
+            end
+            if isfile("test.traj")
+                rm("test.traj", force=true)
+            end
+
+            if isfile("test.ls")
+                rm("test.ls", force=true)
             end
         end
     end

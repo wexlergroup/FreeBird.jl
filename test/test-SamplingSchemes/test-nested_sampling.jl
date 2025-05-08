@@ -80,9 +80,8 @@
         @test MCRandomWalkClone() isa MCRoutine
         @test MCNewSample() isa MCRoutine
         @test MCMixedMoves(5,1) isa MCRoutine
-        
-        routines = [MCRandomWalkMaxE(), MCRandomWalkClone(), MCNewSample()]
-        @test all(r -> r isa MCRoutine, routines)
+        @test MCRandomWalkClone() isa MCRoutine
+        @test MCRandomWalkMaxEParallel() isa MCRoutine
     end
 
 
@@ -200,6 +199,16 @@
                 @test length(updated_liveset.walkers) == length(liveset.walkers)
                 @test updated_params.fail_count >= 0
             end
+
+            @testset "MCRandomWalkMaxEParallel" begin
+                mc_routine = MCRandomWalkMaxEParallel()
+                iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+                
+                @test iter isa Union{Missing,Int}
+                @test emax isa Union{Missing,typeof(0.0u"eV")}
+                @test length(updated_liveset.walkers) == length(liveset.walkers)
+                @test updated_params.fail_count >= 0
+            end
     
             @testset "MCRandomWalkClone" begin
                 mc_routine = MCRandomWalkClone()
@@ -210,6 +219,19 @@
                 @test length(updated_liveset.walkers) == length(liveset.walkers)
                 @test updated_params.fail_count >= 0
             end
+
+
+            @testset "MCRandomWalkCloneParallel" begin
+                mc_routine = MCRandomWalkCloneParallel()
+                iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+                
+                @test iter isa Union{Missing,Int}
+                @test emax isa Union{Missing,typeof(0.0u"eV")}
+                @test length(updated_liveset.walkers) == length(liveset.walkers)
+                @test updated_params.fail_count >= 0
+            end
+
+
 
             @testset "MCRandomWalkClone 2D" begin
                 mc_routine = MCRandomWalkClone(dims=[1,2])
@@ -424,6 +446,20 @@
                 ns_params_copy = deepcopy(ns_params)
                 df, updated_liveset, updated_params = nested_sampling(
                     liveset, ns_params_copy, n_steps, MCRandomWalkMaxE(), save_strategy)
+                
+                @test df isa DataFrame
+                @test names(df) == ["iter", "emax"]
+                @test nrow(df) ≤ n_steps
+                @test length(updated_liveset.walkers) == length(liveset.walkers)
+                @test eltype(df.iter) == Int
+                @test eltype(df.emax) == Float64
+            end
+
+            @testset "Parallel Routine" begin
+                n_steps = 5
+                ns_params_copy = deepcopy(ns_params)
+                df, updated_liveset, updated_params = nested_sampling(
+                    liveset, ns_params_copy, n_steps, MCRandomWalkCloneParallel(), save_strategy)
                 
                 @test df isa DataFrame
                 @test names(df) == ["iter", "emax"]

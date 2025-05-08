@@ -66,7 +66,7 @@ function write_df(filename::String, df::DataFrame)
     elseif splitext(filename)[end] == ".arrow"
         Arrow.write(filename, df)
     else
-        error("Unsupported file format. Only CSV is supported.")
+        error("Unsupported file format. Only .csv and .arrow are supported.")
     end
 end
 

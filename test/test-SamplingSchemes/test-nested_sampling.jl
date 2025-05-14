@@ -80,9 +80,8 @@
         @test MCRandomWalkClone() isa MCRoutine
         @test MCNewSample() isa MCRoutine
         @test MCMixedMoves(5,1) isa MCRoutine
-        
-        routines = [MCRandomWalkMaxE(), MCRandomWalkClone(), MCNewSample()]
-        @test all(r -> r isa MCRoutine, routines)
+        @test MCRandomWalkClone() isa MCRoutine
+        @test MCRandomWalkMaxEParallel() isa MCRoutine
     end
 
 
@@ -200,6 +199,16 @@
                 @test length(updated_liveset.walkers) == length(liveset.walkers)
                 @test updated_params.fail_count >= 0
             end
+
+            @testset "MCRandomWalkMaxEParallel" begin
+                mc_routine = MCRandomWalkMaxEParallel()
+                iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+                
+                @test iter isa Union{Missing,Int}
+                @test emax isa Union{Missing,typeof([0.0u"eV"])}
+                @test length(updated_liveset.walkers) == length(liveset.walkers)
+                @test updated_params.fail_count >= 0
+            end
     
             @testset "MCRandomWalkClone" begin
                 mc_routine = MCRandomWalkClone()
@@ -210,6 +219,19 @@
                 @test length(updated_liveset.walkers) == length(liveset.walkers)
                 @test updated_params.fail_count >= 0
             end
+
+
+            @testset "MCRandomWalkCloneParallel" begin
+                mc_routine = MCRandomWalkCloneParallel()
+                iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+                
+                @test iter isa Union{Missing,Int}
+                @test emax isa Union{Missing,typeof([0.0u"eV"])}
+                @test length(updated_liveset.walkers) == length(liveset.walkers)
+                @test updated_params.fail_count >= 0
+            end
+
+
 
             @testset "MCRandomWalkClone 2D" begin
                 mc_routine = MCRandomWalkClone(dims=[1,2])
@@ -433,6 +455,20 @@
                 @test eltype(df.emax) == Float64
             end
 
+            @testset "Parallel Routine" begin
+                n_steps = 5
+                ns_params_copy = deepcopy(ns_params)
+                df, updated_liveset, updated_params = nested_sampling(
+                    liveset, ns_params_copy, n_steps, MCRandomWalkCloneParallel(), save_strategy)
+                
+                @test df isa DataFrame
+                @test names(df) == ["iter", "emax"]
+                @test nrow(df) ≤ n_steps
+                @test length(updated_liveset.walkers) == length(liveset.walkers)
+                @test eltype(df.iter) == Int
+                @test eltype(df.emax) == Float64
+            end
+
             @testset "Failure handling" begin
                 ns_params_copy = deepcopy(ns_params)
                 ns_params_copy.allowed_fail_count = 1
@@ -451,6 +487,27 @@
                 @test isfile("test.ls.extxyz")
                 
                 rm("test_df.csv", force=true)
+                rm("test.traj.extxyz", force=true)
+                rm("test.ls.extxyz", force=true)
+            end
+
+            @testset "Data saving with .arrow and SaveFreePartEveryN" begin
+                ns_params_copy = deepcopy(ns_params)
+                save_strategy = SaveFreePartEveryN(
+                    df_filename = "test_df.arrow",
+                    wk_filename = "test.traj.extxyz",
+                    ls_filename = "test.ls.extxyz",
+                    n_traj = 2,
+                    n_snap = 2,
+                    n_info = 2
+                )
+                df, _, _ = nested_sampling(liveset, ns_params_copy, 4, MCRandomWalkMaxE(), save_strategy)
+                
+                @test isfile("test_df.arrow")
+                @test isfile("test.traj.extxyz")
+                @test isfile("test.ls.extxyz")
+                
+                rm("test_df.arrow", force=true)
                 rm("test.traj.extxyz", force=true)
                 rm("test.ls.extxyz", force=true)
             end
@@ -515,6 +572,18 @@
                 @test typeof(walker.energy) <: Quantity
                 @test unit(walker.energy) == u"eV"
                 @test walker.configuration isa SLattice{SquareLattice}
+            end
+
+            # clean up
+            if isfile("test_df.csv")
+                rm("test_df.csv", force=true)
+            end
+            if isfile("test.traj")
+                rm("test.traj", force=true)
+            end
+
+            if isfile("test.ls")
+                rm("test.ls", force=true)
             end
         end
     end

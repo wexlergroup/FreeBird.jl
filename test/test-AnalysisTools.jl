@@ -65,4 +65,22 @@
         cvs = cv(Ts, dof, energy_bins, entropy)
         @test length(cvs) == 2
     end
+
+    @testset "read dataframe" begin
+        # Create a sample DataFrame
+        df = DataFrame(iter = [1, 2, 3], emax = [1.0, 1.5, 2.0])
+        # Write to CSV
+        write_df("test_output_df.csv", df)
+        # Write to Arrow
+        write_df("test_output_df.arrow", df)
+        # Read from CSV
+        df_read_csv = read_output("test_output_df.csv")
+        # Read from Arrow
+        df_read_arrow = read_output("test_output_df.arrow")
+        @test df == df_read_csv
+        @test df == df_read_arrow
+        # Clean up
+        rm("test_output_df.csv")
+        rm("test_output_df.arrow")
+    end
 end

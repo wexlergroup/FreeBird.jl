@@ -198,6 +198,14 @@ function monte_carlo_sampling(
             mc_params.random_seed
         )
 
+        equi_var = var(equilibration_energies)
+        equi_mean = mean(equilibration_energies)
+
+        equi_rate = equilibration_accepted_steps / mc_params.equilibrium_steps
+
+        @info "Temperature: $temp K, Equilibration energy: $equi_mean, Variance: $(round(equi_var; sigdigits=4)), Acceptance rate: $(round(equi_rate; sigdigits=4))"
+
+
         # Sample the lattice
         sampling_energies, sampling_configurations, sampling_accepted_steps = nvt_monte_carlo(
             equilibration_configurations[end],
@@ -209,7 +217,8 @@ function monte_carlo_sampling(
 
         # Compute the heat capacity
         E = mean(sampling_energies)
-        Cv = var(sampling_energies) / (kb * temp^2)
+        E_var = var(sampling_energies)
+        Cv = E_var / (kb * temp^2)
 
         # Compute the acceptance rate
         acceptance_rate = sampling_accepted_steps / mc_params.sampling_steps
@@ -222,7 +231,7 @@ function monte_carlo_sampling(
         configs[i] = sampling_configurations[end]
         lattice = sampling_configurations[end]
 
-        @info "Temperature: $temp K, Energy: $E eV, Cv: $Cv, Acceptance rate: $acceptance_rate"
+        @info "Temperature: $temp K, Energy: $E, Variance: $(round(E_var; sigdigits=4)), Cv: $(round(Cv; sigdigits=4)), Acceptance rate: $(round(acceptance_rate; sigdigits=4))"
     end
 
     return energies, configs, cvs, acceptance_rates

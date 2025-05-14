@@ -6,7 +6,7 @@ Module for analyzing the output of the sampling.
 module AnalysisTools
 
 using DataFrames
-using CSV
+using CSV, Arrow
 
 export read_output
 export ωᵢ, partition_function, internal_energy, cv
@@ -17,30 +17,39 @@ export ωᵢ, partition_function, internal_energy, cv
 Reads the output file and returns a DataFrame.
 """
 function read_output(filename::String)
-    return DataFrame(CSV.File(filename))
+    if splitext(filename)[end] == ".csv"
+        data = CSV.File(filename)
+    elseif splitext(filename)[end] == ".arrow"
+        data = Arrow.Table(filename)
+    else
+        error("Unsupported file format. Please provide a .csv or .arrow file.")
+    end
+    return DataFrame(data)
 end
 
 """
-    ωᵢ(iters::Vector{Int}, n_walkers::Int)
+    ωᵢ(iters::Vector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
 
 Calculates the \$\\omega\$ factors for the given number of iterations and walkers.
 The \$\\omega\$ factors account for the fractions of phase-space volume sampled during
 each nested sampling iteration, defined as:
 ```math
-\\omega_i = \\frac{1}{N+1} \\left(\\frac{N}{N+1}\\right)^i
+\\omega_i = \\frac{C}{K+C} \\left(\\frac{K}{K+C}\\right)^i
 ```
-where \$N\$ is the number of walkers and \$i\$ is the iteration number.
+where \$K\$ is the number of walkers, \$C\$ is the number of culled walkers, 
+and \$i\$ is the iteration number.
 
 # Arguments
 - `iters::Vector{Int}`: The iteration numbers.
 - `n_walkers::Int`: The number of walkers.
+- `n_cull::Int`: The number of culled walkers. Default is 1.
 - `ω0::Float64`: The initial \$\\omega\$ factor. Default is 1.0.
 
 # Returns
 - A vector of \$\\omega\$ factors.
 """
-function ωᵢ(iters::Vector{Int}, n_walkers::Int; ω0::Float64=1.0)
-    ωi = ω0 * (1/(n_walkers+1)) * (n_walkers/(n_walkers+1)).^iters
+function ωᵢ(iters::Vector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
+    ωi = ω0 * (n_cull/(n_walkers+n_cull)) * (n_walkers/(n_walkers+n_cull)).^iters
     return ωi
 end
 
@@ -117,11 +126,14 @@ where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann cons
 function cv(β::Float64,
             ωi::Vector{Float64}, 
             Ei::Vector{Float64},
-            dof::Int64)
-    z = partition_function(β, ωi, Ei)
-    u = internal_energy(β, ωi, Ei)
-    kb = 8.617333262e-5 # eV/K
-    cv = dof*kb/2.0 + kb*β^2 * (sum(ωi.*Ei.^2 .*exp.(-Ei.*β))/z - u^2)
+            dof::Int64;
+            kb::Float64=8.617333262e-5)
+    expo = ωi.*exp.(-Ei.*β)
+    ei_expo = Ei.*expo
+    ei2_expo = Ei.*ei_expo
+    z = sum(expo)
+    u = sum(ei_expo)/z
+    cv = dof*kb/2.0 + kb*β^2 * (sum(ei2_expo)/z - u^2)
     return cv
 end
 
@@ -138,20 +150,26 @@ where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann cons
 
 # Arguments
 - `df::DataFrame`: The DataFrame containing the output data.
-- `βs::Vector{Float64}`: The inverse temperatures.
-- `dof::Int`: The degrees of freedom, equals to the number of dimensions times the number of particles. For a lattice, it is zero.
+- `βs::Vector{Float64}`: Inverse temperatures.
+- `dof::Int`: The degrees of freedom, equal to the number of dimensions times the number of particles. For a lattice, it is zero.
 - `n_walkers::Int`: The number of walkers.
+- `n_cull::Int`: The number of culled walkers. Default is 1.
 - `ω0::Float64`: The initial \$\\omega\$ factor. Default is 1.0.
 
 # Returns
 - A vector of constant-volume heat capacities.
 """
-function cv(df::DataFrame, βs::Vector{Float64}, dof::Int, n_walkers::Int; ω0::Float64=1.0)
-    ωi = ωᵢ(df.iter, n_walkers; ω0=ω0)
+function cv(df::DataFrame, 
+            βs::Vector{Float64}, 
+            dof::Int, n_walkers::Int; 
+            n_cull::Int=1, 
+            ω0::Float64=1.0, 
+            kb::Float64=8.617333262e-5)
+    ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
     Ei = df.emax .- minimum(df.emax)
     cvs = Vector{Float64}(undef, length(βs))
     Threads.@threads for (i, b) in collect(enumerate(βs))
-        cvs[i] = cv(b, ωi, Ei, dof)
+        cvs[i] = cv(b, ωi, Ei, dof; kb=kb)
     end
     return cvs
 end

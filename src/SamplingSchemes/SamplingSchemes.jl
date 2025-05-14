@@ -12,6 +12,9 @@ using Combinatorics
 using Random
 using Statistics
 using AtomsBase
+using Distributions
+
+using Distributed
 
 using ..MonteCarloMoves
 using ..AbstractPotentials
@@ -31,6 +34,8 @@ export MetropolisMCParameters
 export sort_by_energy!, nested_sampling_step!
 export nested_sampling
 export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCNewSample, MCRejectionSampling, MCMixedMoves
+
+export MCRandomWalkMaxEParallel, MCRandomWalkCloneParallel
 
 # other sampling schemes
 export exact_enumeration

@@ -41,12 +41,12 @@ mutable struct AtomWalker{C} <: AbstractWalker
 end
 
 """
-    AtomWalker(configuration::FastSystem; freeze_species::Vector{Symbol}=Symbol[], merge_same_species=true)
+    AtomWalker(configuration::AbstractSystem; freeze_species::Vector{Symbol}=Symbol[], merge_same_species=true)
 
 Constructs an `AtomWalker` object with the given configuration.
 
 # Arguments
-- `configuration::FastSystem`: The configuration of the walker.
+- `configuration::AbstractSystem`: The configuration of the walker.
 - `freeze_species::Vector{Symbol}`: A vector of species to freeze.
 - `merge_same_species::Bool`: A boolean indicating whether to merge the same species into one component.
 
@@ -82,7 +82,11 @@ AtomWalker{5}(FastSystem(Au₅Cl₆Fe₄H₅O, periodic = FFF, bounding_box = [[
 ```
 
 """
-function AtomWalker(configuration::FastSystem; freeze_species::Vector{Symbol}=Symbol[], merge_same_species=true)
+function AtomWalker(configuration::AbstractSystem; freeze_species::Vector{Symbol}=Symbol[], merge_same_species=true)
+    if isa(configuration, FlexibleSystem)
+        new_list = [Atom(atomic_symbol(i),position(i)) for i in configuration.particles]
+        configuration = FastSystem(new_list, cell_vectors(configuration), periodicity(configuration))
+    end
     list_num_par, configuration = sort_components_by_atomic_number(configuration, merge_same_species=merge_same_species)
     C = length(list_num_par)
     frozen = zeros(Bool, C)

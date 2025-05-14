@@ -85,6 +85,13 @@
 
                 # Test with invalid freeze species
                 @test_throws ArgumentError AtomWalker(at, freeze_species=[:Si])
+
+                # Test FlexibleSystem
+                flex_at = FlexibleSystem(at)
+                @test_nowarn AtomWalker(flex_at)
+                walker = AtomWalker(flex_at)
+                @test !any(walker.frozen)
+                @test sum(walker.list_num_par) == length(flex_at)
             end
 
             @testset "Show method tests" begin

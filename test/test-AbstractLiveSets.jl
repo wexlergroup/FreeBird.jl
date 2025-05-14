@@ -241,6 +241,8 @@
                 # Test both small and large sets of walkers
                 small_walkers = [LatticeWalker(lattice) for _ in 1:3]
                 large_walkers = [LatticeWalker(lattice) for _ in 1:15]
+
+                @test occursin("Omitted", sprint(show, large_walkers))
                 
                 lgw_small = LatticeGasWalkers(small_walkers, mlham)
                 lgw_large = LatticeGasWalkers(large_walkers, mlham)

@@ -151,7 +151,7 @@ where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann cons
 # Arguments
 - `df::DataFrame`: The DataFrame containing the output data.
 - `βs::Vector{Float64}`: Inverse temperatures.
-- `dof::Int`: The degrees of freedom, equals to the number of dimensions times the number of particles. For a lattice, it is zero.
+- `dof::Int`: The degrees of freedom, equal to the number of dimensions times the number of particles. For a lattice, it is zero.
 - `n_walkers::Int`: The number of walkers.
 - `n_cull::Int`: The number of culled walkers. Default is 1.
 - `ω0::Float64`: The initial \$\\omega\$ factor. Default is 1.0.

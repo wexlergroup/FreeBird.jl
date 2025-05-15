@@ -60,4 +60,6 @@ include("nvt_monte_carlo.jl")
 
 include("wang_landau.jl")
 
+include("replica_exchange.jl")
+
 end # module SamplingSchemes

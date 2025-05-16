@@ -46,30 +46,74 @@ Perform the replica exchange sampling scheme for a lattice system.
 function replica_exchange(
     lattice::AbstractLattice,
     h::ClassicalHamiltonian,
-    re_params::ReplicaExchangeParameters
+    re_params::ReplicaExchangeParameters;
+    store_trajectories::Bool = true
 )
+
     Random.seed!(re_params.random_seed)
 
     nrep = length(re_params.temperatures)
     nsteps = re_params.sampling_steps
     swapint = re_params.swap_interval
+    println("Replica exchange sampling with $nrep replicas, $nsteps steps, and swap interval of $swapint.")
 
     # Per‑replica state: configurations and energies
     configs = [generate_random_new_lattice_sample!(deepcopy(lattice)) for _ in 1:nrep]
     energies = [interacting_energy(configs[i], h).val for i in 1:nrep]
+    println("Initial energies: ", energies)
 
     # Output containers
-    energy_trajs = [Float64[] for _ in 1:nrep]
-    config_trajs = [Vector{typeof(lattice)}() for _ in 1:nrep]
+    energy_trajs = store_trajectories ? [Float64[] for _ in 1:nrep] : nothing
+    config_trajs = store_trajectories ? [Vector{typeof(lattice)}() for _ in 1:nrep] : nothing
+    println("Output containers: ", size(energy_trajs), " ", size(config_trajs))
 
-    # Equilibration
-    print(energies)
+    # ──────────────────────── Equilibration ────────────────────────
     for (i, T) in enumerate(re_params.temperatures)
-        _, cfgs, _ = nvt_monte_carlo(configs[i], h, T, re_params.equilibrium_steps, re_params.random_seed)
-        configs[i] = deepcopy(cfgs[end])
+        _, cfgs, _ = nvt_monte_carlo(configs[i], h, T, re_params.equilibrium_steps, re_params.random_seed*rand(Int))  # TODO: not reproducible
+        configs[i] = cfgs[end]
         energies[i] = interacting_energy(configs[i], h).val
     end
-    print(energies)
+    println("Equilibrated energies: ", energies)
 
-    return configs
+    # ───────────────────────── Production ─────────────────────────
+    attempted_swaps = 0
+    accepted_swaps = 0
+
+    for _ in 1:nsteps
+        # 1. Local moves in every replica
+        for (i, T) in enumerate(re_params.temperatures)
+            _, cfgs, _ = nvt_monte_carlo(configs[i], h, T, swapint, re_params.random_seed)
+            configs[i] = cfgs[end]
+            energies[i] = interacting_energy(configs[i], h).val
+
+            if store_trajectories
+                append!(energy_trajs[i], [interacting_energy(c, h).val for c in cfgs])
+                append!(config_trajs[i], cfgs)
+            end
+        end
+
+        # 2. Attempt exchanges between neighbouring replicas
+        for i in 1:nrep - 1
+            kb = 8.617_333_262e-5  # eV K-1  # TODO: use Constants.jl
+            βᵢ = 1 / (kb * re_params.temperatures[i])
+            βⱼ = 1 / (kb * re_params.temperatures[i + 1])
+            Δ = (βᵢ - βⱼ) * (energies[i + 1] - energies[i])
+
+            attempted_swaps += 1
+            if Δ ≤ 0 || rand() < exp(-Δ)
+                energies[i], energies[i + 1] = energies[i + 1], energies[i]
+                configs[i], configs[i + 1] = configs[i + 1], configs[i]
+                accepted_swaps += 1
+                @debug "Swap accepted between replicas $i and $(i + 1)"
+            end
+        end
+    end
+
+    swap_acc_rate = accepted_swaps / max(attempted_swaps, 1)
+
+    if store_trajectories
+        return energy_trajs, config_trajs, swap_acc_rate
+    else
+        return energies, configs, swap_acc_rate
+    end
 end

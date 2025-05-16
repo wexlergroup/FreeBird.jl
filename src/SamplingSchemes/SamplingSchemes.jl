@@ -29,6 +29,7 @@ export NestedSamplingParameters
 export LatticeNestedSamplingParameters
 export WangLandauParameters
 export MetropolisMCParameters
+export ReplicaExchangeParameters
 
 # nested sampling related functions
 export sort_by_energy!, nested_sampling_step!
@@ -41,6 +42,7 @@ export MCRandomWalkMaxEParallel, MCRandomWalkCloneParallel
 export exact_enumeration
 export wang_landau
 export nvt_monte_carlo, monte_carlo_sampling
+export replica_exchange
 
 
 """

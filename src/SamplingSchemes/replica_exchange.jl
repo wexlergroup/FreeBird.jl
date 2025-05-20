@@ -15,13 +15,13 @@ mutable struct ReplicaExchangeParameters <: SamplingParameters
     equilibrium_steps::Int64
     sampling_steps::Int64
     swap_interval::Int64
-    random_seed::Int64
+    random_seed::Int64  # TODO: pass an AbstractRNG instead of an Int64
     function ReplicaExchangeParameters(
         temperatures;
         equilibrium_steps::Int64=10_000,
         sampling_steps::Int64=10_000,
         swap_interval::Int64=100,
-        random_seed::Int64=1234
+        random_seed::Int64=1234  # TODO: pass an AbstractRNG instead of an Int64
     )
         new(temperatures, equilibrium_steps, sampling_steps, swap_interval, random_seed)
     end
@@ -78,7 +78,8 @@ function replica_exchange(
 
     # ──────────────────────── Equilibration ────────────────────────
     for (i, T) in enumerate(re_params.temperatures)
-        _, cfgs, _ = nvt_monte_carlo(configs[i], h, T, re_params.equilibrium_steps, re_params.random_seed*rand(Int))  # TODO: not reproducible
+        seed = Int(hash((re_params.random_seed, i)) % typemax(Int))  # Int64, non-negative, 0 ≤ seed < 2^63  # TODO: accept any integer (Int, UInt, BigInt)?
+        _, cfgs, _ = nvt_monte_carlo(configs[i], h, T, re_params.equilibrium_steps, seed)  # TODO: reproducible?
         configs[i] = cfgs[end]
         energies[i] = interacting_energy(configs[i], h).val
     end

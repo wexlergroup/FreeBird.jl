@@ -42,6 +42,10 @@ Perform the replica exchange sampling scheme for a lattice system.
 - `re_params::ReplicaExchangeParameters`: The parameters for the replica exchange sampling scheme.
 
 # Returns
+# If `store_trajectories` is `true`, returns `(energy_trajs, config_trajs,
+# assignment_trajs, swap_acc_rate)` where `assignment_trajs` contains the
+# temperature index associated with each saved configuration.
+# Otherwise returns `(energies, configs, swap_acc_rate)`.
 """
 function replica_exchange(
     lattice::AbstractLattice,
@@ -60,12 +64,17 @@ function replica_exchange(
     # Per‑replica state: configurations and energies
     configs = [generate_random_new_lattice_sample!(deepcopy(lattice)) for _ in 1:nrep]
     energies = [interacting_energy(configs[i], h).val for i in 1:nrep]
+    config_ids = collect(1:nrep)  # Track identity of each configuration
     println("Initial energies: ", energies)
 
     # Output containers
     energy_trajs = store_trajectories ? [Float64[] for _ in 1:nrep] : nothing
     config_trajs = store_trajectories ? [Vector{typeof(lattice)}() for _ in 1:nrep] : nothing
-    println("Output containers: ", size(energy_trajs), " ", size(config_trajs))
+    assignment_trajs = store_trajectories ? [Int[] for _ in 1:nrep] : nothing
+    println(
+        "Output containers: ",
+        size(energy_trajs), " ", size(config_trajs), " ", size(assignment_trajs)
+    )
 
     # ──────────────────────── Equilibration ────────────────────────
     for (i, T) in enumerate(re_params.temperatures)
@@ -82,6 +91,7 @@ function replica_exchange(
     for _ in 1:nsteps
         # 1. Local moves in every replica
         for (i, T) in enumerate(re_params.temperatures)
+            cid = config_ids[i]
             _, cfgs, _ = nvt_monte_carlo(configs[i], h, T, swapint, re_params.random_seed)
             configs[i] = cfgs[end]
             energies[i] = interacting_energy(configs[i], h).val
@@ -89,6 +99,9 @@ function replica_exchange(
             if store_trajectories
                 append!(energy_trajs[i], [interacting_energy(c, h).val for c in cfgs])
                 append!(config_trajs[i], cfgs)
+                # append!(energy_trajs[cid], [interacting_energy(c, h).val for c in cfgs])
+                # append!(config_trajs[cid], cfgs)
+                append!(assignment_trajs[cid], fill(i, length(cfgs)))
             end
         end
 
@@ -103,6 +116,7 @@ function replica_exchange(
             if Δ ≤ 0 || rand() < exp(-Δ)
                 energies[i], energies[i + 1] = energies[i + 1], energies[i]
                 configs[i], configs[i + 1] = configs[i + 1], configs[i]
+                config_ids[i], config_ids[i + 1] = config_ids[i + 1], config_ids[i]
                 accepted_swaps += 1
                 @debug "Swap accepted between replicas $i and $(i + 1)"
             end
@@ -112,7 +126,7 @@ function replica_exchange(
     swap_acc_rate = accepted_swaps / max(attempted_swaps, 1)
 
     if store_trajectories
-        return energy_trajs, config_trajs, swap_acc_rate
+        return energy_trajs, config_trajs, assignment_trajs, swap_acc_rate
     else
         return energies, configs, swap_acc_rate
     end

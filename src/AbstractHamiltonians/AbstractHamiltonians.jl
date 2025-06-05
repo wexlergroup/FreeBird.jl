@@ -9,10 +9,13 @@ using Unitful
 using StaticArrays
 using StaticArrays
 
+export AbstractHamiltonian
 export ClassicalHamiltonian
 export GenericLatticeHamiltonian, MLatticeHamiltonian
 
-abstract type ClassicalHamiltonian end
+abstract type AbstractHamiltonian end
+
+abstract type ClassicalHamiltonian <: AbstractHamiltonian end
 
 
 """

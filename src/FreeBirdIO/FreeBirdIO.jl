@@ -402,4 +402,20 @@ function generate_initial_configs(num_walkers::Int, volume_per_particle::Float64
     [generate_random_starting_config(volume_per_particle, num_particle; particle_type=particle_type) for _ in 1:num_walkers]
 end
 
+
+"""
+    generate_initial_configs(num_walkers::Int, volume_per_particle::Float64, num_particle::Vector{Int}; particle_types::Vector{Symbol}=[Symbol(:H), Symbol(:O)])
+Generate initial configurations for a given number of walkers with multiple particle types.
+# Arguments
+- `num_walkers::Int`: The number of walkers.
+- `volume_per_particle::Float64`: The volume per particle.
+- `num_particle::Vector{Int}`: A vector containing the number of particles of each type.
+- `particle_types::Vector{Symbol}=[Symbol(:H), Symbol(:O)]`: A vector of symbols representing the types of particles (default is hydrogen and oxygen).
+# Returns
+An array of initial configurations for each walker, where each configuration contains particles of the specified types.
+"""
+function generate_initial_configs(num_walkers::Int, volume_per_particle::Float64, num_particle::Vector{Int}; particle_types::Vector{Symbol}=[Symbol(:H), Symbol(:O)])
+    [generate_multi_type_random_starting_config(volume_per_particle, num_particle; particle_types=particle_types) for _ in 1:num_walkers]
+end
+
 end # module

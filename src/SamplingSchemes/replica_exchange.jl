@@ -76,10 +76,12 @@ function replica_exchange(
     energy_trajs = store_trajectories ? [Float64[] for _ in 1:nrep] : nothing
     config_trajs = store_trajectories ? [Vector{typeof(lattice)}() for _ in 1:nrep] : nothing
     assignment_trajs = store_trajectories ? [Int[] for _ in 1:nrep] : nothing
-    println(
-        "Output containers: ",
-        size(energy_trajs), " ", size(config_trajs), " ", size(assignment_trajs)
-    )
+    if store_trajectories
+        println(
+            "Output containers: ",
+            size(energy_trajs), " ", size(config_trajs), " ", size(assignment_trajs)
+        )
+    end
 
     # ──────────────────────── Equilibration ────────────────────────
     # for (i, T) in enumerate(re_params.temperatures)

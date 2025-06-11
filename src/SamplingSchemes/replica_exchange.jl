@@ -92,7 +92,7 @@ function replica_exchange(
     # end
     # parallel version using Distributed
     # spawn a task on each worker to perform the equilibration
-    equilibrating =  [@spawnat i nvt_monte_carlo(configs[i], h, T, re_params.equilibrium_steps, re_params.random_seed) for (i, T) in enumerate(re_params.temperatures)]
+    equilibrating =  [@spawnat workers()[i] nvt_monte_carlo(configs[i], h, T, re_params.equilibrium_steps, re_params.random_seed) for (i, T) in enumerate(re_params.temperatures)]
     # fetch the results from the tasks
     equilibrated = fetch.(equilibrating)
     # finalize the tasks and extract the last configuration and energy
@@ -123,7 +123,7 @@ function replica_exchange(
         #         append!(assignment_trajs[cid], fill(i, length(cfgs)))
         #     end
         # end
-        mc_walking = [@spawnat i nvt_monte_carlo(configs[i], h, T, swapint, re_params.random_seed) for (i, T) in enumerate(re_params.temperatures)]
+        mc_walking = [@spawnat workers()[i] nvt_monte_carlo(configs[i], h, T, swapint, re_params.random_seed) for (i, T) in enumerate(re_params.temperatures)]
         # fetch the results from the tasks
         mc_results = fetch.(mc_walking)
         # finalize the tasks and extract the last configuration and energy

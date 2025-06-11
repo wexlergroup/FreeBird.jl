@@ -61,6 +61,11 @@ function replica_exchange(
     swapint = re_params.swap_interval
     println("Replica exchange sampling with $nrep replicas, $nsteps steps, and swap interval of $swapint.")
 
+    # add workers for parallel processing
+    if nrep > nworkers()
+        @error "Number of replicas ($nrep) exceeds number of available workers ($(nworkers())). Please add more workers or reduce the number of replicas."
+    end
+
     # Per‑replica state: configurations and energies
     configs = [generate_random_new_lattice_sample!(deepcopy(lattice)) for _ in 1:nrep]
     energies = [interacting_energy(configs[i], h).val for i in 1:nrep]
@@ -77,9 +82,20 @@ function replica_exchange(
     )
 
     # ──────────────────────── Equilibration ────────────────────────
-    for (i, T) in enumerate(re_params.temperatures)
-        seed = Int(hash((re_params.random_seed, i)) % typemax(Int))  # Int64, non-negative, 0 ≤ seed < 2^63  # TODO: accept any integer (Int, UInt, BigInt)?
-        _, cfgs, _ = nvt_monte_carlo(configs[i], h, T, re_params.equilibrium_steps, seed)  # TODO: reproducible?
+    # for (i, T) in enumerate(re_params.temperatures)
+    #     seed = Int(hash((re_params.random_seed, i)) % typemax(Int))  # Int64, non-negative, 0 ≤ seed < 2^63  # TODO: accept any integer (Int, UInt, BigInt)?
+    #     _, cfgs, _ = nvt_monte_carlo(configs[i], h, T, re_params.equilibrium_steps, seed)  # TODO: reproducible?
+    #     configs[i] = cfgs[end]
+    #     energies[i] = interacting_energy(configs[i], h).val
+    # end
+    # parallel version using Distributed
+    # spawn a task on each worker to perform the equilibration
+    equilibrating =  [@spawnat i nvt_monte_carlo(configs[i], h, T, re_params.equilibrium_steps, re_params.random_seed) for (i, T) in enumerate(re_params.temperatures)]
+    # fetch the results from the tasks
+    equilibrated = fetch.(equilibrating)
+    # finalize the tasks and extract the last configuration and energy
+    finalize.(equilibrating)
+    for (i, (_, cfgs, _)) in enumerate(equilibrated)
         configs[i] = cfgs[end]
         energies[i] = interacting_energy(configs[i], h).val
     end
@@ -91,18 +107,34 @@ function replica_exchange(
 
     for _ in 1:nsteps
         # 1. Local moves in every replica
-        for (i, T) in enumerate(re_params.temperatures)
+        # for (i, T) in enumerate(re_params.temperatures)
+        #     cid = config_ids[i]
+        #     _, cfgs, _ = nvt_monte_carlo(configs[i], h, T, swapint, re_params.random_seed)
+        #     configs[i] = cfgs[end]
+        #     energies[i] = interacting_energy(configs[i], h).val
+
+        #     if store_trajectories
+        #         append!(energy_trajs[i], [interacting_energy(c, h).val for c in cfgs])
+        #         append!(config_trajs[i], cfgs)
+        #         # append!(energy_trajs[cid], [interacting_energy(c, h).val for c in cfgs])
+        #         # append!(config_trajs[cid], cfgs)
+        #         append!(assignment_trajs[cid], fill(i, length(cfgs)))
+        #     end
+        # end
+        mc_walking = [@spawnat i nvt_monte_carlo(configs[i], h, T, swapint, re_params.random_seed) for (i, T) in enumerate(re_params.temperatures)]
+        # fetch the results from the tasks
+        mc_results = fetch.(mc_walking)
+        # finalize the tasks and extract the last configuration and energy
+        finalize.(mc_walking)
+        for (i, (_, configs_i, _)) in enumerate(mc_results)
             cid = config_ids[i]
-            _, cfgs, _ = nvt_monte_carlo(configs[i], h, T, swapint, re_params.random_seed)
-            configs[i] = cfgs[end]
+            configs[i] = configs_i[end]
             energies[i] = interacting_energy(configs[i], h).val
 
             if store_trajectories
-                append!(energy_trajs[i], [interacting_energy(c, h).val for c in cfgs])
-                append!(config_trajs[i], cfgs)
-                # append!(energy_trajs[cid], [interacting_energy(c, h).val for c in cfgs])
-                # append!(config_trajs[cid], cfgs)
-                append!(assignment_trajs[cid], fill(i, length(cfgs)))
+                append!(energy_trajs[i], [interacting_energy(c, h).val for c in configs_i])
+                append!(config_trajs[i], configs_i)
+                append!(assignment_trajs[cid], fill(i, length(configs_i)))
             end
         end
 

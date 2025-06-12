@@ -44,7 +44,8 @@ end
         h::ClassicalHamiltonian,
         temperature::Float64,
         num_steps::Int64,
-        random_seed::Int64
+        random_seed::Int64;
+        kb::Float64 = 8.617_333_262e-5  # eV K-1
     )
 
 Perform the NVT Monte Carlo algorithm to sample the lattice configurations.
@@ -58,6 +59,7 @@ should be in Kelvin, and the units of the energy should be in eV (defined in the
 - `temperature::Float64`: The temperature of the system.
 - `num_steps::Int64`: The number of Monte Carlo steps.
 - `random_seed::Int64`: The seed for the random number generator.
+- `kb::Float64`: The Boltzmann constant (default is 8.617333262e-5 eV K-1).
 
 # Returns
 - `energies::Vector{Float64}`: The energies of the system at each step.
@@ -69,7 +71,8 @@ function nvt_monte_carlo(
     h::ClassicalHamiltonian,
     temperature::Float64,
     num_steps::Int64,
-    random_seed::Int64
+    random_seed::Int64;
+    kb::Float64 = 8.617_333_262e-5  # eV K-1
 )
     # Set the random seed
     Random.seed!(random_seed)
@@ -93,7 +96,7 @@ function nvt_monte_carlo(
         proposed_energy = interacting_energy(proposed_lattice, h).val
 
         # Metropolis-Hastings acceptance criterion
-        kb = 8.617_333_262e-5  # eV K-1
+        # kb = 8.617_333_262e-5  # eV K-1
 
         ΔE = proposed_energy - current_energy
         if ΔE < 0 || rand() < exp(-ΔE / (kb * temperature))
@@ -110,14 +113,42 @@ function nvt_monte_carlo(
     return energies, configurations, accepted_steps
 end
 
+"""
+    nvt_monte_carlo(
+        walker::AtomWalker,
+        pot::AbstractPotential,
+        temperature::Float64,
+        num_steps::Int64,
+        step_size::Float64,
+        random_seed::Int64;
+        kb::Float64 = 8.617_333_262e-5  # eV K-1
+    )
 
+Perform the NVT Monte Carlo algorithm to sample the atom walker configurations.
+Note: The Boltzmann constant is set to 8.617333262e-5 eV K\$^{-1}\$. Thus, the units of the temperature
+should be in Kelvin, and the units of the energy should be in eV (defined in the Hamiltonian).
+
+# Arguments
+- `walker::AtomWalker`: The initial atom walker configuration.
+- `pot::AbstractPotential`: The potential energy function for the atoms.
+- `temperature::Float64`: The temperature of the system.
+- `num_steps::Int64`: The number of Monte Carlo steps.
+- `step_size::Float64`: The step size for the random walk.
+- `random_seed::Int64`: The seed for the random number generator.
+- `kb::Float64`: The Boltzmann constant (default is 8.617333262e-5 eV K-1).
+
+# Returns
+- `energies::Vector{typeof(walker.energy)}`: The energies of the system at each step.
+- `configurations::Vector{typeof(walker)}`: The configurations of the system at each step.
+"""
 function nvt_monte_carlo(
     walker::AtomWalker,
-    lj::LennardJonesParametersSets,
+    pot::AbstractPotential,
     temperature::Float64,
     num_steps::Int64,
     step_size::Float64,
-    random_seed::Int64
+    random_seed::Int64;
+    kb::Float64 = 8.617_333_262e-5  # eV K-1
 )
     # Set the random seed
     Random.seed!(random_seed)
@@ -129,16 +160,16 @@ function nvt_monte_carlo(
     accepted_steps = 0
 
     current_walker = deepcopy(walker)
-    current_energy = interacting_energy(current_walker.configuration, lj, current_walker.list_num_par, current_walker.frozen) + current_walker.energy_frozen_part
+    current_energy = interacting_energy(current_walker.configuration, pot, current_walker.list_num_par, current_walker.frozen) + current_walker.energy_frozen_part
     
     for i in 1:num_steps
         proposed_walker = deepcopy(current_walker)
         # move the atoms by 1% of the average cell size
-        proposed_walker, ΔE = single_atom_random_walk!(proposed_walker, lj, step_size)
+        proposed_walker, ΔE = single_atom_random_walk!(proposed_walker, pot, step_size)
         # Calculate the proposed energy
         proposed_energy = current_energy + ΔE
         # Metropolis-Hastings acceptance criterion
-        kb = 8.617_333_262e-5  # eV K-1
+        # kb = 8.617_333_262e-5  # eV K-1
         # ΔE = proposed_energy - current_energy
         if ΔE < 0*e_unit || rand() < exp(-ΔE.val / (kb * temperature))
             current_walker.configuration = proposed_walker.configuration
@@ -156,7 +187,8 @@ end
     monte_carlo_sampling(
         lattice::AbstractLattice,
         h::ClassicalHamiltonian,
-        mc_params::MetropolisMCParameters
+        mc_params::MetropolisMCParameters;
+        kb::Float64 = 8.617333262e-5 # eV/K
     )
 
 Perform the Metropolis Monte Carlo sampling algorithm for a range of temperatures.
@@ -168,6 +200,7 @@ should be in Kelvin, and the units of the energy should be in eV (defined in the
 - `lattice::AbstractLattice`: The initial lattice configuration.
 - `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
 - `mc_params::MetropolisMCParameters`: The parameters for the Metropolis Monte Carlo algorithm.
+- `kb::Float64`: The Boltzmann constant in eV/K (default is 8.617333262e-5 eV/K).
 
 # Returns
 - `energies::Vector{Float64}`: The energies of the system at each temperature.
@@ -178,14 +211,15 @@ should be in Kelvin, and the units of the energy should be in eV (defined in the
 function monte_carlo_sampling(
     lattice::AbstractLattice,
     h::ClassicalHamiltonian,
-    mc_params::MetropolisMCParameters
+    mc_params::MetropolisMCParameters;
+    kb::Float64 = 8.617333262e-5 # eV/K
 )
     energies = Vector{Float64}(undef, length(mc_params.temperatures))
     cvs = Vector{Float64}(undef, length(mc_params.temperatures))
     acceptance_rates = Vector{Float64}(undef, length(mc_params.temperatures))
     configs = Vector{typeof(lattice)}(undef, length(mc_params.temperatures))
 
-    kb = 8.617333262e-5 # eV/K
+    # kb = 8.617333262e-5 # eV/K
 
     for (i, temp) in enumerate(mc_params.temperatures)
 
@@ -241,7 +275,8 @@ end
     monte_carlo_sampling(
         at::AtomWalker,
         lj::LennardJonesParametersSets,
-        mc_params::MetropolisMCParameters
+        mc_params::MetropolisMCParameters;
+        kb::Float64 = 8.617333262e-5 # eV/K
     )
 
 Perform the Metropolis Monte Carlo sampling algorithm for a range of temperatures.
@@ -263,14 +298,15 @@ should be in Kelvin, and the units of the energy should be in eV.
 function monte_carlo_sampling(
     at::AtomWalker,
     lj::LennardJonesParametersSets,
-    mc_params::MetropolisMCParameters
+    mc_params::MetropolisMCParameters;
+    kb::Float64 = 8.617333262e-5 # eV/K
 )
     energies = Vector{Float64}(undef, length(mc_params.temperatures))
     cvs = Vector{Float64}(undef, length(mc_params.temperatures))
     acceptance_rates = Vector{Float64}(undef, length(mc_params.temperatures))
     configs = Vector{typeof(at)}(undef, length(mc_params.temperatures))
 
-    kb = 8.617333262e-5 # eV/K
+    # kb = 8.617333262e-5 # eV/K
 
     for (i, temp) in enumerate(mc_params.temperatures)
 

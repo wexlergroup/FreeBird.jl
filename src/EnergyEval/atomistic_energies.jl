@@ -28,21 +28,36 @@ function pbc_dist(pos1::Union{SVector{T},Vector{T}},
     return sqrt(distsq)
 end
 
-"""
-    inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, lj::LJParameters)
 
-Compute the energy between two components of a system using the Lennard-Jones potential.
+
+"""
+    pair_energy(r::typeof(1.0u"Å"), lj::LJParameters)
+Compute the energy of a pair of particles separated by distance `r` using the Lennard-Jones potential.
+# Arguments
+- `r::typeof(1.0u"Å")`: The distance between the two particles.
+- `lj::LJParameters`: The Lennard-Jones parameters.
+# Returns
+- `energy::typeof(0.0u"eV")`: The energy of the pair of particles.
+
+"""
+pair_energy(r::typeof(1.0u"Å"), lj::LJParameters) = lj_energy(r, lj)
+
+
+"""
+    inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, pot::AbstractPotential)
+
+Compute the energy between two components of a system using a specified (pairwise) potential.
 
 # Arguments
 - `at1::AbstractSystem`: The first component of the system.
 - `at2::AbstractSystem`: The second component of the system.
-- `lj::LJParameters`: The Lennard-Jones parameters.
+- `pot::AbstractPotential`: The potential used to compute the energy.
 
 # Returns
 - `energy`: The energy between the two components.
 
 """
-function inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, lj::LJParameters)
+function inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, pot::AbstractPotential)
     # build pairs of particles
     pairs = [(i, j) for i in 1:length(at1), j in 1:length(at2)]
     # @show pairs # DEBUG
@@ -51,26 +66,26 @@ function inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, lj::LJ
         # @show i,j # DEBUG
         (i, j) = pairs[k]
         r = pbc_dist(position(at1, i), position(at2, j), at1)
-        energy[k] = lj_energy(r,lj)
+        energy[k] = pair_energy(r, pot)
     end
     # energy = energy*u"eV"
     return sum(energy)
 end
 
 """
-    intra_component_energy(at::AbstractSystem, lj::LJParameters)
+    intra_component_energy(at::AbstractSystem, pot::AbstractPotential)
 
-Compute the energy within a component of a system using the Lennard-Jones potential.
+Compute the energy within a component of a system using a specified (pairwise) potential.
 
 # Arguments
 - `at::AbstractSystem`: The component of the system.
-- `lj::LJParameters`: The Lennard-Jones parameters.
+- `pot::AbstractPotential`: The potential used to compute the energy.
 
 # Returns
 - `energy`: The energy within the component.
 
 """
-function intra_component_energy(at::AbstractSystem, lj::LJParameters)
+function intra_component_energy(at::AbstractSystem, pot::AbstractPotential)
     # num_pairs = length(at) * (length(at) - 1) ÷ 2
     pairs = Array{Tuple{Int,Int}, 1}()
     for i in 1:length(at)
@@ -83,7 +98,7 @@ function intra_component_energy(at::AbstractSystem, lj::LJParameters)
     Threads.@threads for k in eachindex(pairs)
         (i, j) = pairs[k]
         r = pbc_dist(position(at, i), position(at, j), at)
-        energies[k] = lj_energy(r,lj)
+        energies[k] = pair_energy(r, pot)
         # @info "interacting pair: [$(i),$(j)] $(lj_energy(r,lj))"
     end
     return sum(energies)

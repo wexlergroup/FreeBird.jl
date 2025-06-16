@@ -42,6 +42,10 @@ Compute the energy of a pair of particles separated by distance `r` using the Le
 """
 pair_energy(r::typeof(1.0u"Å"), lj::LJParameters) = lj_energy(r, lj)
 
+pair_energy(p1, p2, lj::SMD_LJParameters) = lj_energy(p1, p2, lj)
+    
+ 
+
 
 """
     inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, pot::AbstractPotential)
@@ -104,6 +108,24 @@ function intra_component_energy(at::AbstractSystem, pot::AbstractPotential)
     return sum(energies)
 end
 
+function intra_component_energy(at::AbstractSystem, pot::SMD_LJParameters)
+    # num_pairs = length(at) * (length(at) - 1) ÷ 2
+    pairs = Array{Tuple{Int,Int}, 1}()
+    for i in 1:length(at)
+        for j in (i+1):length(at)
+            push!(pairs, (i, j))
+        end
+    end
+    # @info "num_pairs: $num_pairs, length(pairs): $(length(pairs))"
+    energies = Vector{typeof(0.0u"eV")}(undef, length(pairs))
+    Threads.@threads for k in eachindex(pairs)
+        (i, j) = pairs[k]
+        r = pbc_dist(position(at, i), position(at, j), at)
+        energies[k] = pair_energy(position(at, i), position(at, j), pot)
+        # @info "interacting pair: [$(i),$(j)] $(lj_energy(r,lj))"
+    end
+    return sum(energies)
+end
 
 
 """
@@ -296,7 +318,7 @@ The energy is calculated by summing the pairwise interactions between the free p
 
 """
 interacting_energy(at::AbstractSystem, lj::LJParameters) = intra_component_energy(at, lj)
-
+interacting_energy(at::AbstractSystem, lj::SMD_LJParameters) = intra_component_energy(at, lj)
 """
     single_site_energy(index::Int, at::AbstractSystem, lj::LJParameters)
     single_site_energy(index::Int, at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int})
@@ -327,6 +349,21 @@ function single_site_energy(index::Int,
     Threads.@threads for i in eachindex(all_index)
         r = pbc_dist(position(at, index), position(at, all_index[i]), at)
         energies[i] = lj_energy(r,lj)
+    end
+    return sum(energies)
+end
+function single_site_energy(index::Int,
+                            at::AbstractSystem, 
+                            lj::SMD_LJParameters,
+                            list_num_par::Vector{Int}
+                            )
+    
+    all_index = collect(1:length(at))
+    popat!(all_index, index)
+    energies = Array{typeof(0.0u"eV"), 1}(undef, length(all_index))
+    Threads.@threads for i in eachindex(all_index)
+        #r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+        energies[i] = pair_energy(position(at, index), position(at, all_index[i]),lj)
     end
     return sum(energies)
 end

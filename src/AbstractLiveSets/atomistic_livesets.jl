@@ -16,7 +16,11 @@ Assigns the energy to the given `walker` using the Lennard-Jones parameters `lj`
 """
 function assign_energy!(walker::AtomWalker, lj::LennardJonesParametersSets)
     # walker.energy_frozen_part = frozen_energy(walker.configuration, lj, walker.list_num_par, walker.frozen)
-    walker.energy = interacting_energy(walker.configuration, lj, walker.list_num_par, walker.frozen) + walker.energy_frozen_part
+    if lj isa SMD_LJParameters
+        walker.energy = interacting_energy(walker.configuration, lj)
+    else
+        walker.energy = interacting_energy(walker.configuration, lj, walker.list_num_par, walker.frozen) + walker.energy_frozen_part
+    end
     return walker
 end
 
@@ -58,7 +62,9 @@ struct LJAtomWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
     lj_potential::LennardJonesParametersSets
     function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParametersSets; assign_energy=true, const_frozen_part=true) where C
-        if const_frozen_part && !isempty(walkers)
+        if lj_potential isa SMD_LJParameters
+            frozen_part_energy = 0.0 * unit(lj_potential.epsilon)
+        elseif const_frozen_part && !isempty(walkers) 
             frozen_part_energy = frozen_energy(walkers[1].configuration, lj_potential, walkers[1].list_num_par, walkers[1].frozen)
         end
         if assign_energy

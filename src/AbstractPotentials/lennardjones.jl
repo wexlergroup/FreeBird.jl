@@ -20,6 +20,16 @@ struct LJParameters <: LennardJonesParametersSets
     shift::typeof(0.0u"eV")
 end
 
+struct SMD_LJParameters <: LennardJonesParametersSets
+    epsilon::typeof(1.0u"eV")
+    sigma::typeof(1.0u"Å")
+    cutoff::Float64
+    shift::typeof(0.0u"eV")
+    C1::typeof(0.0u"Å^6 * eV")
+    C2::typeof(0.0u"Å^6 * eV")
+    i_plane::typeof(1.0u"Å")
+end
+
 """
     LJParameters(;epsilon=1.0, sigma=1.0, cutoff=Inf, shift=true)
 A constructor for the LJParameters struct with default values for the 
@@ -85,6 +95,17 @@ function lj_energy(epsilon::typeof(1.0u"eV"), sigma::typeof(1.0u"Å"), r::typeof
     return 4 * epsilon * (r12 - r6)
 end
 
+function smd_energy(pos1, pos2, C1, C2, i_plane)
+    v1 = pos1 - pos2
+    d1 = norm(v1)
+    
+
+    v2 = v1 - [0u"Å", 0u"Å", 2 * (pos1[3] - i_plane)]
+    d2 = norm(v2)
+
+    return C1 * ((8 - 6 * ((v1[3]/d1)^2 + (v2[3]/d2)^2)) / (6 * (d1 * d2)^3)) - C2 * (1/ (d2) ^6)
+end
+
 
 """
     lj_energy(r::typeof(1.0u"Å"), lj::LJParameters)
@@ -107,7 +128,16 @@ function lj_energy(r::typeof(1.0u"Å"), lj::LJParameters)
     end
 end
 
-
+function lj_energy(p1,p2, lj::SMD_LJParameters)
+    r = norm(p1 - p2)
+    if r > lj.cutoff * lj.sigma
+        return 0.0u"eV"
+    else
+        lje = lj_energy(lj.epsilon, lj.sigma, r) - lj.shift
+        smd = smd_energy(p1, p2, lj.C1, lj.C2, lj.i_plane)
+        return smd + lje
+    end
+end
 
 """
     struct CompositeLJParameters{C} <: LennardJonesParametersSets

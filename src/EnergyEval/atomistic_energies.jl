@@ -28,7 +28,25 @@ function pbc_dist(pos1::Union{SVector{T},Vector{T}},
     return sqrt(distsq)
 end
 
-
+function pbc_vect(pos1::Union{SVector{T},Vector{T}},
+                  pos2::Union{SVector{T},Vector{T}},
+                  at::AbstractSystem) where {T}
+    pbc = periodicity(at)
+    box = cell_vectors(at)
+    vector = [0.0u"Å", 0.0u"Å", 0.0u"Å"]
+    for i in eachindex(pos1)
+        if pbc[i] == true
+            direction = 1
+            if pos1[i] < pos2[i]
+                direction = -1
+            end 
+            vector[i] = direction * min(abs(pos1[i] - pos2[i]), box[i][i] - abs(pos1[i] - pos2[i]))
+        elseif pbc[i] == false
+            vector[i] = pos1[i] - pos2[i]
+        end
+    end
+    return vector
+end
 
 """
     pair_energy(r::typeof(1.0u"Å"), lj::LJParameters)
@@ -42,7 +60,7 @@ Compute the energy of a pair of particles separated by distance `r` using the Le
 """
 pair_energy(r::typeof(1.0u"Å"), lj::LJParameters) = lj_energy(r, lj)
 
-pair_energy(p1, p2, lj::SMD_LJParameters) = lj_energy(p1, p2, lj)
+pair_energy(v1, h, lj::SMD_LJParameters) = lj_energy(v1, h, lj)
     
  
 
@@ -120,8 +138,9 @@ function intra_component_energy(at::AbstractSystem, pot::SMD_LJParameters)
     energies = Vector{typeof(0.0u"eV")}(undef, length(pairs))
     Threads.@threads for k in eachindex(pairs)
         (i, j) = pairs[k]
-        r = pbc_dist(position(at, i), position(at, j), at)
-        energies[k] = pair_energy(position(at, i), position(at, j), pot)
+        vect = pbc_vect(position(at, i), position(at, j), at)
+        h = position(at, i)[3] - pot.i_plane
+        energies[k] = pair_energy(vect, h, pot)
         # @info "interacting pair: [$(i),$(j)] $(lj_energy(r,lj))"
     end
     return sum(energies)
@@ -362,11 +381,39 @@ function single_site_energy(index::Int,
     popat!(all_index, index)
     energies = Array{typeof(0.0u"eV"), 1}(undef, length(all_index))
     Threads.@threads for i in eachindex(all_index)
-        #r = pbc_dist(position(at, index), position(at, all_index[i]), at)
-        energies[i] = pair_energy(position(at, index), position(at, all_index[i]),lj)
+        vect = pbc_vect(position(at, index), position(at, all_index[i]), at)
+        energies[i] = pair_energy(vect,lj)
     end
     return sum(energies)
 end
+
+# function single_site_energy(index::Int,
+#                             at::AbstractSystem, 
+#                             ljs::CompositeLJParameters{C},
+#                             list_num_par::Vector{Int},
+#                             ) where {C}
+#     comp_cut = vcat([0],cumsum(list_num_par))
+#     # @info "comp_cut: $comp_cut"
+#     comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:length(list_num_par)]
+#     # @info "comp_split: $comp_split"
+#     from_comp = findfirst(x->index in x, comp_split)
+#     # @info "from_comp: $from_comp"
+#     all_index = collect(1:length(at))
+#     popat!(all_index, index)
+#     energies = Array{typeof(0.0u"eV"), 1}(undef, length(all_index))
+#     Threads.@threads for i in eachindex(all_index)
+#         r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+#         if all_index[i] in comp_split[from_comp]
+#             energy = lj_energy(r,ljs.lj_param_sets[from_comp,from_comp])
+#             energies[i] = energy
+#         else
+#             to_comp = findfirst(x->all_index[i] in x, comp_split)
+#             energy = lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
+#             energies[i] = energy
+#         end
+#     end
+#     return sum(energies)
+# end
 
 function single_site_energy(index::Int,
                             at::AbstractSystem, 
@@ -383,13 +430,26 @@ function single_site_energy(index::Int,
     popat!(all_index, index)
     energies = Array{typeof(0.0u"eV"), 1}(undef, length(all_index))
     Threads.@threads for i in eachindex(all_index)
-        r = pbc_dist(position(at, index), position(at, all_index[i]), at)
         if all_index[i] in comp_split[from_comp]
-            energy = lj_energy(r,ljs.lj_param_sets[from_comp,from_comp])
+            if typeof(ljs.lj_param_sets[from_comp,from_comp]) == SMD_LJParameters
+                vect = pbc_vect(position(at, index), position(at, all_index[i]), at)
+                h = position(at, index)[3] - ljs.lj_param_sets[from_comp,from_comp].i_plane
+                energy = lj_energy(vect, h, ljs.lj_param_sets[from_comp,from_comp])
+            elseif typeof(ljs.lj_param_sets[from_comp,from_comp]) == LJParameters
+                r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+                energy = lj_energy(r,ljs.lj_param_sets[from_comp,from_comp])
+            end
             energies[i] = energy
         else
             to_comp = findfirst(x->all_index[i] in x, comp_split)
-            energy = lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
+            if typeof(ljs.lj_param_sets[from_comp,to_comp]) == SMD_LJParameters
+                vect = pbc_vect(position(at, index), position(at, all_index[i]), at)
+                h = position(at, index)[3] - ljs.lj_param_sets[from_comp,to_comp].i_plane
+                energy = lj_energy(vect, h, ljs.lj_param_sets[from_comp,to_comp])
+            elseif typeof(ljs.lj_param_sets[from_comp,to_comp]) == LJParameters
+                r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+                energy = lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
+            end
             energies[i] = energy
         end
     end

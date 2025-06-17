@@ -1,5 +1,5 @@
 abstract type LennardJonesParametersSets <: AbstractPotential end
-
+abstract type SingleLJParametersSet <: LennardJonesParametersSets end
 
 """
     struct LJParameters
@@ -13,14 +13,14 @@ The `LJParameters` struct represents the parameters for the Lennard-Jones potent
 - `shift::typeof(0.0u"eV")`: The energy shift applied to the potential, calculated at the cutoff distance.
 
 """
-struct LJParameters <: LennardJonesParametersSets
+struct LJParameters <: SingleLJParametersSet
     epsilon::typeof(1.0u"eV")
     sigma::typeof(1.0u"Å")
     cutoff::Float64
     shift::typeof(0.0u"eV")
 end
 
-struct SMD_LJParameters <: LennardJonesParametersSets
+struct SMD_LJParameters <: SingleLJParametersSet
     epsilon::typeof(1.0u"eV")
     sigma::typeof(1.0u"Å")
     cutoff::Float64
@@ -66,6 +66,14 @@ function LJParameters(;epsilon=1.0, sigma=1.0, cutoff=Inf, shift=true)
     return LJParameters(epsilon*u"eV", sigma*u"Å", cutoff, shiftenergy)
 end
 
+function SMD_LJParameters(;epsilon=1.0, sigma=1.0, cutoff=Inf, C1 = 0.0, C2 = 0.0, i_plane = 0.0, shift=true,)
+    if isa(shift,Bool) && shift
+        shiftenergy = lj_energy(Float64(epsilon)*u"eV", Float64(sigma)*u"Å", cutoff*Float64(sigma)*u"Å")  
+    else
+        shiftenergy = Float64(shift)*u"eV"
+    end
+    return SMD_LJParameters(epsilon*u"eV", sigma*u"Å", cutoff, shiftenergy, C1*u"Å^6*eV", C2*u"Å^6*eV", i_plane*u"Å")
+end
 
 """
     lj_energy(epsilon::typeof(1.0u"eV"), sigma::typeof(1.0u"Å"), r::typeof(1.0u"Å"))
@@ -95,14 +103,10 @@ function lj_energy(epsilon::typeof(1.0u"eV"), sigma::typeof(1.0u"Å"), r::typeof
     return 4 * epsilon * (r12 - r6)
 end
 
-function smd_energy(pos1, pos2, C1, C2, i_plane)
-    v1 = pos1 - pos2
+function smd_energy(v1, h::typeof(1.0u"Å"), C1::typeof(1.0u"Å^6*eV"), C2::typeof(1.0u"Å^6*eV"))
     d1 = norm(v1)
-    
-
-    v2 = v1 - [0u"Å", 0u"Å", 2 * (pos1[3] - i_plane)]
+    v2 = v1 - [0u"Å", 0u"Å", 2 * h]
     d2 = norm(v2)
-
     return C1 * ((8 - 6 * ((v1[3]/d1)^2 + (v2[3]/d2)^2)) / (6 * (d1 * d2)^3)) - C2 * (1/ (d2) ^6)
 end
 
@@ -128,13 +132,13 @@ function lj_energy(r::typeof(1.0u"Å"), lj::LJParameters)
     end
 end
 
-function lj_energy(p1,p2, lj::SMD_LJParameters)
-    r = norm(p1 - p2)
+function lj_energy(v1, h, lj::SMD_LJParameters)
+    r = norm(v1)
     if r > lj.cutoff * lj.sigma
         return 0.0u"eV"
     else
         lje = lj_energy(lj.epsilon, lj.sigma, r) - lj.shift
-        smd = smd_energy(p1, p2, lj.C1, lj.C2, lj.i_plane)
+        smd = smd_energy(v1, h, lj.C1, lj.C2)
         return smd + lje
     end
 end
@@ -151,9 +155,19 @@ CompositeLJParameters is a struct that represents a set of composite Lennard-Jon
 - `C::Int`: The number of composite parameter sets.
 
 """
+# struct CompositeLJParameters{C} <: LennardJonesParametersSets
+#     lj_param_sets::Matrix{LJParameters}
+#     function CompositeLJParameters{C}(lj_param_sets::Matrix{LJParameters}) where C
+#         if size(lj_param_sets) != (C, C)
+#             throw(ArgumentError("the size of the matrix is not compatible with the number of components."))
+#         end
+#         new{C}(lj_param_sets)
+#     end
+# end
+
 struct CompositeLJParameters{C} <: LennardJonesParametersSets
-    lj_param_sets::Matrix{LJParameters}
-    function CompositeLJParameters{C}(lj_param_sets::Matrix{LJParameters}) where C
+    lj_param_sets::Matrix{SingleLJParametersSet}
+    function CompositeLJParameters{C}(lj_param_sets::Matrix{SingleLJParametersSet}) where C
         if size(lj_param_sets) != (C, C)
             throw(ArgumentError("the size of the matrix is not compatible with the number of components."))
         end
@@ -215,7 +229,7 @@ CompositeLJParameters{3}(lj_param_sets::3x3 Matrix{LJParameters}):
     lj_param_sets[3, 3] : LJParameters(33.0 eV, 1.0 Å, Inf, 0.0 eV)
 ```
 """
-function CompositeLJParameters(c::Int, ljs::Vector{LJParameters})
+function CompositeLJParameters(c::Int, ljs::Vector{<:SingleLJParametersSet})
     if length(ljs) == c^2
         # If the number of LJParameters sets is equal to the number 
         # of elements in the matrix, then assume that Vector{LJParameters} 
@@ -231,7 +245,7 @@ function CompositeLJParameters(c::Int, ljs::Vector{LJParameters})
         @info "Creating CompositeLJParameters from the upper triangular part of the matrix.
         By specifying $length(ljs) sets of LJParameters, a $c x $c matrix is constructed.
         If this was not your intention, please check the documentation or raise an issue."
-        ljmatrix = Matrix{LJParameters}(undef, c, c)
+        ljmatrix = Matrix{SingleLJParametersSet}(undef, c, c)
         k = 1
         for i in 1:c
             for j in i:c

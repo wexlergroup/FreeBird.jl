@@ -12,6 +12,7 @@ export AbstractPotential
 export LJParameters, lj_energy
 export CompositeLJParameters
 export LennardJonesParametersSets
+export SingleLJParametersSet
 export SMD_LJParameters
 
 abstract type AbstractPotential end

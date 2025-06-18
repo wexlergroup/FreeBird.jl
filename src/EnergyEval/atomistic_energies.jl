@@ -190,6 +190,32 @@ function frozen_energy(at::AbstractSystem,
     return energy
 end
 
+function frozen_energy(at::AbstractSystem, 
+                       ljs::MixedParameters{C}, 
+                       list_num_par::Vector{Int},
+                       frozen::Vector{Bool}
+                       ) where {C}
+    check_num_components(C, list_num_par, frozen)
+    energy = 0.0u"eV"
+    components = split_components(at, list_num_par)
+    # intra-component interactions
+    for i in findall(frozen) # find frozen components
+        if length(components[i]) > 1
+            energy += intra_component_energy(components[i], ljs.lj_param_sets[i,i])
+        end
+    end
+    # inter-component interactions
+    for i in 1:C
+        for j in 1:C
+            if frozen[i] && frozen[j] && i != j # both frozen and different
+                # @info "component $i and $j"
+                energy += inter_component_energy(components[i], components[j], ljs.lj_param_sets[i,j])
+            end
+        end
+    end
+    return energy
+end
+
 """
     frozen_energy(at::AbstractSystem, lj::LJParameters, list_num_par::Vector{Int}, frozen::Vector{Bool})
 
@@ -254,6 +280,32 @@ The energy is calculated by summing the pairwise interactions between the free p
 """
 function interacting_energy(at::AbstractSystem, 
                             ljs::CompositeLJParameters{C}, 
+                            list_num_par::Vector{Int},
+                            frozen::Vector{Bool}
+                            ) where {C}
+    check_num_components(C, list_num_par, frozen)
+    energy = 0.0u"eV"
+    components = split_components(at, list_num_par)
+    # intra-component interactions
+    for i in findall(.!frozen) # find non-frozen components
+        if length(components[i]) > 1
+            energy += intra_component_energy(components[i], ljs.lj_param_sets[i,i])
+        end
+    end
+    # inter-component interactions
+    for i in 1:C
+        for j in (i+1):C
+            if !frozen[i] || !frozen[j] # not both frozen
+                # @info "component $i and $j"
+                energy += inter_component_energy(components[i], components[j], ljs.lj_param_sets[i,j])
+            end
+        end
+    end
+    return energy
+end
+
+function interacting_energy(at::AbstractSystem, 
+                            ljs::MixedParameters{C}, 
                             list_num_par::Vector{Int},
                             frozen::Vector{Bool}
                             ) where {C}
@@ -387,39 +439,39 @@ function single_site_energy(index::Int,
     return sum(energies)
 end
 
-# function single_site_energy(index::Int,
-#                             at::AbstractSystem, 
-#                             ljs::CompositeLJParameters{C},
-#                             list_num_par::Vector{Int},
-#                             ) where {C}
-#     comp_cut = vcat([0],cumsum(list_num_par))
-#     # @info "comp_cut: $comp_cut"
-#     comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:length(list_num_par)]
-#     # @info "comp_split: $comp_split"
-#     from_comp = findfirst(x->index in x, comp_split)
-#     # @info "from_comp: $from_comp"
-#     all_index = collect(1:length(at))
-#     popat!(all_index, index)
-#     energies = Array{typeof(0.0u"eV"), 1}(undef, length(all_index))
-#     Threads.@threads for i in eachindex(all_index)
-#         r = pbc_dist(position(at, index), position(at, all_index[i]), at)
-#         if all_index[i] in comp_split[from_comp]
-#             energy = lj_energy(r,ljs.lj_param_sets[from_comp,from_comp])
-#             energies[i] = energy
-#         else
-#             to_comp = findfirst(x->all_index[i] in x, comp_split)
-#             energy = lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
-#             energies[i] = energy
-#         end
-#     end
-#     return sum(energies)
-# end
-
 function single_site_energy(index::Int,
                             at::AbstractSystem, 
                             ljs::CompositeLJParameters{C},
                             list_num_par::Vector{Int},
                             ) where {C}
+    comp_cut = vcat([0],cumsum(list_num_par))
+    # @info "comp_cut: $comp_cut"
+    comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:length(list_num_par)]
+    # @info "comp_split: $comp_split"
+    from_comp = findfirst(x->index in x, comp_split)
+    # @info "from_comp: $from_comp"
+    all_index = collect(1:length(at))
+    popat!(all_index, index)
+    energies = Array{typeof(0.0u"eV"), 1}(undef, length(all_index))
+    Threads.@threads for i in eachindex(all_index)
+        r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+        if all_index[i] in comp_split[from_comp]
+            energy = lj_energy(r,ljs.lj_param_sets[from_comp,from_comp])
+            energies[i] = energy
+        else
+            to_comp = findfirst(x->all_index[i] in x, comp_split)
+            energy = lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
+            energies[i] = energy
+        end
+    end
+    return sum(energies)
+end
+
+function single_site_energy(index::Int,
+                            at::AbstractSystem, 
+                            ljs::MixedParameters{C},
+                            list_num_par::Vector{Int},
+                            ) where C
     comp_cut = vcat([0],cumsum(list_num_par))
     # @info "comp_cut: $comp_cut"
     comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:length(list_num_par)]
@@ -442,14 +494,8 @@ function single_site_energy(index::Int,
             energies[i] = energy
         else
             to_comp = findfirst(x->all_index[i] in x, comp_split)
-            if typeof(ljs.lj_param_sets[from_comp,to_comp]) == SMD_LJParameters
-                vect = pbc_vect(position(at, index), position(at, all_index[i]), at)
-                h = position(at, index)[3] - ljs.lj_param_sets[from_comp,to_comp].i_plane
-                energy = lj_energy(vect, h, ljs.lj_param_sets[from_comp,to_comp])
-            elseif typeof(ljs.lj_param_sets[from_comp,to_comp]) == LJParameters
-                r = pbc_dist(position(at, index), position(at, all_index[i]), at)
-                energy = lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
-            end
+            r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+            energy = lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
             energies[i] = energy
         end
     end

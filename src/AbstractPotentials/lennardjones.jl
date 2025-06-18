@@ -155,19 +155,19 @@ CompositeLJParameters is a struct that represents a set of composite Lennard-Jon
 - `C::Int`: The number of composite parameter sets.
 
 """
-# struct CompositeLJParameters{C} <: LennardJonesParametersSets
-#     lj_param_sets::Matrix{LJParameters}
-#     function CompositeLJParameters{C}(lj_param_sets::Matrix{LJParameters}) where C
-#         if size(lj_param_sets) != (C, C)
-#             throw(ArgumentError("the size of the matrix is not compatible with the number of components."))
-#         end
-#         new{C}(lj_param_sets)
-#     end
-# end
-
 struct CompositeLJParameters{C} <: LennardJonesParametersSets
+    lj_param_sets::Matrix{LJParameters}
+    function CompositeLJParameters{C}(lj_param_sets::Matrix{LJParameters}) where C
+        if size(lj_param_sets) != (C, C)
+            throw(ArgumentError("the size of the matrix is not compatible with the number of components."))
+        end
+        new{C}(lj_param_sets)
+    end
+end
+
+struct MixedParameters{C} <: LennardJonesParametersSets
     lj_param_sets::Matrix{SingleLJParametersSet}
-    function CompositeLJParameters{C}(lj_param_sets::Matrix{SingleLJParametersSet}) where C
+    function MixedParameters{C}(lj_param_sets::Matrix{SingleLJParametersSet}) where C
         if size(lj_param_sets) != (C, C)
             throw(ArgumentError("the size of the matrix is not compatible with the number of components."))
         end
@@ -229,7 +229,40 @@ CompositeLJParameters{3}(lj_param_sets::3x3 Matrix{LJParameters}):
     lj_param_sets[3, 3] : LJParameters(33.0 eV, 1.0 Å, Inf, 0.0 eV)
 ```
 """
-function CompositeLJParameters(c::Int, ljs::Vector{<:SingleLJParametersSet})
+function MixedParameters(c::Int, ljs::Vector{<:SingleLJParametersSet})
+    if length(ljs) == c^2
+        # If the number of LJParameters sets is equal to the number 
+        # of elements in the matrix, then assume that Vector{LJParameters} 
+        # is a flattened matrix and reshape the vector into a matrix.
+        @info "Creating CompositeLJParameters from a flattened matrix. By specifying
+        $length(ljs) sets of LJParameters, a $c x $c matrix is constructed. If this 
+        was not your intention, please check the documentation or raise an issue."
+        return MixedParameters{c}(reshape(ljs, c, c))
+    elseif length(ljs) == c*(c+1)/2
+        # If the number of LJParameters sets is equal to the number
+        # of elements in the upper triangular part of the matrix, then
+        # construct the full matrix from the upper triangular part.
+        @info "Creating CompositeLJParameters from the upper triangular part of the matrix.
+        By specifying $length(ljs) sets of LJParameters, a $c x $c matrix is constructed.
+        If this was not your intention, please check the documentation or raise an issue."
+        ljmatrix = Matrix{SingleLJParametersSet}(undef, c, c)
+        k = 1
+        for i in 1:c
+            for j in i:c
+            ljmatrix[i, j] = ljs[k]
+            if i != j
+                ljmatrix[j, i] = ljs[k]
+            end
+            k += 1
+            end
+        end
+        return MixedParameters{c}(ljmatrix)
+    else
+        throw(ArgumentError("the number of LJParameters sets is not compatible with the number of components."))
+    end
+end
+
+function CompositeLJParameters(c::Int, ljs::Vector{LJParameters})
     if length(ljs) == c^2
         # If the number of LJParameters sets is equal to the number 
         # of elements in the matrix, then assume that Vector{LJParameters} 
@@ -245,7 +278,7 @@ function CompositeLJParameters(c::Int, ljs::Vector{<:SingleLJParametersSet})
         @info "Creating CompositeLJParameters from the upper triangular part of the matrix.
         By specifying $length(ljs) sets of LJParameters, a $c x $c matrix is constructed.
         If this was not your intention, please check the documentation or raise an issue."
-        ljmatrix = Matrix{SingleLJParametersSet}(undef, c, c)
+        ljmatrix = Matrix{LJParameters}(undef, c, c)
         k = 1
         for i in 1:c
             for j in i:c

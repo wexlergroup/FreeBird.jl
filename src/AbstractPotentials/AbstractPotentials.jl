@@ -9,10 +9,11 @@ using Unitful
 using LinearAlgebra
 
 export AbstractPotential
-export LJParameters, lj_energy
-export CompositeLJParameters
 export LennardJonesParametersSets
 export SingleLJParametersSet
+export CompositeLJParameters
+export MixedParameters
+export LJParameters, lj_energy
 export SMD_LJParameters
 
 abstract type AbstractPotential end

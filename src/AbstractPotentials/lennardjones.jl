@@ -103,7 +103,7 @@ function lj_energy(epsilon::typeof(1.0u"eV"), sigma::typeof(1.0u"Å"), r::typeof
     return 4 * epsilon * (r12 - r6)
 end
 
-function smd_energy(v1, h::typeof(1.0u"Å"), C1::typeof(1.0u"Å^6*eV"), C2::typeof(1.0u"Å^6*eV"))
+function smd_energy(v1::Vector{T}, h::typeof(1.0u"Å"), C1::typeof(1.0u"Å^6*eV"), C2::typeof(1.0u"Å^6*eV")) where T 
     d1 = norm(v1)
     v2 = v1 - [0u"Å", 0u"Å", 2 * h]
     d2 = norm(v2)
@@ -132,7 +132,7 @@ function lj_energy(r::typeof(1.0u"Å"), lj::LJParameters)
     end
 end
 
-function lj_energy(v1, h, lj::SMD_LJParameters)
+function lj_energy(v1::Vector{T}, h::typeof(1.0u"Å"), lj::SMD_LJParameters) where T
     r = norm(v1)
     if r > lj.cutoff * lj.sigma
         return 0.0u"eV"

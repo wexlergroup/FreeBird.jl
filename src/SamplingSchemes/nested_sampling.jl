@@ -298,24 +298,25 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     accepted_rates = [x[2] for x in walked]
     rate = mean(accepted_rates)
 
-    sort!(walked, by = x -> x[3].energy, rev=true)
-    filter!(x -> x[1], walked) # remove the failed ones
-
-    if isempty(walked)
-        emax = [missing]
-        ns_params.fail_count += nworkers()
-    else
-        for (i, at) in enumerate(walked)
-            ats[i] = at[3]
-        end
-        update_iter!(liveset)
-        ns_params.fail_count = 0
-        iter = liveset.walkers[1].iter
-        emax = emax[1:length(walked)]
+    if prod([x[1] for x in walked]) == 0 # if any of the walkers failed
+        ns_params.fail_count += 1
+        emax = missing
+        return iter, emax[end], liveset, ns_params
     end
 
+    # sort!(walked, by = x -> x[3].energy, rev=true)
+    # filter!(x -> x[1], walked) # remove the failed ones
+
+    for (i, at) in enumerate(walked)
+        ats[i] = at[3]
+    end
+    
+    update_iter!(liveset)
+    ns_params.fail_count = 0
+    iter = liveset.walkers[1].iter
+
     adjust_step_size(ns_params, rate)
-    return iter, emax, liveset, ns_params
+    return iter, emax[end], liveset, ns_params
 end
 
 """
@@ -540,46 +541,6 @@ function nested_sampling(liveset::AtomWalkers,
         elseif iter isa typeof(missing) && print_info
             @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
         end
-        write_df_every_n(df, i, save_strategy)
-        write_ls_every_n(liveset, i, save_strategy)
-    end
-    return df, liveset, ns_params
-end
-
-function nested_sampling(liveset::AtomWalkers, 
-                                ns_params::NestedSamplingParameters, 
-                                n_steps::Int64, 
-                                mc_routine::MCRoutineParallel,
-                                save_strategy::DataSavingStrategy)
-    df = DataFrame(iter=Int[], emax=Float64[])
-    for i in 1:n_steps # main loop
-        print_info = i % save_strategy.n_info == 0
-        write_walker_every_n(liveset.walkers[1], i, save_strategy)
-        iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
-        @debug "n_step $i, iter: $iter, emax: $emax"
-
-        if ns_params.fail_count >= ns_params.allowed_fail_count
-            @warn "Failed to accept MC move $(ns_params.allowed_fail_count) times in a row. Reset step size!"
-            ns_params.fail_count = 0
-            ns_params.step_size = ns_params.initial_step_size
-        end
-
-        if !(iter isa typeof(missing))
-            for (n, e) in enumerate(emax)
-                push!(df, (iter, e.val))
-                if print_info
-                    if i == 1
-                        @info "iter: $(liveset.walkers[1].iter)_$n, emax: $(e-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
-                    else
-                        T_est = estimate_temperature(length(liveset.walkers), nworkers(), df.emax[end] - df.emax[end-nworkers()])
-                        @info "iter: $(liveset.walkers[1].iter)_$n, emax: $(e-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4)), estimated T: $(T_est) K"
-                    end
-                end
-            end
-        elseif iter isa typeof(missing) && print_info
-            @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
-        end
-
         write_df_every_n(df, i, save_strategy)
         write_ls_every_n(liveset, i, save_strategy)
     end

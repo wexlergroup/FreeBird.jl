@@ -300,7 +300,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
 
     if prod([x[1] for x in walked]) == 0 # if any of the walkers failed
         ns_params.fail_count += 1
-        emax = missing
+        emax = [missing]
         return iter, emax[end], liveset, ns_params
     end
 
@@ -310,7 +310,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     for (i, at) in enumerate(walked)
         ats[i] = at[3]
     end
-    
+
     update_iter!(liveset)
     ns_params.fail_count = 0
     iter = liveset.walkers[1].iter

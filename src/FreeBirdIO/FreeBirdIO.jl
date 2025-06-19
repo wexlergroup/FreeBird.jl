@@ -244,7 +244,7 @@ will be used for the new systems.
 # Returns
 - `configs`: A vector of `FastSystem` objects containing the appended systems.
 """
-function append_system(ats1::FlexibleSystem, ats2::Vector{FlexibleSystem})
+function append_system(ats1::FlexibleSystem, ats2::Vector{T}) where T
     configs = Vector{FastSystem}(undef, length(ats2))
     Threads.@threads for i in eachindex(ats2)
         configs[i] = append_system(ats1, ats2[i])

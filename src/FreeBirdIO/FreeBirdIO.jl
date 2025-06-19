@@ -234,6 +234,25 @@ function append_system(ats1::FlexibleSystem, ats2::FlexibleSystem)
 end
 
 """
+    append_system(ats1::FlexibleSystem, ats2::Vector{FlexibleSystem})
+Append a `FlexibleSystem` object to a vector of `FlexibleSystem` objects.
+The first argument is the system to be appended to, and its bounding box and boundary conditions
+will be used for the new systems.
+# Arguments
+- `ats1::FlexibleSystem`: The base system to be appended.
+- `ats2::Vector{FlexibleSystem}`: A vector of `FlexibleSystem` objects to append.
+# Returns
+- `configs`: A vector of `FastSystem` objects containing the appended systems.
+"""
+function append_system(ats1::FlexibleSystem, ats2::Vector{FlexibleSystem})
+    configs = Vector{FastSystem}(undef, length(ats2))
+    Threads.@threads for i in eachindex(ats2)
+        configs[i] = append_system(ats1, ats2[i])
+    end
+    return configs
+end
+
+"""
     write_single_walker(filename::String, at::AtomWalker)
 
 Write a single AtomWalker object to a file.

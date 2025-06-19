@@ -62,7 +62,7 @@ struct LJAtomWalkers <: AtomWalkers
             frozen_part_energy = frozen_energy(walkers[1].configuration, lj_potential, walkers[1].list_num_par, walkers[1].frozen)
         end
         if assign_energy
-            for walker in walkers
+            Threads.@threads for walker in walkers
                 if const_frozen_part
                     walker.energy_frozen_part = frozen_part_energy
                 else

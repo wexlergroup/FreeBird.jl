@@ -38,6 +38,11 @@ function assign_frozen_energy!(walker::AtomWalker, lj::LennardJonesParametersSet
     return walker
 end
 
+function assign_energy!(walker::AtomWalker, lj::LennardJonesParametersSets, surface::AtomWalker)
+    walker.energy =  interacting_energy(walker.configuration, lj, walker.list_num_par, walker.frozen, surface.configuration) + walker.energy_frozen_part
+    return walker
+end
+
 
 """
     struct LJAtomWalkers <: AtomWalkers
@@ -91,4 +96,44 @@ function Base.show(io::IO, walkers::LJAtomWalkers)
         end
     end
     println(io, walkers.lj_potential)
+end
+
+struct LJSurfaceWalkers <: AtomWalkers
+    walkers::Vector{AtomWalker{C}} where C
+    lj_potential::LennardJonesParametersSets
+    surface::AtomWalker{CS} where CS
+    function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}}, 
+                                lj_potential::LennardJonesParametersSets, 
+                                surface::AtomWalker{CS}; 
+                                assign_energy = true,
+                                ) where C where CS
+        update_walker!(surface, :frozen, ones(Bool, length(surface.list_num_par)))
+        frozen_part_energy = surface.energy_frozen_part
+        if assign_energy
+            Threads.@threads for walker in walkers
+                walker.energy_frozen_part = frozen_part_energy
+                assign_energy!(walker, lj_potential, surface)
+            end
+        end
+        return new(walkers, lj_potential, surface)
+    end
+end
+
+function Base.show(io::IO, walkers::LJSurfaceWalkers)
+    println(io, "LJSurfaceWalkers($(eltype(walkers.walkers)), $(typeof(walkers.lj_potential))):")
+    if length(walkers.walkers) > 10
+        for i in 1:5
+            println(io, "[$i] ", walkers.walkers[i])
+        end
+        println(io, "⋮\nOmitted ", length(walkers.walkers)-10, " walkers\n⋮\n")
+        for i in length(walkers.walkers)-4:length(walkers.walkers)
+            println(io, "[$i] ", walkers.walkers[i])
+        end
+    else
+        for (ind, w) in enumerate(walkers.walkers)
+            println(io, "[$ind] ", w)
+        end
+    end
+    println(io, walkers.lj_potential)
+    println(io, "Surface: ", walkers.surface)
 end

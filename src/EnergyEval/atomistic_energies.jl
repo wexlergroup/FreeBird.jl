@@ -237,6 +237,38 @@ function interacting_energy(at::AbstractSystem,
     return energy
 end
 
+function interacting_energy(at::AbstractSystem, 
+                            ljs::CompositeLJParameters{C}, 
+                            list_num_par::Vector{Int},
+                            frozen::Vector{Bool},
+                            surface::AbstractSystem
+                            ) where {C}
+    energy = 0.0u"eV"
+    components_at = split_components(at, list_num_par)
+    components = [components_at..., surface] # combine components from at and surface
+    frozen = [frozen..., true] # add frozen state for surface
+    list_num_par = [list_num_par..., length(surface)] # combine list_num_par vectors
+    num_components = length(components)
+    check_num_components(num_components, list_num_par, frozen)
+    # @info "num_components: $num_components, list_num_par: $list_num_par, frozen: $frozen"
+    # intra-component interactions
+    for i in findall(.!frozen) # find non-frozen components
+        if length(components[i]) > 1
+            energy += intra_component_energy(components[i], ljs.lj_param_sets[i,i])
+        end
+    end
+    # inter-component interactions
+    for i in 1:num_components
+        for j in (i+1):num_components
+            if !frozen[i] || !frozen[j] # not both frozen
+                # @info "component $i and $j"
+                energy += inter_component_energy(components[i], components[j], ljs.lj_param_sets[i,j])
+            end
+        end
+    end
+    return energy
+end
+
 """
     interacting_energy(at::AbstractSystem, lj::LJParameters, list_num_par::Vector{Int}, frozen::Vector{Bool})
 
@@ -357,4 +389,41 @@ function single_site_energy(index::Int,
         end
     end
     return sum(energies)
+end
+
+function single_site_energy(index::Int,
+                            at::AbstractSystem, 
+                            ljs::CompositeLJParameters{C},
+                            list_num_par::Vector{Int},
+                            surface::AbstractSystem
+                            ) where {C}
+    comp_cut = vcat([0],cumsum(list_num_par))
+    # @info "comp_cut: $comp_cut"
+    comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:length(list_num_par)]
+    # @info "comp_split: $comp_split"
+    from_comp = findfirst(x->index in x, comp_split)
+    # @info "from_comp: $from_comp"
+    all_index = collect(1:length(at))
+    popat!(all_index, index)
+    energies = Array{typeof(0.0u"eV"), 1}(undef, length(all_index))
+    Threads.@threads for i in eachindex(all_index)
+        r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+        if all_index[i] in comp_split[from_comp]
+            energy = lj_energy(r,ljs.lj_param_sets[from_comp,from_comp])
+            energies[i] = energy
+        else
+            to_comp = findfirst(x->all_index[i] in x, comp_split)
+            energy = lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
+            energies[i] = energy
+        end
+    end
+    internal_e = sum(energies)
+    energies_surface = Array{typeof(0.0u"eV"), 1}(undef, length(surface))
+    Threads.@threads for i in eachindex(surface.position)
+        r = pbc_dist(position(at, index), position(surface, i), at)
+        to_comp = C # surface is the last component
+        energies_surface[i] = lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
+    end
+    external_e = sum(energies_surface)
+    return internal_e + external_e
 end

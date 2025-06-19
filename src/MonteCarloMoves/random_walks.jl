@@ -120,6 +120,44 @@ function MC_random_walk!(
     return accept_this_walker, n_accept/n_steps, at
 end
 
+
+function MC_random_walk!(
+                    n_steps::Int, 
+                    at::AtomWalker{C}, 
+                    pot::AbstractPotential, 
+                    step_size::Float64, 
+                    emax::typeof(0.0u"eV"),
+                    surface::AtomWalker{CS},
+                    ) where {C, CS}
+    n_accept = 0
+    accept_this_walker = false
+    for i_mc_step in 1:n_steps
+        config = at.configuration
+        free_index = free_par_index(at)
+        i_at = rand(free_index)
+        prewalk_energy = single_site_energy(i_at, config, pot, at.list_num_par, surface.configuration)
+        pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
+        orig_pos = deepcopy(pos)
+        pos = single_atom_random_walk!(pos, step_size)
+        pos = periodic_boundary_wrap!(pos, config)
+        config.position[i_at] = pos
+        postwalk_energy = single_site_energy(i_at, config, pot, at.list_num_par, surface.configuration)
+        e_diff = postwalk_energy - prewalk_energy
+        # energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
+        energy = at.energy + e_diff
+        if energy >= emax
+            # reject the move, revert to original position
+            config.position[i_at] = orig_pos
+        else
+            at.energy = energy
+            # accept the move
+            n_accept += 1
+            accept_this_walker = true
+        end
+    end
+    return accept_this_walker, n_accept/n_steps, at
+end
+
 """
     MC_random_walk_2D!(n_steps::Int, at::AtomWalker, pot::AbstractPotential, step_size::Float64, emax::typeof(0.0u"eV"); dims::Vector{Int}=[1,2])
 

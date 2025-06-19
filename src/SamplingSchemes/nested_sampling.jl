@@ -319,6 +319,58 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     return iter, emax[end], liveset, ns_params
 end
 
+function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutineParallel)
+    sort_by_energy!(liveset)
+    ats = liveset.walkers
+    lj = liveset.lj_potential
+    iter::Union{Missing,Int} = missing
+    emax::Union{Vector{Missing},Vector{typeof(0.0u"eV")}} = [liveset.walkers[i].energy for i in 1:nworkers()]
+
+    if mc_routine isa MCRandomWalkMaxEParallel
+        to_walk_inds = 1:nworkers()
+    elseif mc_routine isa MCRandomWalkCloneParallel
+        to_walk_inds = sort!(sample(2:length(ats), nworkers()))
+    end
+    
+    to_walks = deepcopy.(ats[to_walk_inds])
+
+    if length(mc_routine.dims) == 3
+        random_walk_function = MC_random_walk!
+    elseif length(mc_routine.dims) == 2
+        random_walk_function = MC_random_walk_2D!
+    else
+        error("Unsupported dimensions: $(mc_routine.dims)")
+    end
+
+
+    walking = [remotecall(random_walk_function, workers()[i], ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax[end], liveset.surface) for (i,to_walk) in enumerate(to_walks)]
+    walked = fetch.(walking)
+    finalize.(walking) # finalize the remote calls, clear the memory
+
+    accepted_rates = [x[2] for x in walked]
+    rate = mean(accepted_rates)
+
+    if prod([x[1] for x in walked]) == 0 # if any of the walkers failed
+        ns_params.fail_count += 1
+        emax = [missing]
+        return iter, emax[end], liveset, ns_params
+    end
+
+    # sort!(walked, by = x -> x[3].energy, rev=true)
+    # filter!(x -> x[1], walked) # remove the failed ones
+
+    for (i, at) in enumerate(walked)
+        ats[i] = at[3]
+    end
+
+    update_iter!(liveset)
+    ns_params.fail_count = 0
+    iter = liveset.walkers[1].iter
+
+    adjust_step_size(ns_params, rate)
+    return iter, emax[end], liveset, ns_params
+end
+
 """
     nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCMixedMoves)
 

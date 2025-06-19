@@ -16,6 +16,7 @@ using ..AbstractHamiltonians
 export AbstractLiveSet
 export AtomWalkers, LatticeWalkers
 export LJAtomWalkers, LatticeGasWalkers
+export LJSurfaceWalkers
 
 abstract type AbstractLiveSet end
 

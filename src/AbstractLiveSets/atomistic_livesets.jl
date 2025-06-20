@@ -152,7 +152,7 @@ function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}},
             current_first_task += nworkers()
         end
 
-        for walker in walkers[end-remaining_tasks+1:end]
+        for walker in walkers[end-remaining_tasks:end]
             walker.energy_frozen_part = frozen_part_energy
             assign_energy!(walker, lj_potential, surface)
         end

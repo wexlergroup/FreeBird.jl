@@ -6,6 +6,8 @@ walkers that are used in the sampling schemes.
 """
 module AbstractLiveSets
 
+using Distributed
+
 import Unitful: unit
 
 using ..AbstractWalkers

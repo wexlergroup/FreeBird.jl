@@ -119,6 +119,29 @@ struct LJSurfaceWalkers <: AtomWalkers
     end
 end
 
+function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}}, 
+                            lj_potential::LennardJonesParametersSets, 
+                            surface::AtomWalker{CS}, 
+                            assign_energy_parallel::Symbol,
+                            ) where C where CS
+    update_walker!(surface, :frozen, ones(Bool, length(surface.list_num_par)))
+    frozen_part_energy = surface.energy_frozen_part
+    if assign_energy_parallel == :threads
+        @info "Assigning energy to walkers in parallel using $(Threads.nthreads()) threads..."
+        Threads.@threads for walker in walkers
+            walker.energy_frozen_part = frozen_part_energy
+            assign_energy!(walker, lj_potential, surface)
+        end
+    elseif assign_energy_parallel == :distributed
+        @info "Assigning energy to walkers in parallel using $(nworkers()) distributed processes..."
+        @distributed for walker in walkers
+            walker.energy_frozen_part = frozen_part_energy
+            assign_energy!(walker, lj_potential, surface)
+        end
+    end
+    return LJSurfaceWalkers(walkers, lj_potential, surface)
+end
+
 function Base.show(io::IO, walkers::LJSurfaceWalkers)
     println(io, "LJSurfaceWalkers($(eltype(walkers.walkers)), $(typeof(walkers.lj_potential))):")
     if length(walkers.walkers) > 10

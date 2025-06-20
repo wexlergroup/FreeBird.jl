@@ -135,7 +135,7 @@ function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}},
     elseif assign_energy_parallel == :distributed
         @info "Assigning energy to walkers in parallel using $(nworkers()) distributed processes..."
         current_first_task = 1
-        remaining_tasks = length(walkers) - current_first_task + 1
+        remaining_tasks = length(walkers)
         while current_first_task  + nworkers() - 1 <= length(walkers) && remaining_tasks >= nworkers()
             for i in current_first_task:current_first_task + nworkers() - 1
                 worker_id = i % nworkers() + 1
@@ -149,10 +149,12 @@ function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}},
                 worker_id = i % nworkers() + 1
                 fetch(@spawnat worker_id nothing) # Wait for all workers to finish
             end
+            remaining_tasks = length(walkers) - current_first_task + 1
             current_first_task += nworkers()
+            @info "remaining tasks: $remaining_tasks"
         end
 
-        for walker in walkers[end-remaining_tasks:end]
+        for walker in walkers[end-remaining_tasks+1:end]
             walker.energy_frozen_part = frozen_part_energy
             assign_energy!(walker, lj_potential, surface)
         end

@@ -136,7 +136,7 @@ function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}},
         @info "Assigning energy to walkers in parallel using $(nworkers()) distributed processes..."
         current_first_task = 1
         remaining_tasks = length(walkers) - current_first_task + 1
-        while current_first_task < length(walkers) && remaining_tasks > 0
+        while current_first_task  + nworkers() - 1 <= length(walkers) && remaining_tasks > 0
             for i in current_first_task:current_first_task + nworkers() - 1
                 worker_id = i % nworkers() + 1
                 walker = walkers[i]

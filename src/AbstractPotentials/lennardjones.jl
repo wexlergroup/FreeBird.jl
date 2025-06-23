@@ -1,5 +1,55 @@
-abstract type LennardJonesParametersSets <: AbstractPotential end
-abstract type SingleLJParametersSet <: LennardJonesParametersSets end
+abstract type PotentialParameterSets <: AbstractPotential end
+abstract type SingleParameterSet <: PotentialParameterSets end
+
+"""
+    pbc_dist(pos1, pos2, at)
+
+Compute the distance between two positions considering periodic boundary conditions. Currently only works for orthorhombic lattices.
+
+# Arguments
+- `pos1::Union{SVector{T},Vector{T}}`: The first position.
+- `pos2::Union{SVector{T},Vector{T}}`: The second position.
+- `at::AbstractSystem`: The abstract system containing boundary conditions and bounding box.
+
+# Returns
+- `d::Float64`: The distance between `pos1` and `pos2` considering periodic boundary conditions.
+
+"""
+function pbc_dist(pos1::Union{SVector{T},Vector{T}},
+                  pos2::Union{SVector{T},Vector{T}},
+                  at::AbstractSystem) where {T}
+    pbc = periodicity(at)
+    box = cell_vectors(at)
+    distsq = 0.0u"Å"^2
+    for i in eachindex(pos1)
+        if pbc[i] == true
+            distsq += min(abs(pos1[i] - pos2[i]), box[i][i] - abs(pos1[i] - pos2[i]))^2
+        elseif pbc[i] == false
+            distsq += (pos1[i] - pos2[i])^2
+        end
+    end
+    return sqrt(distsq)
+end
+
+function pbc_vect(pos1::Union{SVector{T},Vector{T}},
+                  pos2::Union{SVector{T},Vector{T}},
+                  at::AbstractSystem) where {T}
+    pbc = periodicity(at)
+    box = cell_vectors(at)
+    vector = [0.0u"Å", 0.0u"Å", 0.0u"Å"]
+    for i in eachindex(pos1)
+        if pbc[i] == true
+            direction = 1
+            if pos1[i] < pos2[i]
+                direction = -1
+            end 
+            vector[i] = direction * min(abs(pos1[i] - pos2[i]), box[i][i] - abs(pos1[i] - pos2[i]))
+        elseif pbc[i] == false
+            vector[i] = pos1[i] - pos2[i]
+        end
+    end
+    return vector
+end
 
 """
     struct LJParameters
@@ -13,14 +63,14 @@ The `LJParameters` struct represents the parameters for the Lennard-Jones potent
 - `shift::typeof(0.0u"eV")`: The energy shift applied to the potential, calculated at the cutoff distance.
 
 """
-struct LJParameters <: SingleLJParametersSet
+struct LJParameters <: SingleParameterSet
     epsilon::typeof(1.0u"eV")
     sigma::typeof(1.0u"Å")
     cutoff::Float64
     shift::typeof(0.0u"eV")
 end
 
-struct SMD_LJParameters <: SingleLJParametersSet
+struct SMD_LJParameters <: SingleParameterSet
     epsilon::typeof(1.0u"eV")
     sigma::typeof(1.0u"Å")
     cutoff::Float64
@@ -124,7 +174,8 @@ Compute the Lennard-Jones energy between two particles at a given distance.
 - `0.0u"eV"` if the distance is greater than the cutoff distance.
 - The Lennard-Jones energy minus the shift otherwise.
 """
-function lj_energy(r::typeof(1.0u"Å"), lj::LJParameters)
+function lj_energy(pos1::Union{SVector{T},Vector{T}}, pos2::Union{SVector{T},Vector{T}}, at::AbstractSystem, lj::LJParameters) where {T}
+    r = pbc_dist(pos1, pos2, at)
     if r > lj.cutoff * lj.sigma
         return 0.0u"eV"
     else
@@ -132,19 +183,21 @@ function lj_energy(r::typeof(1.0u"Å"), lj::LJParameters)
     end
 end
 
-function lj_energy(v1::Vector{T}, h::typeof(1.0u"Å"), lj::SMD_LJParameters) where T
-    r = norm(v1)
+function lj_energy(pos1::Union{SVector{T},Vector{T}}, pos2::Union{SVector{T},Vector{T}}, at::AbstractSystem, lj::SMD_LJParameters) where {T}
+    r = pbc_dist(pos1, pos2, at)
     if r > lj.cutoff * lj.sigma
         return 0.0u"eV"
     else
         lje = lj_energy(lj.epsilon, lj.sigma, r) - lj.shift
+        v1 = pbc_vect(pos1,pos2,at)
+        h = pos1[3] - pot.i_plane
         smd = smd_energy(v1, h, lj.C1, lj.C2)
         return smd + lje
     end
 end
 
 """
-    struct CompositeLJParameters{C} <: LennardJonesParametersSets
+    struct CompositeLJParameters{C} <: PotentialParameterSets
 
 CompositeLJParameters is a struct that represents a set of composite Lennard-Jones parameters.
 
@@ -155,7 +208,7 @@ CompositeLJParameters is a struct that represents a set of composite Lennard-Jon
 - `C::Int`: The number of composite parameter sets.
 
 """
-struct CompositeLJParameters{C} <: LennardJonesParametersSets
+struct CompositeLJParameters{C} <: PotentialParameterSets
     lj_param_sets::Matrix{LJParameters}
     function CompositeLJParameters{C}(lj_param_sets::Matrix{LJParameters}) where C
         if size(lj_param_sets) != (C, C)
@@ -165,9 +218,9 @@ struct CompositeLJParameters{C} <: LennardJonesParametersSets
     end
 end
 
-struct MixedParameters{C} <: LennardJonesParametersSets
-    lj_param_sets::Matrix{SingleLJParametersSet}
-    function MixedParameters{C}(lj_param_sets::Matrix{SingleLJParametersSet}) where C
+struct MixedParameters{C} <: PotentialParameterSets
+    lj_param_sets::Matrix{SingleParameterSet}
+    function MixedParameters{C}(lj_param_sets::Matrix{SingleParameterSet}) where C
         if size(lj_param_sets) != (C, C)
             throw(ArgumentError("the size of the matrix is not compatible with the number of components."))
         end
@@ -229,7 +282,7 @@ CompositeLJParameters{3}(lj_param_sets::3x3 Matrix{LJParameters}):
     lj_param_sets[3, 3] : LJParameters(33.0 eV, 1.0 Å, Inf, 0.0 eV)
 ```
 """
-function MixedParameters(c::Int, ljs::Vector{<:SingleLJParametersSet})
+function MixedParameters(c::Int, ljs::Vector{<:SingleParameterSet})
     if length(ljs) == c^2
         # If the number of LJParameters sets is equal to the number 
         # of elements in the matrix, then assume that Vector{LJParameters} 
@@ -245,7 +298,7 @@ function MixedParameters(c::Int, ljs::Vector{<:SingleLJParametersSet})
         @info "Creating CompositeLJParameters from the upper triangular part of the matrix.
         By specifying $length(ljs) sets of LJParameters, a $c x $c matrix is constructed.
         If this was not your intention, please check the documentation or raise an issue."
-        ljmatrix = Matrix{SingleLJParametersSet}(undef, c, c)
+        ljmatrix = Matrix{SingleParameterSet}(undef, c, c)
         k = 1
         for i in 1:c
             for j in i:c

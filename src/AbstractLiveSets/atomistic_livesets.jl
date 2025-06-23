@@ -2,19 +2,19 @@
 abstract type AtomWalkers <: AbstractLiveSet end
 
 """
-    assign_energy!(walker::AtomWalker, lj::LennardJonesParametersSets)
+    assign_energy!(walker::AtomWalker, lj::PotentialParameterSets)
 
 Assigns the energy to the given `walker` using the Lennard-Jones parameters `lj`.
 
 # Arguments
 - `walker::AtomWalker`: The walker object to assign the energy to.
-- `lj::LennardJonesParametersSets`: The Lennard-Jones parameters.
+- `lj::PotentialParameterSets`: The Lennard-Jones parameters.
 
 # Returns
 - `walker::AtomWalker`: The walker object with the assigned energy.
 
 """
-function assign_energy!(walker::AtomWalker, lj::LennardJonesParametersSets)
+function assign_energy!(walker::AtomWalker, lj::PotentialParameterSets)
     # walker.energy_frozen_part = frozen_energy(walker.configuration, lj, walker.list_num_par, walker.frozen)
     if lj isa SMD_LJParameters
         walker.energy = interacting_energy(walker.configuration, lj)
@@ -25,19 +25,19 @@ function assign_energy!(walker::AtomWalker, lj::LennardJonesParametersSets)
 end
 
 """
-    assign_frozen_energy!(walker::AtomWalker, lj::LennardJonesParametersSets)
+    assign_frozen_energy!(walker::AtomWalker, lj::PotentialParameterSets)
 
 Assigns the frozen energy to the given `walker` using the Lennard-Jones parameters `lj`.
 
 # Arguments
 - `walker::AtomWalker`: The walker object to assign the energy to.
-- `lj::LennardJonesParametersSets`: The Lennard-Jones parameters.
+- `lj::PotentialParameterSets`: The Lennard-Jones parameters.
 
 # Returns
 - `walker::AtomWalker`: The walker object with the assigned energy.
 
 """
-function assign_frozen_energy!(walker::AtomWalker, lj::LennardJonesParametersSets)
+function assign_frozen_energy!(walker::AtomWalker, lj::PotentialParameterSets)
     walker.energy_frozen_part = frozen_energy(walker.configuration, lj, walker.list_num_par, walker.frozen)
     return walker
 end
@@ -50,18 +50,18 @@ The `LJAtomWalkers` struct represents a collection of atom walkers that interact
 
 # Fields
 - `walkers::Vector{AtomWalker{C}}`: A vector of atom walkers, where `C` is the number of components.
-- `lj_potential::LennardJonesParametersSets`: The Lennard-Jones potential parameters. See `LennardJonesParametersSets`.
+- `lj_potential::PotentialParameterSets`: The Lennard-Jones potential parameters. See `PotentialParameterSets`.
 
 # Constructor
-- `LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParametersSets; assign_energy=true)`: 
+- `LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::PotentialParameterSets; assign_energy=true)`: 
     Constructs a new `LJAtomWalkers` object with the given walkers and Lennard-Jones potential parameters. If `assign_energy=true`,
     the energy of each walker is assigned using the Lennard-Jones potential.
 
 """
 struct LJAtomWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
-    lj_potential::LennardJonesParametersSets
-    function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParametersSets; assign_energy=true, const_frozen_part=true) where C
+    lj_potential::PotentialParameterSets
+    function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::PotentialParameterSets; assign_energy=true, const_frozen_part=true) where C
         if lj_potential isa SMD_LJParameters
             frozen_part_energy = 0.0 * unit(lj_potential.epsilon)
         elseif const_frozen_part && !isempty(walkers) 

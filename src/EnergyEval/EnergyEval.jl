@@ -12,7 +12,6 @@ using ..AbstractWalkers
 using ..AbstractPotentials
 using ..AbstractHamiltonians
 
-export pbc_dist
 export interacting_energy, frozen_energy
 export single_site_energy
 

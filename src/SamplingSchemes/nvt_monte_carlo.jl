@@ -274,7 +274,7 @@ end
 """
     monte_carlo_sampling(
         at::AtomWalker,
-        lj::LennardJonesParametersSets,
+        lj::PotentialParameterSets,
         mc_params::MetropolisMCParameters;
         kb::Float64 = 8.617333262e-5 # eV/K
     )
@@ -286,7 +286,7 @@ should be in Kelvin, and the units of the energy should be in eV.
 
 # Arguments
 - `at::AtomWalker`: The initial atom walker configuration.
-- `lj::LennardJonesParametersSets`: The Lennard-Jones parameters.
+- `lj::PotentialParameterSets`: The Lennard-Jones parameters.
 - `mc_params::MetropolisMCParameters`: The parameters for the Metropolis Monte Carlo algorithm.
 
 # Returns
@@ -297,7 +297,7 @@ should be in Kelvin, and the units of the energy should be in eV.
 """
 function monte_carlo_sampling(
     at::AtomWalker,
-    lj::LennardJonesParametersSets,
+    lj::PotentialParameterSets,
     mc_params::MetropolisMCParameters;
     kb::Float64 = 8.617333262e-5 # eV/K
 )

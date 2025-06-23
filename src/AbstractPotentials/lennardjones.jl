@@ -190,7 +190,7 @@ function lj_energy(pos1::Union{SVector{T},Vector{T}}, pos2::Union{SVector{T},Vec
     else
         lje = lj_energy(lj.epsilon, lj.sigma, r) - lj.shift
         v1 = pbc_vect(pos1,pos2,at)
-        h = pos1[3] - pot.i_plane
+        h = pos1[3] - lj.i_plane
         smd = smd_energy(v1, h, lj.C1, lj.C2)
         return smd + lje
     end

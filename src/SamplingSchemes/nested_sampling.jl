@@ -371,6 +371,41 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSampl
     return iter, emax[end], liveset, ns_params
 end
 
+function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine)
+    sort_by_energy!(liveset)
+    ats = liveset.walkers
+    lj = liveset.lj_potential
+    iter::Union{Missing,Int} = missing
+    emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
+    if mc_routine isa MCRandomWalkMaxE
+        to_walk = deepcopy(ats[1])
+    elseif mc_routine isa MCRandomWalkClone
+        to_walk = deepcopy(rand(ats[2:end]))
+    else
+        error("Unsupported MCRoutine type: $mc_routine")
+    end
+    if length(mc_routine.dims) == 3
+        accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax, liveset.surface)
+    else
+        error("Unsupported dimensions: $(mc_routine.dims)")
+    end
+    # accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
+    # @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: $(round(ns_params.step_size; sigdigits=4))"
+    if accept
+        push!(ats, at)
+        popfirst!(ats)
+        update_iter!(liveset)
+        ns_params.fail_count = 0
+        iter = liveset.walkers[1].iter
+    else
+        # @warn "Failed to accept MC move"
+        emax = missing
+        ns_params.fail_count += 1
+    end
+    adjust_step_size(ns_params, rate)
+    return iter, emax, liveset, ns_params
+end
+
 """
     nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCMixedMoves)
 

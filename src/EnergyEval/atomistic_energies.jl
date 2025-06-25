@@ -332,6 +332,7 @@ interacting_energy(at::AbstractSystem, lj::LJParameters) = intra_component_energ
 """
     single_site_energy(index::Int, at::AbstractSystem, lj::LJParameters)
     single_site_energy(index::Int, at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int})
+    single_site_energy(index::Int, at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int}, surface::AbstractSystem)
 
 Calculate the energy of a single site in the system using the Lennard-Jones potential.
 The energy is calculated by summing the pairwise interactions between the site and all other sites in the system.
@@ -342,6 +343,7 @@ The energy is calculated by summing the pairwise interactions between the site a
 - `lj::LJParameters`: The Lennard-Jones parameters.
 - `ljs::CompositeLJParameters{C}`: The composite Lennard-Jones parameters.
 - `list_num_par::Vector{Int}`: The number of particles in each component.
+- `surface::AbstractSystem`: An optional surface system to consider in the energy calculation. See [`LJSurfaceWalkers`](@ref).
 
 # Returns
 - `energy`: The energy of the site.

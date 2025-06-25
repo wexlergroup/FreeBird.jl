@@ -343,7 +343,7 @@ The energy is calculated by summing the pairwise interactions between the site a
 - `lj::LJParameters`: The Lennard-Jones parameters.
 - `ljs::CompositeLJParameters{C}`: The composite Lennard-Jones parameters.
 - `list_num_par::Vector{Int}`: The number of particles in each component.
-- `surface::AbstractSystem`: An optional surface system to consider in the energy calculation. See [`LJSurfaceWalkers`](@ref).
+- `surface::AbstractSystem`: An optional surface system to consider in the energy calculation. See `LJSurfaceWalkers`.
 
 # Returns
 - `energy`: The energy of the site.

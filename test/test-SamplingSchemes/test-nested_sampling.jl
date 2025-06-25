@@ -205,7 +205,7 @@
                 iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
                 
                 @test iter isa Union{Missing,Int}
-                @test emax isa Union{Missing,typeof([0.0u"eV"])}
+                @test emax isa Union{Missing,typeof(0.0u"eV")}
                 @test length(updated_liveset.walkers) == length(liveset.walkers)
                 @test updated_params.fail_count >= 0
             end
@@ -226,7 +226,7 @@
                 iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
                 
                 @test iter isa Union{Missing,Int}
-                @test emax isa Union{Missing,typeof([0.0u"eV"])}
+                @test emax isa Union{Missing,typeof(0.0u"eV")}
                 @test length(updated_liveset.walkers) == length(liveset.walkers)
                 @test updated_params.fail_count >= 0
             end

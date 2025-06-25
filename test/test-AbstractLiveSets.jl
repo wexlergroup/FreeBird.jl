@@ -7,6 +7,8 @@
                [0u"Å", 0u"Å", 10.0u"Å"]]
         lj = LJParameters(epsilon=0.1,sigma=2.5,cutoff=3.5,shift=false)
 
+        ljs = CompositeLJParameters(3, [lj, lj, lj, lj, lj, lj]) # 3 components, 6 parameters
+
         # Test with 4 atoms: 2 H and 2 O atoms
         coor_list = [:H => [0.2, 0.5, 0.5],
                      :H => [0.4, 0.5, 0.5],
@@ -14,6 +16,13 @@
                      :O => [0.8, 0.5, 0.5]]
         at = FastSystem(periodic_system(coor_list, box, fractional=true))
 
+        surf_list = [:H => [0.0, 0.0, 0.0],
+                     :H => [0.0, 0.5, 0.0],
+                     :H => [0.5, 0.0, 0.0],
+                     :H => [0.5, 0.5, 0.0]]
+
+        surface = AtomWalker(FastSystem(periodic_system(surf_list, box, fractional=true)); freeze_species=[:H])
+        surface.energy_frozen_part = interacting_energy(surface.configuration, lj)
 
         @testset "AtomWalker assign_energy funtion tests" begin
             
@@ -34,8 +43,64 @@
             AbstractLiveSets.assign_frozen_energy!(walker_frozen, lj)
             AbstractLiveSets.assign_energy!(walker_frozen, lj)
             @test walker_frozen.energy == walker_frozen.energy_frozen_part > 0.0u"eV"
+
+            # Test with surface
+            walker_surface = AtomWalker(at)
+            AbstractLiveSets.assign_energy!(walker_surface, ljs, surface)
+            @test walker_surface.energy ≠ 0.0u"eV"
+            @test walker_surface.energy_frozen_part == 0.0u"eV"  # untouched
         end
 
+
+        @testset "LJSurfaceWalkers struct and functions tests" begin
+            
+            # Create multiple walkers with different configurations
+            walkers = [
+                AtomWalker(at),  
+                AtomWalker(at),  
+                AtomWalker(at)
+            ]
+
+            @testset "Constructor with energy assignment" begin
+                lj_walkers = LJSurfaceWalkers(walkers, ljs, surface; assign_energy=true)
+
+                # Test type and structure
+                @test lj_walkers isa LJSurfaceWalkers
+                @test length(lj_walkers.walkers) == 3
+                @test lj_walkers.lj_potential === ljs
+                @test lj_walkers.surface === surface
+                
+                # Test energy assignment
+                @test all(w.energy > 0.0u"eV" for w in lj_walkers.walkers)
+                @test lj_walkers.walkers[1].energy_frozen_part == interacting_energy(surface.configuration, lj)
+                @test lj_walkers.walkers[1].energy_frozen_part == lj_walkers.walkers[2].energy_frozen_part == lj_walkers.walkers[3].energy_frozen_part  # All frozen particles
+            
+                # Test thread safety
+                threaded_lj_walkers = LJSurfaceWalkers(walkers, ljs, surface, :threads)
+                @test threaded_lj_walkers isa LJSurfaceWalkers
+                @test length(threaded_lj_walkers.walkers) == 3
+                @test threaded_lj_walkers.lj_potential === ljs
+                @test threaded_lj_walkers.surface === surface
+                @test all(threaded_lj_walkers.walkers[i].energy == lj_walkers.walkers[i].energy for i in 1:3)
+                @test all(threaded_lj_walkers.walkers[i].energy_frozen_part == lj_walkers.walkers[i].energy_frozen_part for i in 1:3)
+            
+                # TODO: test distributed
+            end
+
+            @testset "Constructor without energy assignment" begin
+                # Reset walker energies
+                for w in walkers
+                    w.energy = 0.0u"eV"
+                    w.energy_frozen_part = 0.0u"eV"
+                end
+
+                lj_walkers = LJSurfaceWalkers(walkers, ljs, surface, assign_energy=false)
+
+                # Verify energies weren't assigned
+                @test all(w.energy == 0.0u"eV" for w in lj_walkers.walkers)
+                @test all(w.energy_frozen_part == 0.0u"eV" for w in lj_walkers.walkers)
+            end
+        end
 
         @testset "LJAtomWalkers struct and functions tests" begin
             

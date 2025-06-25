@@ -129,7 +129,7 @@ struct LJSurfaceWalkers <: AtomWalkers
                                 assign_energy = true,
                                 ) where C where CS
         update_walker!(surface, :frozen, ones(Bool, length(surface.list_num_par)))
-        frozen_part_energy = surface.energy_frozen_part
+        frozen_part_energy = surface.energy_frozen_part # assuming (only) the surface is frozen
         if assign_energy
             Threads.@threads for walker in walkers
                 walker.energy_frozen_part = frozen_part_energy

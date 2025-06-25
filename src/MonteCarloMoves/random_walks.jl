@@ -120,7 +120,21 @@ function MC_random_walk!(
     return accept_this_walker, n_accept/n_steps, at
 end
 
+"""    MC_random_walk!(n_steps::Int, at::AtomWalker{C}, pot::AbstractPotential, step_size::Float64, emax::typeof(0.0u"eV"), surface::AtomWalker{CS})
+Perform a Monte Carlo random walk on the atomic/molecular system with an external surface.
 
+# Arguments
+- `n_steps::Int`: The number of Monte Carlo steps to perform.
+- `at::AtomWalker{C}`: The walker to perform the random walk on.
+- `pot::AbstractPotential`: The potential energy function for the system.
+- `step_size::Float64`: The maximum distance an atom can move in any direction.
+- `emax::typeof(0.0u"eV")`: The maximum energy allowed for accepting a move.
+- `surface::AtomWalker{CS}`: The surface walker object to consider in the energy calculation. Typically frozen. 
+
+# Returns
+- `accept_this_walker::Bool`: Whether the walker is accepted or not.
+- `accept_rate::Float64`: The acceptance rate of the random walk.
+"""
 function MC_random_walk!(
                     n_steps::Int, 
                     at::AtomWalker{C}, 

@@ -26,5 +26,7 @@ abstract type AbstractLiveSet end
 include("atomistic_livesets.jl")
 
 include("lattice_livesets.jl")
+
+include("shows.jl")
     
 end # module AbstractLiveSets

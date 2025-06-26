@@ -13,6 +13,7 @@ The `NestedSamplingParameters` struct represents the parameters used in the nest
 e.g. (0.25, 0.75) means that the step size will decrease if the acceptance rate is below 0.25 and increase if it is above 0.75.
 - `fail_count::Int64`: The number of failed MC moves in a row.
 - `allowed_fail_count::Int64`: The maximum number of failed MC moves allowed before resetting the step size.
+- `energy_perturbation::Float64`: The perturbation value used to adjust the energy of the walkers.
 - `random_seed::Int64`: The seed for the random number generator.
 """
 mutable struct NestedSamplingParameters <: SamplingParameters
@@ -24,6 +25,7 @@ mutable struct NestedSamplingParameters <: SamplingParameters
     accept_range::Tuple{Float64, Float64}
     fail_count::Int64
     allowed_fail_count::Int64
+    energy_perturbation::Float64
     random_seed::Int64
 end
 
@@ -36,31 +38,22 @@ function NestedSamplingParameters(;
             accept_range::Tuple{Float64, Float64}=(0.25, 0.75),
             fail_count::Int64=0,
             allowed_fail_count::Int64=100,
+            energy_perturbation::Float64=1e-12,
             random_seed::Int64=1234,
             )
-    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, accept_range, fail_count, allowed_fail_count, random_seed)  
+    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, accept_range, fail_count, allowed_fail_count, energy_perturbation, random_seed)  
 end
 
 """
-    mutable struct LatticeNestedSamplingParameters <: SamplingParameters
-
-The `LatticeNestedSamplingParameters` struct represents the parameters used in the lattice nested sampling scheme.
-
-# Fields
-- `mc_steps::Int64`: The number of total Monte Carlo moves to perform.
-- `energy_perturbation::Float64`: The energy perturbation used in the sampling process.
-- `fail_count::Int64`: The number of failed MC moves in a row.
-- `allowed_fail_count::Int64`: The maximum number of failed MC moves allowed before resetting the step size.
-- `random_seed::Int64`: The seed for the random number generator.
+    LatticeNestedSamplingParameters(;
+            mc_steps::Int64=100,
+            energy_perturbation::Float64=1e-12,
+            fail_count::Int64=0,
+            allowed_fail_count::Int64=10,
+            random_seed::Int64=1234,
+            )
+A convenience constructor for `NestedSamplingParameters` with default values suitable for lattice systems.
 """
-mutable struct LatticeNestedSamplingParameters <: SamplingParameters
-    mc_steps::Int64
-    energy_perturbation::Float64
-    fail_count::Int64
-    allowed_fail_count::Int64
-    random_seed::Int64
-end
-
 function LatticeNestedSamplingParameters(;
             mc_steps::Int64=100,
             energy_perturbation::Float64=1e-12,
@@ -68,9 +61,8 @@ function LatticeNestedSamplingParameters(;
             allowed_fail_count::Int64=10,
             random_seed::Int64=1234,
             )
-    LatticeNestedSamplingParameters(mc_steps, energy_perturbation, fail_count, allowed_fail_count, random_seed)  
+    NestedSamplingParameters(mc_steps=mc_steps, fail_count=fail_count, allowed_fail_count=allowed_fail_count, energy_perturbation=energy_perturbation, random_seed=random_seed)
 end
-
 
 
 """
@@ -477,7 +469,7 @@ routine for generating new samples. It performs a single step of the nested samp
 - `emax`: The maximum energy of the liveset after the step.
 """
 function nested_sampling_step!(liveset::LatticeGasWalkers, 
-                               ns_params::LatticeNestedSamplingParameters, 
+                               ns_params::NestedSamplingParameters, 
                                mc_routine::MCRoutine)
     sort_by_energy!(liveset)
     ats = liveset.walkers
@@ -528,7 +520,7 @@ This function takes a `liveset` of lattice gas walkers, `ns_params` containing t
 - `ns_params::LatticeNestedSamplingParameters`: The updated nested sampling parameters after the step.
 """
 function nested_sampling_step!(liveset::LatticeGasWalkers, 
-                               ns_params::LatticeNestedSamplingParameters, 
+                               ns_params::NestedSamplingParameters, 
                                mc_routine::MCNewSample)
     sort_by_energy!(liveset)
     ats = liveset.walkers
@@ -558,7 +550,7 @@ end
 
 
 function nested_sampling_step!(liveset::LatticeGasWalkers, 
-                               ns_params::LatticeNestedSamplingParameters, 
+                               ns_params::NestedSamplingParameters, 
                                mc_routine::MCRejectionSampling)
     sort_by_energy!(liveset)
     ats = liveset.walkers
@@ -652,7 +644,7 @@ Perform a nested sampling loop on a lattice gas system for a given number of ste
 - `ns_params`: The updated nested sampling parameters.
 """
 function nested_sampling(liveset::LatticeGasWalkers,
-                                ns_params::LatticeNestedSamplingParameters, 
+                                ns_params::NestedSamplingParameters, 
                                 n_steps::Int64, 
                                 mc_routine::MCRoutine,
                                 save_strategy::DataSavingStrategy)

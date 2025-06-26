@@ -281,6 +281,7 @@ function write_walkers(filename::String, ats::Vector{AtomWalker{C}}) where C
     flex = convert_walker_to_system.(ats)
     save_trajectory(filename::String, flex)
 end
+
 """
     write_walkers(filename::String, ats::Vector{LatticeWalker})
 
@@ -291,12 +292,16 @@ Write a collection of `LatticeWalker` objects to a file.
 - `ats::Vector{LatticeWalker}`: The collection of `LatticeWalker` objects to write.
 
 """
-function write_walkers(filename::String, ats::Vector{LatticeWalker{C}}) where C
+function write_walkers(filename::String, ats::Vector{LatticeWalker{C}}; append=false) where C
     occupancies = [at.configuration.components for at in ats]
     energies = [at.energy.val for at in ats]
-    energy_and_unit = "energy_$(unit(ats[1].energy))"
-    df = DataFrame(energy_and_unit=>energies, "components"=>occupancies)
-    CSV.write(filename, df; append=false)
+    iter = [at.iter for at in ats]
+    df = DataFrame(iter=iter, energy=energies, configuration=occupancies)
+    CSV.write(filename, df; append=append)
+end
+
+function append_walker(filename::String, at::LatticeWalker{C}) where C
+    write_walkers(filename, [at]; append=true)
 end
 
 """
@@ -310,7 +315,7 @@ Write a single AtomWalker object to a file. If the file already exists, append t
 - `append::Bool`: A boolean indicating whether to append the walker to the file if it already exists.
 
 """
-function write_single_walker(filename::String, at::AtomWalker, append::Bool)
+function write_single_walker(filename::String, at::AbstractWalker, append::Bool)
     if isfile(filename) && append
         append_walker(filename, at)
     else

@@ -498,7 +498,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         ns_params.fail_count += 1
     end
     # adjust_step_size(ns_params, rate)
-    return iter, emax, liveset, ns_params
+    return iter, emax * unit(liveset.walkers[1].energy), liveset, ns_params
 end
 
 """
@@ -545,7 +545,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         ns_params.fail_count += 1
     end
     # adjust_step_size(ns_params, rate)
-    return iter, emax, liveset, ns_params
+    return iter, emax * unit(liveset.walkers[1].energy), liveset, ns_params
 end
 
 
@@ -575,7 +575,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         ns_params.fail_count += 1
     end
     # adjust_step_size(ns_params, rate)
-    return iter, emax, liveset, ns_params
+    return iter, emax * unit(liveset.walkers[1].energy), liveset, ns_params
 end
 
 
@@ -596,7 +596,7 @@ Perform a nested sampling loop for a given number of steps.
 - `liveset`: The updated set of walkers.
 - `ns_params`: The updated nested sampling parameters.
 """
-function nested_sampling(liveset::AtomWalkers, 
+function nested_sampling(liveset::AbstractLiveSet, 
                                 ns_params::NestedSamplingParameters, 
                                 n_steps::Int64, 
                                 mc_routine::MCRoutine,
@@ -615,10 +615,10 @@ function nested_sampling(liveset::AtomWalkers,
         if !(iter isa typeof(missing))
             push!(df, (iter, emax.val))
             if print_info
-                @info "iter: $(liveset.walkers[1].iter), emax: $(emax-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
+                @info "iter: $(liveset.walkers[1].iter), emax: $(emax), step_size: $(round(ns_params.step_size; sigdigits=4))"
             end
         elseif iter isa typeof(missing) && print_info
-            @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy-liveset.walkers[1].energy_frozen_part), step_size: $(round(ns_params.step_size; sigdigits=4))"
+            @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy), step_size: $(round(ns_params.step_size; sigdigits=4))"
         end
         write_df_every_n(df, i, save_strategy)
         write_ls_every_n(liveset, i, save_strategy)
@@ -643,33 +643,33 @@ Perform a nested sampling loop on a lattice gas system for a given number of ste
 - `liveset`: The updated set of walkers.
 - `ns_params`: The updated nested sampling parameters.
 """
-function nested_sampling(liveset::LatticeGasWalkers,
-                                ns_params::NestedSamplingParameters, 
-                                n_steps::Int64, 
-                                mc_routine::MCRoutine,
-                                save_strategy::DataSavingStrategy)
+# function nested_sampling(liveset::LatticeGasWalkers,
+#                                 ns_params::NestedSamplingParameters, 
+#                                 n_steps::Int64, 
+#                                 mc_routine::MCRoutine,
+#                                 save_strategy::DataSavingStrategy)
 
-    df = DataFrame(iter=Int[], emax=Float64[], config=Any[])
-    for i in 1:n_steps
-        # write_walker_every_n(liveset.walkers[1], i, save_strategy)
+#     df = DataFrame(iter=Int[], emax=Float64[], config=Any[])
+#     for i in 1:n_steps
+#         # write_walker_every_n(liveset.walkers[1], i, save_strategy)
         
-        config = liveset.walkers[1].configuration.components
+#         config = liveset.walkers[1].configuration.components
 
-        iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
-        @debug "n_step $i, iter: $iter, emax: $emax"
-        if ns_params.fail_count >= ns_params.allowed_fail_count
-            @warn "Failed to accept MC move $(ns_params.allowed_fail_count) times in a row. Break!"
-            ns_params.fail_count = 0
-            break
-        end
-        if !(iter isa typeof(missing))
-            push!(df, (iter, emax, config))
-            @info "iter: $(liveset.walkers[1].iter), emax: $emax"
-        elseif iter isa typeof(missing)
-            @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy)"
-        end
-        write_df_every_n(df, i, save_strategy)
-        write_ls_every_n(liveset, i, save_strategy)
-    end
-    return df, liveset, ns_params
-end
+#         iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+#         @debug "n_step $i, iter: $iter, emax: $emax"
+#         if ns_params.fail_count >= ns_params.allowed_fail_count
+#             @warn "Failed to accept MC move $(ns_params.allowed_fail_count) times in a row. Break!"
+#             ns_params.fail_count = 0
+#             break
+#         end
+#         if !(iter isa typeof(missing))
+#             push!(df, (iter, emax, config))
+#             @info "iter: $(liveset.walkers[1].iter), emax: $emax"
+#         elseif iter isa typeof(missing)
+#             @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy)"
+#         end
+#         write_df_every_n(df, i, save_strategy)
+#         write_ls_every_n(liveset, i, save_strategy)
+#     end
+#     return df, liveset, ns_params
+# end

@@ -303,6 +303,8 @@
             )
             s_walkers = [s_walker for _ in 1:3]
             liveset = LatticeGasWalkers(s_walkers, ham)
+
+            e_type = typeof(s_walker.energy)
             
             ns_params = LatticeNestedSamplingParameters(
                 mc_steps=1000,              # mc_steps
@@ -317,7 +319,7 @@
                 iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
                 
                 @test iter isa Union{Missing,Int}
-                @test emax isa Union{Missing,Float64}
+                @test emax isa Union{Missing,e_type}
                 @test length(updated_liveset.walkers) == length(liveset.walkers)
                 @test updated_params.fail_count >= 0
             end
@@ -327,7 +329,7 @@
                 iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
                 
                 @test iter isa Union{Missing,Int}
-                @test emax isa Union{Missing,Float64}
+                @test emax isa Union{Missing,e_type}
                 @test length(updated_liveset.walkers) == length(liveset.walkers)
                 @test updated_params.fail_count >= 0
             end
@@ -337,7 +339,7 @@
                 iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
                 
                 @test iter isa Union{Missing,Int}
-                @test emax isa Union{Missing,Float64}
+                @test emax isa Union{Missing,e_type}
                 @test length(updated_liveset.walkers) == length(liveset.walkers)
                 @test updated_params.fail_count >= 0
             end
@@ -347,7 +349,7 @@
                 iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
                 
                 @test iter isa Union{Missing,Int}
-                @test emax isa Union{Missing,Float64}
+                @test emax isa Union{Missing,e_type}
                 @test length(updated_liveset.walkers) == length(liveset.walkers)
                 @test updated_params.fail_count >= 0
             end
@@ -549,7 +551,7 @@
                     liveset, deepcopy(ns_params), 5, MCRandomWalkMaxE(), save_strategy)
                 
                 @test df isa DataFrame
-                @test names(df) == ["iter", "emax", "config"]
+                @test names(df) == ["iter", "emax"]
                 @test eltype(df.emax) == Float64  # emax is stored as Float64
                 @test length(updated_liveset.walkers) == length(liveset.walkers)
                 @test all(walker -> walker isa LatticeWalker, updated_liveset.walkers)

@@ -83,8 +83,15 @@
                 @test threaded_lj_walkers.surface === surface
                 @test all(threaded_lj_walkers.walkers[i].energy == lj_walkers.walkers[i].energy for i in 1:3)
                 @test all(threaded_lj_walkers.walkers[i].energy_frozen_part == lj_walkers.walkers[i].energy_frozen_part for i in 1:3)
-            
-                # TODO: test distributed
+
+                # Test distributed safety
+                distributed_lj_walkers = LJSurfaceWalkers(walkers, ljs, surface, :distributed)
+                @test distributed_lj_walkers isa LJSurfaceWalkers
+                @test length(distributed_lj_walkers.walkers) == 3
+                @test distributed_lj_walkers.lj_potential === ljs
+                @test distributed_lj_walkers.surface === surface
+                @test all(distributed_lj_walkers.walkers[i].energy == lj_walkers.walkers[i].energy for i in 1:3)
+                @test all(distributed_lj_walkers.walkers[i].energy_frozen_part == lj_walkers.walkers[i].energy_frozen_part for i in 1:3)
             end
 
             @testset "Constructor without energy assignment" begin

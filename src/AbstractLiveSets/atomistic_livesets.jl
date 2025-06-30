@@ -160,15 +160,15 @@ function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}},
         while current_first_task  + nworkers() - 1 <= length(walkers) && remaining_tasks >= nworkers()
             spawned = Vector{Future}(undef, nworkers())
             for i in current_first_task:current_first_task + nworkers() - 1
-                worker_id = i % nworkers() + 1
+                worker_id = workers()[mod1(i, length(workers()))]
                 walker = walkers[i]
-                spawned[worker_id-1] = @spawnat worker_id begin
+                spawned[mod1(i, length(workers()))] = @spawnat worker_id begin
                     walker.energy_frozen_part = frozen_part_energy
                     assign_energy!(walker, lj_potential, surface)
                 end
             end
             fetch.(spawned) # Wait for all workers to finish
-            remaining_tasks = length(walkers) - current_first_task + 1
+            remaining_tasks = length(walkers) - (current_first_task + nworkers() - 1)
             current_first_task += nworkers()
             @info "remaining tasks: $remaining_tasks"
         end
@@ -177,6 +177,8 @@ function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}},
             walker.energy_frozen_part = frozen_part_energy
             assign_energy!(walker, lj_potential, surface)
         end
+    else
+        error("Invalid parallelization option: $assign_energy_parallel. Use :threads or :distributed.")
     end
     return LJSurfaceWalkers(walkers, lj_potential, surface)
 end

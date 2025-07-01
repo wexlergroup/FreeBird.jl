@@ -147,7 +147,7 @@
                 @test all(w.energy_frozen_part == 0.0u"eV" for w in lj_walkers.walkers)
             end
 
-            @testset "Show method tests" begin
+            @testset "LJAtomWalkers show method tests" begin
                 # Use existing setup from parent testset
                 walkers = [
                     AtomWalker(at),
@@ -167,6 +167,34 @@
                 # Test display with truncation (>10 walkers)
                 walkers_large = [AtomWalker(at) for _ in 1:15]
                 lj_walkers_large = LJAtomWalkers(walkers_large, lj)
+                output_large = sprint(show, lj_walkers_large)
+                
+                @test occursin("Omitted 5 walkers", output_large)
+                @test occursin("[1]", output_large)
+                @test occursin("[15]", output_large)
+            end
+
+            @testset "LJSurfaceWalkers show method tests" begin
+                # Use existing setup from parent testset
+                walkers = [
+                    AtomWalker(at),
+                    AtomWalker(at, freeze_species=[:O]),
+                    AtomWalker(at, freeze_species=[:H, :O])
+                ]
+                
+                # Test display with small number of walkers
+                lj_walkers_small = LJSurfaceWalkers(walkers, ljs, surface; assign_energy=true)
+                output_small = sprint(show, lj_walkers_small)
+                
+                # Verify key components are shown
+                @test occursin("LJSurfaceWalkers", output_small)
+                @test all(occursin("[$i]", output_small) for i in 1:3)
+                @test occursin("LJParameters", output_small)
+                @test occursin("Surface: ", output_small)
+                
+                # Test display with truncation (>10 walkers)
+                walkers_large = [AtomWalker(at) for _ in 1:15]
+                lj_walkers_large = LJSurfaceWalkers(walkers_large, ljs, surface; assign_energy=true)
                 output_large = sprint(show, lj_walkers_large)
                 
                 @test occursin("Omitted 5 walkers", output_large)

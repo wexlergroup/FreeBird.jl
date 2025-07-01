@@ -178,7 +178,9 @@ function nvt_monte_carlo(
         end
         energies[i] = current_energy
         configurations[i] = current_walker
-        println("Step: $i Energy: $(round(typeof(current_energy), current_energy; sigdigits=4))")
+        if i%1000 == 0 
+            println("Step: $i Energy: $(round(typeof(current_energy), current_energy; sigdigits=4))")
+        end
     end
 
     return energies, configurations, accepted_steps

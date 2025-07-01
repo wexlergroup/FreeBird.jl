@@ -6,6 +6,8 @@ walkers that are used in the sampling schemes.
 """
 module AbstractLiveSets
 
+using Distributed
+
 import Unitful: unit
 
 using ..AbstractWalkers
@@ -16,6 +18,7 @@ using ..AbstractHamiltonians
 export AbstractLiveSet
 export AtomWalkers, LatticeWalkers
 export LJAtomWalkers, LatticeGasWalkers
+export LJSurfaceWalkers
 
 abstract type AbstractLiveSet end
 
@@ -23,5 +26,7 @@ abstract type AbstractLiveSet end
 include("atomistic_livesets.jl")
 
 include("lattice_livesets.jl")
+
+include("shows.jl")
     
 end # module AbstractLiveSets

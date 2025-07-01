@@ -25,6 +25,8 @@ using ..FreeBirdIO
 using ..AbstractHamiltonians
 
 # Abstract types for the sampling parameters
+export SamplingParameters
+
 export NestedSamplingParameters
 export LatticeNestedSamplingParameters
 export WangLandauParameters

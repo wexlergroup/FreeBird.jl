@@ -88,19 +88,19 @@ function write_df_every_n(df::DataFrame, step::Int, d_strategy::DataSavingStrate
 end
 
 """
-    write_walker_every_n(at::AtomWalker, step::Int, d_strategy::SaveEveryN)
+    write_walker_every_n(wk::AbstractWalker, step::Int, d_strategy::SaveEveryN)
 
-Write the atom walker `at` to a file specified by `d_strategy.wk_filename` every `d_strategy.n` steps.
+Write the walker `wk` to a file specified by `d_strategy.wk_filename` every `d_strategy.n` steps.
 
 # Arguments
-- `at::AtomWalker`: The atom walker to be written.
+- `wk::AbstractWalker`: The walker to be written.
 - `step::Int`: The current step number.
 - `d_strategy::SaveEveryN`: The save strategy specifying the file name and the interval.
 
 """
-function write_walker_every_n(at::AtomWalker, step::Int, d_strategy::SaveEveryN)
+function write_walker_every_n(wk::AbstractWalker, step::Int, d_strategy::SaveEveryN)
     if step % d_strategy.n_traj == 0
-        write_single_walker(d_strategy.wk_filename, at, true)
+        write_single_walker(d_strategy.wk_filename, wk, true)
     end
 end
 

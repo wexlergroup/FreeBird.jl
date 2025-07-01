@@ -192,6 +192,9 @@ function lj_energy(pos1::Union{SVector{T},Vector{T}}, pos2::Union{SVector{T},Vec
         v1 = pbc_vect(pos1,pos2,at)
         h = pos1[3] - lj.i_plane
         smd = smd_energy(v1, h, lj.C1, lj.C2)
+        if smd < -1 * lj.epsilon
+            smd = 0.0u"eV"
+        end
         return smd + lje
     end
 end

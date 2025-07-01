@@ -178,6 +178,7 @@ function nvt_monte_carlo(
         end
         energies[i] = current_energy
         configurations[i] = current_walker
+        println("Step: $i Energy: $(round(typeof(current_energy), current_energy; sigdigits=4))")
     end
 
     return energies, configurations, accepted_steps

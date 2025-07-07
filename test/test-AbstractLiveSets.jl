@@ -7,7 +7,7 @@
                [0u"Å", 0u"Å", 10.0u"Å"]]
         lj = LJParameters(epsilon=0.1,sigma=2.5,cutoff=3.5,shift=false)
 
-        ljs = CompositeLJParameters(3, [lj, lj, lj, lj, lj, lj]) # 3 components, 6 parameters
+        ljs = CompositeLJParameters(3, [lj for _ in 1:6]) # 3 components, 6 parameters
 
         # Test with 4 atoms: 2 H and 2 O atoms
         coor_list = [:H => [0.2, 0.5, 0.5],

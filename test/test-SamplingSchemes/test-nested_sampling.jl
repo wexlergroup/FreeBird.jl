@@ -172,14 +172,24 @@
                     [0u"Å", 0u"Å", 10.0u"Å"]]
 
             lj = LJParameters(epsilon=0.1, sigma=2.5, cutoff=3.5, shift=false)
+            ljs = CompositeLJParameters(3, [lj for _ in 1:6])
             
             coor_list = [:H => [0.2, 0.5, 0.5],
                         :H => [0.4, 0.5, 0.5],
                         :O => [0.6, 0.5, 0.5]]
             at = FastSystem(periodic_system(coor_list, box, fractional=true))
+
+            surf_list = [:H => [0.0, 0.0, 0.0],
+                     :H => [0.0, 0.5, 0.0],
+                     :H => [0.5, 0.0, 0.0],
+                     :H => [0.5, 0.5, 0.0]]
+
+            surface = AtomWalker(FastSystem(periodic_system(surf_list, box, fractional=true)); freeze_species=[:H])
+            surface.energy_frozen_part = interacting_energy(surface.configuration, lj)
             
             walkers = [AtomWalker(at) for _ in 1:3]
-            liveset = LJAtomWalkers(walkers, lj)
+            liveset_at = LJAtomWalkers(walkers, lj)
+            liveset_surf = LJSurfaceWalkers(walkers, ljs, surface; assign_energy=true)
             
             ns_params = NestedSamplingParameters(
                 1000,    # mc_steps
@@ -194,90 +204,98 @@
                 1234     # random_seed
             )
             
-            @testset "MCRandomWalkMaxE" begin
-                mc_routine = MCRandomWalkMaxE()
-                iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
-                
-                @test iter isa Union{Missing,Int}
-                @test emax isa Union{Missing,typeof(0.0u"eV")}
-                @test length(updated_liveset.walkers) == length(liveset.walkers)
-                @test updated_params.fail_count >= 0
-            end
-
-            @testset "MCRandomWalkMaxEParallel" begin
-                mc_routine = MCRandomWalkMaxEParallel()
-                iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
-                
-                @test iter isa Union{Missing,Int}
-                @test emax isa Union{Missing,typeof(0.0u"eV")}
-                @test length(updated_liveset.walkers) == length(liveset.walkers)
-                @test updated_params.fail_count >= 0
-            end
-    
-            @testset "MCRandomWalkClone" begin
-                mc_routine = MCRandomWalkClone()
-                iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
-                
-                @test iter isa Union{Missing,Int}
-                @test emax isa Union{Missing,typeof(0.0u"eV")}
-                @test length(updated_liveset.walkers) == length(liveset.walkers)
-                @test updated_params.fail_count >= 0
-            end
-
-
-            @testset "MCRandomWalkCloneParallel" begin
-                mc_routine = MCRandomWalkCloneParallel()
-                iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
-                
-                @test iter isa Union{Missing,Int}
-                @test emax isa Union{Missing,typeof(0.0u"eV")}
-                @test length(updated_liveset.walkers) == length(liveset.walkers)
-                @test updated_params.fail_count >= 0
-            end
-
-
-
-            @testset "MCRandomWalkClone 2D" begin
-                mc_routine = MCRandomWalkClone(dims=[1,2])
-                @test mc_routine.dims == [1,2]
-                @test length(mc_routine.dims) == 2
-
-                original_ls = deepcopy(liveset)
-                iter, emax, updated_liveset, updated_params = nested_sampling_step!(deepcopy(original_ls), ns_params, mc_routine)
-                
-                @test iter isa Union{Missing,Int}
-                @test emax isa Union{Missing,typeof(0.0u"eV")}
-                @test length(updated_liveset.walkers) == length(original_ls.walkers)
-                @test updated_params.fail_count >= 0
-
-            end
-
-            @testset "MCRandomWalkClone 1D" begin
-                mc_routine = MCRandomWalkClone(dims=[1])
-                @test mc_routine.dims == [1]
-                @test length(mc_routine.dims) == 1
-
-                @test_throws ErrorException begin
-                    nested_sampling_step!(liveset, ns_params, mc_routine)
+            for liveset in [liveset_at, liveset_surf]
+                @testset "MCRandomWalkMaxE" begin
+                    mc_routine = MCRandomWalkMaxE()
+                    iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+                    
+                    @test iter isa Union{Missing,Int}
+                    @test emax isa Union{Missing,typeof(0.0u"eV")}
+                    @test length(updated_liveset.walkers) == length(liveset.walkers)
+                    @test updated_params.fail_count >= 0
                 end
 
-            end
+                @testset "MCRandomWalkMaxEParallel" begin
+                    mc_routine = MCRandomWalkMaxEParallel()
+                    iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+                    
+                    @test iter isa Union{Missing,Int}
+                    @test emax isa Union{Missing,typeof(0.0u"eV")}
+                    @test length(updated_liveset.walkers) == length(liveset.walkers)
+                    @test updated_params.fail_count >= 0
+                end
+        
+                @testset "MCRandomWalkClone" begin
+                    mc_routine = MCRandomWalkClone()
+                    iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+                    
+                    @test iter isa Union{Missing,Int}
+                    @test emax isa Union{Missing,typeof(0.0u"eV")}
+                    @test length(updated_liveset.walkers) == length(liveset.walkers)
+                    @test updated_params.fail_count >= 0
+                end
 
-            @testset "MCMixedMoves" begin
-                mc_routine = MCMixedMoves(5, 1)
-                iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
-                
-                @test iter isa Union{Missing,Int}
-                @test emax isa Union{Missing,typeof(0.0u"eV")}
-                @test length(updated_liveset.walkers) == length(liveset.walkers)
-                @test updated_params.fail_count >= 0
-            end
 
-            @testset "Unsupported MCRoutine" begin
-                mc_routine = MCNewSample()
-                struct Unsupported <: MCRoutine end
-                @test_throws ErrorException begin
-                    nested_sampling_step!(liveset, ns_params, Unsupported())
+                @testset "MCRandomWalkCloneParallel" begin
+                    mc_routine = MCRandomWalkCloneParallel()
+                    iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+                    
+                    @test iter isa Union{Missing,Int}
+                    @test emax isa Union{Missing,typeof(0.0u"eV")}
+                    @test length(updated_liveset.walkers) == length(liveset.walkers)
+                    @test updated_params.fail_count >= 0
+                end
+
+
+
+                @testset "MCRandomWalkClone 2D" begin
+                    mc_routine = MCRandomWalkClone(dims=[1,2])
+                    @test mc_routine.dims == [1,2]
+                    @test length(mc_routine.dims) == 2
+
+                    original_ls = deepcopy(liveset)
+
+                    if !(liveset isa LJSurfaceWalkers) # TODO: LJSurfaceWalkers does not support 2D walks yet
+                        iter, emax, updated_liveset, updated_params = nested_sampling_step!(deepcopy(original_ls), ns_params, mc_routine)
+                        
+                        @test iter isa Union{Missing,Int}
+                        @test emax isa Union{Missing,typeof(0.0u"eV")}
+                        @test length(updated_liveset.walkers) == length(original_ls.walkers)
+                        @test updated_params.fail_count >= 0
+                    end
+
+                end
+
+                @testset "MCRandomWalkClone 1D" begin
+                    mc_routine = MCRandomWalkClone(dims=[1])
+                    @test mc_routine.dims == [1]
+                    @test length(mc_routine.dims) == 1
+
+                    @test_throws ErrorException begin
+                        nested_sampling_step!(liveset, ns_params, mc_routine)
+                    end
+
+                end
+
+                @testset "MCMixedMoves" begin
+                    mc_routine = MCMixedMoves(5, 1)
+
+                    if !(liveset isa LJSurfaceWalkers) # TODO: LJSurfaceWalkers does not support mixed moves yet
+                    iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+                    
+                        @test iter isa Union{Missing,Int}
+                        @test emax isa Union{Missing,typeof(0.0u"eV")}
+                        @test length(updated_liveset.walkers) == length(liveset.walkers)
+                        @test updated_params.fail_count >= 0
+                    end
+                end
+
+                @testset "Unsupported MCRoutine" begin
+                    mc_routine = MCNewSample()
+                    struct Unsupported <: MCRoutine end
+                    @test_throws ErrorException begin
+                        nested_sampling_step!(liveset, ns_params, Unsupported())
+                    end
                 end
             end
         end

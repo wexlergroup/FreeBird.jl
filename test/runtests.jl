@@ -1,4 +1,7 @@
-using FreeBird
+using Distributed
+addprocs(2)
+
+@everywhere using FreeBird
 
 using Statistics
 using StaticArrays

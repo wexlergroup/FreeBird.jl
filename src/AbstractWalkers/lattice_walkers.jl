@@ -304,6 +304,8 @@ function mlattice_setup(C::Int,
 
     if adsorptions == :full
         lattice_adsorptions = [true for i in 1:dim]
+    elseif adsorptions == :none
+        lattice_adsorptions = [false for i in 1:dim]
     elseif adsorptions isa Vector{Int}
         for i in adsorptions
             lattice_adsorptions[i] = true

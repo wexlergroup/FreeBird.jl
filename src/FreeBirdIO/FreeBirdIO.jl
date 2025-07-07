@@ -234,6 +234,25 @@ function append_system(ats1::FlexibleSystem, ats2::FlexibleSystem)
 end
 
 """
+    append_system(ats1::FlexibleSystem, ats2::Vector{FlexibleSystem})
+Append a `FlexibleSystem` object to a vector of `FlexibleSystem` objects.
+The first argument is the system to be appended to, and its bounding box and boundary conditions
+will be used for the new systems.
+# Arguments
+- `ats1::FlexibleSystem`: The base system to be appended.
+- `ats2::Vector{FlexibleSystem}`: A vector of `FlexibleSystem` objects to append.
+# Returns
+- `configs`: A vector of `FastSystem` objects containing the appended systems.
+"""
+function append_system(ats1::FlexibleSystem, ats2::Vector{T}) where T
+    configs = Vector{FastSystem}(undef, length(ats2))
+    Threads.@threads for i in eachindex(ats2)
+        configs[i] = append_system(ats1, ats2[i])
+    end
+    return configs
+end
+
+"""
     write_single_walker(filename::String, at::AtomWalker)
 
 Write a single AtomWalker object to a file.
@@ -262,6 +281,7 @@ function write_walkers(filename::String, ats::Vector{AtomWalker{C}}) where C
     flex = convert_walker_to_system.(ats)
     save_trajectory(filename::String, flex)
 end
+
 """
     write_walkers(filename::String, ats::Vector{LatticeWalker})
 
@@ -272,12 +292,16 @@ Write a collection of `LatticeWalker` objects to a file.
 - `ats::Vector{LatticeWalker}`: The collection of `LatticeWalker` objects to write.
 
 """
-function write_walkers(filename::String, ats::Vector{LatticeWalker{C}}) where C
+function write_walkers(filename::String, ats::Vector{LatticeWalker{C}}; append=false) where C
     occupancies = [at.configuration.components for at in ats]
     energies = [at.energy.val for at in ats]
-    energy_and_unit = "energy_$(unit(ats[1].energy))"
-    df = DataFrame(energy_and_unit=>energies, "components"=>occupancies)
-    CSV.write(filename, df; append=false)
+    iter = [at.iter for at in ats]
+    df = DataFrame(iter=iter, energy=energies, configuration=occupancies)
+    CSV.write(filename, df; append=append)
+end
+
+function append_walker(filename::String, at::LatticeWalker{C}) where C
+    write_walkers(filename, [at]; append=true)
 end
 
 """
@@ -291,7 +315,7 @@ Write a single AtomWalker object to a file. If the file already exists, append t
 - `append::Bool`: A boolean indicating whether to append the walker to the file if it already exists.
 
 """
-function write_single_walker(filename::String, at::AtomWalker, append::Bool)
+function write_single_walker(filename::String, at::AbstractWalker, append::Bool)
     if isfile(filename) && append
         append_walker(filename, at)
     else
@@ -400,6 +424,22 @@ An array of initial configurations for each walker.
 """
 function generate_initial_configs(num_walkers::Int, volume_per_particle::Float64, num_particle::Int; particle_type::Symbol=:H)
     [generate_random_starting_config(volume_per_particle, num_particle; particle_type=particle_type) for _ in 1:num_walkers]
+end
+
+
+"""
+    generate_initial_configs(num_walkers::Int, volume_per_particle::Float64, num_particle::Vector{Int}; particle_types::Vector{Symbol}=[Symbol(:H), Symbol(:O)])
+Generate initial configurations for a given number of walkers with multiple particle types.
+# Arguments
+- `num_walkers::Int`: The number of walkers.
+- `volume_per_particle::Float64`: The volume per particle.
+- `num_particle::Vector{Int}`: A vector containing the number of particles of each type.
+- `particle_types::Vector{Symbol}=[Symbol(:H), Symbol(:O)]`: A vector of symbols representing the types of particles (default is hydrogen and oxygen).
+# Returns
+An array of initial configurations for each walker, where each configuration contains particles of the specified types.
+"""
+function generate_initial_configs(num_walkers::Int, volume_per_particle::Float64, num_particle::Vector{Int}; particle_types::Vector{Symbol}=[Symbol(:H), Symbol(:O)])
+    [generate_multi_type_random_starting_config(volume_per_particle, num_particle; particle_types=particle_types) for _ in 1:num_walkers]
 end
 
 end # module

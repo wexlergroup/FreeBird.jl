@@ -102,6 +102,13 @@
             ljp1 = CompositeLJParameters(3, ljs1)
             ljp2 = CompositeLJParameters(3, ljs2)
 
+            @testset "pair energy function tests" begin
+                
+                dist = pbc_dist(position(sys1.particles[1]), position(sys1.particles[2]), sys1)
+                pair_energy = EnergyEval.pair_energy(dist, lj)
+                @test pair_energy ≈ -0.02242077243863605u"eV" rtol=1e-6
+            end
+
             @testset "inter_component_energy function tests" begin
                 # Test basic energy calculation
                 @test EnergyEval.inter_component_energy(sys1, sys2, lj) ≈ -0.2524365u"eV" rtol=1e-6

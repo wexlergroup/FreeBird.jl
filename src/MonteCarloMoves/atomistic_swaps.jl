@@ -19,14 +19,14 @@ function two_atoms_swap!(at::AtomWalker{C}, ind1, ind2) where C
 end
 
 """
-    MC_random_swap!(n_steps::Int, at::AtomWalker{C}, lj::LennardJonesParametersSets, emax::typeof(0.0u"eV"))
+    MC_random_swap!(n_steps::Int, at::AtomWalker{C}, lj::LennardJonesParameterSets, emax::typeof(0.0u"eV"))
 
 Perform a Monte Carlo random swap of two atoms in the `AtomWalker`. Only works when there are two or more non-frozen components.
 
 # Arguments
 - `n_steps::Int`: The number of Monte Carlo steps to perform.
 - `at::AtomWalker{C}`: The `AtomWalker` object.
-- `lj::LennardJonesParametersSets`: The Lennard-Jones parameters.
+- `lj::LennardJonesParameterSets`: The Lennard-Jones parameters.
 - `emax::typeof(0.0u"eV")`: The maximum energy allowed for accepting a move.
 
 # Returns
@@ -36,7 +36,7 @@ Perform a Monte Carlo random swap of two atoms in the `AtomWalker`. Only works w
 """
 function MC_random_swap!(n_steps::Int, 
                          at::AtomWalker{C}, 
-                         lj::LennardJonesParametersSets, 
+                         lj::LennardJonesParameterSets, 
                          emax::typeof(0.0u"eV")
                          ) where C
     n_accept = 0

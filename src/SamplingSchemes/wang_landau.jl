@@ -86,7 +86,7 @@ end
 
     wang_landau(
         walker::AtomWalker,
-        lj::LennardJonesParametersSets,
+        lj::LennardJonesParameterSets,
         wl_params::WangLandauParameters
     )
 
@@ -94,7 +94,7 @@ Perform the Wang-Landau sampling scheme for a lattice or an atomistic system.
 
 # Arguments
 - `lattice::AbstractLattice`/`walker::AtomWalker`: The initial lattice/atomistic configuration.
-- `h::ClassicalHamiltonian`/`lj::LennardJonesParametersSets`: The Hamiltonian parameters for the lattice/atomistic system.
+- `h::ClassicalHamiltonian`/`lj::LennardJonesParameterSets`: The Hamiltonian parameters for the lattice/atomistic system.
 - `wl_params::WangLandauParameters`: The parameters for the Wang-Landau sampling scheme.
 
 # Returns
@@ -203,7 +203,7 @@ end
 
 function wang_landau(
     walker::AtomWalker,
-    lj::LennardJonesParametersSets,
+    lj::LennardJonesParameterSets,
     wl_params::WangLandauParameters
     )
 

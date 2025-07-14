@@ -1,4 +1,4 @@
-abstract type LennardJonesParametersSets <: AbstractPotential end
+abstract type LennardJonesParameterSets <: AbstractPotential end
 
 
 """
@@ -13,7 +13,7 @@ The `LJParameters` struct represents the parameters for the Lennard-Jones potent
 - `shift::typeof(0.0u"eV")`: The energy shift applied to the potential, calculated at the cutoff distance.
 
 """
-struct LJParameters <: LennardJonesParametersSets
+struct LJParameters <: LennardJonesParameterSets
     epsilon::typeof(1.0u"eV")
     sigma::typeof(1.0u"Å")
     cutoff::Float64
@@ -110,7 +110,7 @@ end
 
 
 """
-    struct CompositeLJParameters{C} <: LennardJonesParametersSets
+    struct CompositeLJParameters{C} <: LennardJonesParameterSets
 
 CompositeLJParameters is a struct that represents a set of composite Lennard-Jones parameters.
 
@@ -121,7 +121,7 @@ CompositeLJParameters is a struct that represents a set of composite Lennard-Jon
 - `C::Int`: The number of composite parameter sets.
 
 """
-struct CompositeLJParameters{C} <: LennardJonesParametersSets
+struct CompositeLJParameters{C} <: LennardJonesParameterSets
     lj_param_sets::Matrix{LJParameters}
     function CompositeLJParameters{C}(lj_param_sets::Matrix{LJParameters}) where C
         if size(lj_param_sets) != (C, C)

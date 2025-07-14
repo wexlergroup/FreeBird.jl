@@ -2,53 +2,53 @@
 abstract type AtomWalkers <: AbstractLiveSet end
 
 """
-    assign_energy!(walker::AtomWalker, lj::LennardJonesParametersSets)
+    assign_energy!(walker::AtomWalker, lj::LennardJonesParameterSets)
 
 Assigns the energy to the given `walker` using the Lennard-Jones parameters `lj`.
 
 # Arguments
 - `walker::AtomWalker`: The walker object to assign the energy to.
-- `lj::LennardJonesParametersSets`: The Lennard-Jones parameters.
+- `lj::LennardJonesParameterSets`: The Lennard-Jones parameters.
 
 # Returns
 - `walker::AtomWalker`: The walker object with the assigned energy.
 
 """
-function assign_energy!(walker::AtomWalker, lj::LennardJonesParametersSets)
+function assign_energy!(walker::AtomWalker, lj::LennardJonesParameterSets)
     # walker.energy_frozen_part = frozen_energy(walker.configuration, lj, walker.list_num_par, walker.frozen)
     walker.energy = interacting_energy(walker.configuration, lj, walker.list_num_par, walker.frozen) + walker.energy_frozen_part
     return walker
 end
 
 """
-    assign_frozen_energy!(walker::AtomWalker, lj::LennardJonesParametersSets)
+    assign_frozen_energy!(walker::AtomWalker, lj::LennardJonesParameterSets)
 
 Assigns the frozen energy to the given `walker` using the Lennard-Jones parameters `lj`.
 
 # Arguments
 - `walker::AtomWalker`: The walker object to assign the energy to.
-- `lj::LennardJonesParametersSets`: The Lennard-Jones parameters.
+- `lj::LennardJonesParameterSets`: The Lennard-Jones parameters.
 
 # Returns
 - `walker::AtomWalker`: The walker object with the assigned energy.
 
 """
-function assign_frozen_energy!(walker::AtomWalker, lj::LennardJonesParametersSets)
+function assign_frozen_energy!(walker::AtomWalker, lj::LennardJonesParameterSets)
     walker.energy_frozen_part = frozen_energy(walker.configuration, lj, walker.list_num_par, walker.frozen)
     return walker
 end
 
 """
-    assign_energy!(walker::AtomWalker, lj::LennardJonesParametersSets, surface::AtomWalker)
+    assign_energy!(walker::AtomWalker, lj::LennardJonesParameterSets, surface::AtomWalker)
 Assigns the energy to the given `walker` using the Lennard-Jones parameters `lj` with an external surface.
 # Arguments
 - `walker::AtomWalker`: The walker object to assign the energy to.
-- `lj::LennardJonesParametersSets`: The Lennard-Jones parameters.
+- `lj::LennardJonesParameterSets`: The Lennard-Jones parameters.
 - `surface::AtomWalker`: The surface walker object to consider in the energy calculation.
 # Returns
 - `walker::AtomWalker`: The walker object with the assigned energy.
 """
-function assign_energy!(walker::AtomWalker, lj::LennardJonesParametersSets, surface::AtomWalker)
+function assign_energy!(walker::AtomWalker, lj::LennardJonesParameterSets, surface::AtomWalker)
     walker.energy =  interacting_energy(walker.configuration, lj, walker.list_num_par, walker.frozen, surface.configuration) + walker.energy_frozen_part
     return walker
 end
@@ -61,18 +61,18 @@ The `LJAtomWalkers` struct represents a collection of atom walkers that interact
 
 # Fields
 - `walkers::Vector{AtomWalker{C}}`: A vector of atom walkers, where `C` is the number of components.
-- `lj_potential::LennardJonesParametersSets`: The Lennard-Jones potential parameters. See `LennardJonesParametersSets`.
+- `lj_potential::LennardJonesParameterSets`: The Lennard-Jones potential parameters. See `LennardJonesParameterSets`.
 
 # Constructor
-- `LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParametersSets; assign_energy=true)`: 
+- `LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParameterSets; assign_energy=true)`: 
     Constructs a new `LJAtomWalkers` object with the given walkers and Lennard-Jones potential parameters. If `assign_energy=true`,
     the energy of each walker is assigned using the Lennard-Jones potential.
 
 """
 struct LJAtomWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
-    lj_potential::LennardJonesParametersSets
-    function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParametersSets; assign_energy=true, const_frozen_part=true) where C
+    lj_potential::LennardJonesParameterSets
+    function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParameterSets; assign_energy=true, const_frozen_part=true) where C
         if const_frozen_part && !isempty(walkers)
             frozen_part_energy = frozen_energy(walkers[1].configuration, lj_potential, walkers[1].list_num_par, walkers[1].frozen)
         end
@@ -98,19 +98,19 @@ with the presence of an external surface object wrapped in an `AtomWalker`.
 
 # Fields
 - `walkers::Vector{AtomWalker{C}}`: A vector of atom walkers, where `C` is the number of components.
-- `lj_potential::LennardJonesParametersSets`: The Lennard-Jones potential parameters.
+- `lj_potential::LennardJonesParameterSets`: The Lennard-Jones potential parameters.
 - `surface::AtomWalker{CS}`: An atom walker representing the surface, where `CS` is the number of components of the surface.
 
 # Constructor
 - `LJSurfaceWalkers(walkers::Vector{AtomWalker{C}}, 
-                    lj_potential::LennardJonesParametersSets, 
+                    lj_potential::LennardJonesParameterSets, 
                     surface::AtomWalker{CS}; assign_energy=true)`
 
     Constructs a new `LJSurfaceWalkers` object with the given walkers, Lennard-Jones potential parameters, and a single surface walker. 
     If `assign_energy=true`, the energy of each walker is assigned using the Lennard-Jones potential and the surface.
 
 - `LJSurfaceWalkers(walkers::Vector{AtomWalker{C}}, 
-                            lj_potential::LennardJonesParametersSets, 
+                            lj_potential::LennardJonesParameterSets, 
                             surface::AtomWalker{CS}, 
                             assign_energy_parallel::Symbol,
                             ) where C where CS`
@@ -121,10 +121,10 @@ with the presence of an external surface object wrapped in an `AtomWalker`.
 """
 struct LJSurfaceWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
-    lj_potential::LennardJonesParametersSets
+    lj_potential::LennardJonesParameterSets
     surface::AtomWalker{CS} where CS
     function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}}, 
-                                lj_potential::LennardJonesParametersSets, 
+                                lj_potential::LennardJonesParameterSets, 
                                 surface::AtomWalker{CS}; 
                                 assign_energy = true,
                                 ) where C where CS
@@ -141,7 +141,7 @@ struct LJSurfaceWalkers <: AtomWalkers
 end
 
 function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}}, 
-                            lj_potential::LennardJonesParametersSets, 
+                            lj_potential::LennardJonesParameterSets, 
                             surface::AtomWalker{CS}, 
                             assign_energy_parallel::Symbol,
                             ) where C where CS

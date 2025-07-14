@@ -10,7 +10,7 @@ using Unitful
 export AbstractPotential
 export LJParameters, lj_energy
 export CompositeLJParameters
-export LennardJonesParametersSets
+export LennardJonesParameterSets
 
 abstract type AbstractPotential end
 

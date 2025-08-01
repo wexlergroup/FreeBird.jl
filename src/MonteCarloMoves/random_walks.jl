@@ -434,3 +434,51 @@ function generate_random_new_lattice_sample!(lattice::SLattice)
     end
     return lattice
 end
+
+"""
+    MC_random_walk_lattice!(lattice::SLattice)  
+Perform a Monte Carlo random walk on the single-component lattice system.
+# Arguments
+- `lattice::SLattice`: The single-component lattice system to perform the random walk on.
+# Returns
+- `lattice::SLattice`: The proposed lattice after the random walk.
+"""
+function MC_random_walk_lattice!(lattice::SLattice)
+    # pick a random site to hop from
+    hop_from = rand(eachindex(lattice.components[1]))
+    # pick a random site to hop to (can be the same as hop_from)
+    hop_to = rand(eachindex(lattice.components[1]))
+    # propose a swap in occupation state (only if it maintains constant N)
+    # proposed_lattice = deepcopy(lattice)
+    if lattice.components[1][hop_from] != lattice.components[1][hop_to]
+        lattice.components[1][hop_from], lattice.components[1][hop_to] = 
+        lattice.components[1][hop_to], lattice.components[1][hop_from]
+    end
+    return lattice
+end
+
+"""
+    MC_random_walk_lattice!(lattice::MLattice{C,G}) where {C,G}
+Perform a Monte Carlo random walk on the multi-component lattice system.
+# Arguments
+- `lattice::MLattice{C,G}`: The multi-component lattice system to perform the random walk on.
+# Returns
+- `lattice::MLattice{C,G}`: The proposed lattice after the random walk.
+"""
+function MC_random_walk_lattice!(lattice::MLattice{C,G}) where {C,G}
+    # pick a random component
+    comp = rand(1:C)
+    # pick a random site to hop from
+    hop_from = rand(eachindex(lattice.components[comp]))
+    # pick a random site to hop to (can be the same as hop_from)
+    hop_to = rand(eachindex(lattice.components[comp]))
+    # propose a swap in occupation state (only if it maintains constant N)
+    # proposed_lattice = deepcopy(lattice)
+    is_occupied_from = any([lattice.components[comp][hop_from] for comp in 1:C])
+    is_occupied_to = any([lattice.components[comp][hop_to] for comp in 1:C])
+    if is_occupied_from != is_occupied_to
+        lattice.components[comp][hop_from], lattice.components[comp][hop_to] = 
+        lattice.components[comp][hop_to], lattice.components[comp][hop_from]
+    end
+    return lattice
+end

@@ -90,7 +90,8 @@ function nvt_monte_carlo(
         # Propose a swap in occupation state (only if it maintains constant N)
         proposed_lattice = deepcopy(current_lattice)
 
-        generate_random_new_lattice_sample!(proposed_lattice)
+        # generate_random_new_lattice_sample!(proposed_lattice)
+        MC_random_walk_lattice!(proposed_lattice)
 
         # Calculate the proposed energy
         proposed_energy = interacting_energy(proposed_lattice, h).val

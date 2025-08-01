@@ -466,19 +466,30 @@ Perform a Monte Carlo random walk on the multi-component lattice system.
 - `lattice::MLattice{C,G}`: The proposed lattice after the random walk.
 """
 function MC_random_walk_lattice!(lattice::MLattice{C,G}) where {C,G}
-    # pick a random component
-    comp = rand(1:C)
     # pick a random site to hop from
     hop_from = rand(eachindex(lattice.components[comp]))
     # pick a random site to hop to (can be the same as hop_from)
     hop_to = rand(eachindex(lattice.components[comp]))
-    # propose a swap in occupation state (only if it maintains constant N)
-    # proposed_lattice = deepcopy(lattice)
+    
+    # case 1: occupied/unoccupied swap
     is_occupied_from = any([lattice.components[comp][hop_from] for comp in 1:C])
     is_occupied_to = any([lattice.components[comp][hop_to] for comp in 1:C])
-    if is_occupied_from != is_occupied_to
-        lattice.components[comp][hop_from], lattice.components[comp][hop_to] = 
-        lattice.components[comp][hop_to], lattice.components[comp][hop_from]
+    if is_occupied_from != is_occupied_to # only swap if the occupation state changes
+        # swap the occupation state of the sites
+        for comp in 1:C
+            lattice.components[comp][hop_from], lattice.components[comp][hop_to] = 
+            lattice.components[comp][hop_to], lattice.components[comp][hop_from]
+        end
+    # case 2: both sites occupied, swap components
+    elseif is_occupied_from && is_occupied_to
+        # find out which components are occupied at the sites
+        comp_from = findfirst(isequal(true), [lattice.components[comp][hop_from] for comp in 1:C])
+        comp_to = findfirst(isequal(true), [lattice.components[comp][hop_to] for comp in 1:C])
+        if comp_from != comp_to # only swap if the components are different
+            lattice.components[comp_from][hop_from], lattice.components[comp_to][hop_to] = 
+            lattice.components[comp_to][hop_to], lattice.components[comp_from][hop_from]
+        end
     end
+    # case 3: both sites unoccupied, do nothing
     return lattice
 end

@@ -16,4 +16,6 @@ abstract type AbstractPotential end
 
 include("lennardjones.jl")
 
+include("gupta.jl")
+
 end # module Potentials

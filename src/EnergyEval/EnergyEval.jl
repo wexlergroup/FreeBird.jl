@@ -11,7 +11,8 @@ using StaticArrays
 using ..AbstractWalkers
 using ..AbstractPotentials
 using ..AbstractHamiltonians
-
+using CUDA
+using 
 export pbc_dist
 export interacting_energy, frozen_energy
 export single_site_energy

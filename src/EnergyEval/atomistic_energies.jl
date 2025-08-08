@@ -166,8 +166,8 @@ end
 
 # === Extract potential parameters in GPU format ===
 function extract_gpu_params(pot::AbstractPotential)
-    if pot isa LennardJones
-        return LJParams(pot.epsilon, pot.sigma)
+    if pot isa LJParameters
+        return LJParams(pot.epsilon.val, pot.sigma.val)
     else
         error("Unsupported potential type $(typeof(pot)). Please define `extract_gpu_params` for it.")
     end

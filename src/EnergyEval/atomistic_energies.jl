@@ -86,15 +86,6 @@ Compute the energy within a component of a system using a specified (pairwise) p
 
 """
 
-#testing stuff that is added on -- delete later
-function debug_imports()
-    println("Testing imports in atomistic_energies.jl:")
-    println("SMatrix: ", @isdefined SMatrix)
-    println("unitcell: ", @isdefined unitcell)
-    println("ustrip: ", @isdefined ustrip)
-    println("position: ", @isdefined position)
-end
-
 # === GPU-Compatible Struct for Lennard-Jones Parameters ===
 struct LJParams
     epsilon::Float64
@@ -135,7 +126,7 @@ function intra_component_energy(at::AbstractSystem, pot::AbstractPotential)
     pot_params = extract_gpu_params(pot)
     
     # 4. Unit cell matrix
-    cell = SMatrix{3,3,Float64}(ustrip.(unitcell(at)))
+    cell = SMatrix{3,3,Float64}(ustrip.(bounding_box(at)))    
     
     # 5. Transfer to GPU
     pairs_gpu = CuArray(pairs)

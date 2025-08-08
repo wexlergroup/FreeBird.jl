@@ -86,6 +86,15 @@ Compute the energy within a component of a system using a specified (pairwise) p
 
 """
 
+#testing stuff that is added on -- delete later
+function debug_imports()
+    println("Testing imports in atomistic_energies.jl:")
+    println("SMatrix: ", @isdefined SMatrix)
+    println("unitcell: ", @isdefined unitcell)
+    println("ustrip: ", @isdefined ustrip)
+    println("position: ", @isdefined position)
+end
+
 # === GPU-Compatible Struct for Lennard-Jones Parameters ===
 struct LJParams
     epsilon::Float64

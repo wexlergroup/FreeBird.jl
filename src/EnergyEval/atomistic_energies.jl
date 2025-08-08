@@ -126,7 +126,7 @@ function intra_component_energy(at::AbstractSystem, pot::AbstractPotential)
     pot_params = extract_gpu_params(pot)
     
     # 4. Unit cell matrix
-    cell = SMatrix{3,3,Float64}(unitcell(at))
+    cell = SMatrix{3,3,Float64}(ustrip.(unitcell(at)))
     
     # 5. Transfer to GPU
     pairs_gpu = CuArray(pairs)

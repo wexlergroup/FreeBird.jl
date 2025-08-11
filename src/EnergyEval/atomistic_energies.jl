@@ -126,7 +126,8 @@ function intra_component_energy(at::AbstractSystem, pot::AbstractPotential)
     pot_params = extract_gpu_params(pot)
     
     # 4. Unit cell matrix
-    cell = SMatrix{3,3,Float64}(ustrip.(at.cell.matrix))    
+    #this line is causing the issues. it needs to be fixed
+    cell = SMatrix{3,3,Float64}(vec(ustrip.(bounding_box(at))))    
     # 5. Transfer to GPU
     pairs_gpu = CuArray(pairs)
     pos_gpu = CuArray(pos_cpu)

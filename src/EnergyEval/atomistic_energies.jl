@@ -94,9 +94,9 @@ end
 
 # === GPU Kernel: Compute Pair Energies (Intra-component) ===
 function compute_intra_pair_energies_kernel!(
-    energy::CuDeviceVector{Float64},
-    pairs::CuDeviceVector{NTuple{2, Int}},
-    pos::CuDeviceVector{SVector{3, Float64}},
+    energy::AbstractGPUVector{Float64},
+    pairs::AbstractGPUVector{NTuple{2, Int}},
+    pos::AbstractGPUVector{SVector{3, Float64}},
     pot_params::LJParams,
     cell::SMatrix{3,3,Float64}
 )
@@ -127,6 +127,7 @@ function intra_component_energy(at::AbstractSystem, pot::AbstractPotential)
     
     # 4. Unit cell matrix
     cell = SMatrix{3,3,Float64}(hcat([ustrip.(v) for v in at.cell.cell_vectors]...))
+
     # 5. Transfer to GPU
     pairs_gpu = CuArray(pairs)
     pos_gpu = CuArray(pos_cpu)

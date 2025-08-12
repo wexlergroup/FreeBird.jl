@@ -85,23 +85,92 @@ Compute the energy within a component of a system using a specified (pairwise) p
 - `energy`: The energy within the component.
 
 """
-function intra_component_energy(at::AbstractSystem, pot::AbstractPotential)
-    # num_pairs = length(at) * (length(at) - 1) ÷ 2
-    pairs = Array{Tuple{Int,Int}, 1}()
-    for i in 1:length(at)
-        for j in (i+1):length(at)
-            push!(pairs, (i, j))
-        end
-    end
-    # @info "num_pairs: $num_pairs, length(pairs): $(length(pairs))"
-    energies = Vector{typeof(0.0u"eV")}(undef, length(pairs))
-    Threads.@threads for k in eachindex(pairs)
+
+# === GPU-Compatible Struct for Lennard-Jones Parameters ===
+struct LJParams
+    epsilon::Float64
+    sigma::Float64
+end
+
+# === GPU Kernel: Compute Pair Energies (Intra-component) ===
+function compute_intra_pair_energies_kernel!(
+    energy::AbstractGPUVector{Float64},
+    pairs::AbstractGPUVector{NTuple{2, Int}},
+    pos::AbstractGPUVector{SVector{3, Float64}},
+    pot_params::LJParams,
+    cell::SMatrix{3,3,Float64}
+)
+    k = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if k >= 1 && k <= length(pairs)
         (i, j) = pairs[k]
-        r = pbc_dist(position(at, i), position(at, j), at)
-        energies[k] = pair_energy(r, pot)
-        # @info "interacting pair: [$(i),$(j)] $(lj_energy(r,lj))"
+        r_vec = pbc_dist_gpu(pos[i], pos[j], cell)
+        energy[k] = pair_energy_gpu(norm(r_vec), pot_params)
     end
-    return sum(energies)
+    return
+end
+
+# === Host Function: GPU version of `intra_component_energy` ===
+function intra_component_energy(at::AbstractSystem, pot::AbstractPotential)
+    # Early return for small systems
+    if length(at) < 2
+        return 0.0u"eV"
+    end
+    
+    # 1. Generate all unique (i, j) pairs where i < j
+    pairs = [(i, j) for i in 1:length(at) for j in (i+1):length(at)]
+    
+    # 2. Extract atomic positions as SVectors
+    pos_cpu = [position(at, i) for i in 1:length(at)]
+    
+    # 3. Extract GPU-safe potential parameters
+    pot_params = extract_gpu_params(pot)
+    
+    # 4. Unit cell matrix
+    cell = SMatrix{3,3,Float64}(hcat([ustrip.(v) for v in at.cell.cell_vectors]...))
+
+    # 5. Transfer to GPU
+    pairs_gpu = CuArray(pairs)
+    pos_gpu = CuArray(pos_cpu)
+    energy_gpu = CUDA.zeros(Float64, length(pairs))
+    
+    # 6. Launch kernel
+    threads = 256
+    blocks = cld(length(pairs), threads)
+    CUDA.@sync @cuda threads=threads blocks=blocks compute_intra_pair_energies_kernel!(
+        energy_gpu, pairs_gpu, pos_gpu, pot_params, cell
+    )
+    
+    # 7. Return total energy with proper units
+    return sum(Array(energy_gpu)) * u"eV"
+end
+
+# === GPU-Safe Helper Functions ===
+@inline function pbc_dist_gpu(pos1::SVector{3, Float64}, pos2::SVector{3, Float64}, cell::SMatrix{3,3,Float64})
+    dr = pos1 - pos2
+    frac = inv(cell) * dr
+    frac -= round.(frac)   # Wrap into unit cell
+    return cell * frac     # Convert back to Cartesian
+end
+
+@inline function pair_energy_gpu(r::Float64, params::LJParams)
+    # Safety check for very small distances
+    if r < 1e-10
+        return 0.0
+    end
+    σ = params.sigma
+    ε = params.epsilon
+    inv_r = σ / r
+    inv_r6 = inv_r^6
+    return 4.0 * ε * (inv_r6^2 - inv_r6)
+end
+
+# === Extract potential parameters in GPU format ===
+function extract_gpu_params(pot::AbstractPotential)
+    if pot isa LJParameters
+        return LJParams(pot.epsilon.val, pot.sigma.val)
+    else
+        error("Unsupported potential type $(typeof(pot)). Please define `extract_gpu_params` for it.")
+    end
 end
 
 

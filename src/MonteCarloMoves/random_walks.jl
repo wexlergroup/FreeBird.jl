@@ -227,7 +227,9 @@ end
 """
     MC_random_walk!(n_steps::Int, lattice::LatticeWalker, h::ClassicalHamiltonian, emax::Float64; energy_perturb::Float64=0.0)
 
-Perform a Monte Carlo random walk on the lattice system.
+Generate a Monte Carlo random walk on a lattice using spin-exchange moves.
+
+Kawasaki, K. Diffusion Constants near the Critical Point for Time-Dependent Ising Models. I. Phys. Rev. 1966, 145 (1), 224--230. https://doi.org/10.1103/PhysRev.145.224.
 
 # Arguments
 - `n_steps::Int`: The number of Monte Carlo steps to perform.

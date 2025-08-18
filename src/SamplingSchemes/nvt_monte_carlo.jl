@@ -91,7 +91,7 @@ function nvt_monte_carlo(
         proposed_lattice = deepcopy(current_lattice)
 
         # generate_random_new_lattice_sample!(proposed_lattice)
-        MC_random_walk_lattice!(proposed_lattice)
+        lattice_random_walk!(proposed_lattice)
 
         # Calculate the proposed energy
         proposed_energy = interacting_energy(proposed_lattice, h).val

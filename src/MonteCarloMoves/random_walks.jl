@@ -430,7 +430,9 @@ end
 
 """
     lattice_random_walk!(lattice::SLattice)  
+
 Perform a Monte Carlo random walk on the single-component lattice system.
+
 # Arguments
 - `lattice::SLattice`: The single-component lattice system to perform the random walk on.
 # Returns
@@ -452,7 +454,9 @@ end
 
 """
     lattice_random_walk!(lattice::MLattice{C,G}) where {C,G}
+
 Perform a Monte Carlo random walk on the multi-component lattice system.
+
 # Arguments
 - `lattice::MLattice{C,G}`: The multi-component lattice system to perform the random walk on.
 # Returns
@@ -474,7 +478,7 @@ function lattice_random_walk!(lattice::MLattice{C,G}) where {C,G}
     # println("is_occupied_from: $is_occupied_from, is_occupied_to: $is_occupied_to") # debug
     if is_occupied_from != is_occupied_to # only swap if the occupation state changes
         # swap the occupation state of the sites
-        return swap_enmpty_occupied_sites!(lattice, hop_from, hop_to)
+        return swap_empty_occupied_sites!(lattice, hop_from, hop_to)
     # case 2: both sites occupied, swap components
     elseif is_occupied_from && is_occupied_to
         return swap_occupied_sites_across_components!(lattice, hop_from, hop_to)
@@ -483,8 +487,19 @@ function lattice_random_walk!(lattice::MLattice{C,G}) where {C,G}
     return lattice
 end
 
+"""
+    swap_empty_occupied_sites!(lattice::LatticeWalker{C}, hop_from::Int, hop_to::Int) where C
 
-function swap_enmpty_occupied_sites!(lattice::LatticeWalker{C}, 
+Swap the occupation state of two sites in the lattice walker of any component.
+
+# Arguments
+- `lattice::LatticeWalker{C}`: The lattice walker to perform the swap on.
+- `hop_from::Int`: The index of the site to hop from.
+- `hop_to::Int`: The index of the site to hop to.
+# Returns
+- `lattice::LatticeWalker{C}`: The updated lattice walker after the swap.
+"""
+function swap_empty_occupied_sites!(lattice::LatticeWalker{C}, 
                                      hop_from::Int, 
                                      hop_to::Int) where C
     for comp::Int in 1:C
@@ -494,7 +509,15 @@ function swap_enmpty_occupied_sites!(lattice::LatticeWalker{C},
     return lattice
 end
 
-
+"""    swap_occupied_sites_across_components!(lattice::LatticeWalker{C}, hop_from::Int, hop_to::Int) where C
+Swap the occupation state of two sites across different components in the lattice walker.
+# Arguments
+- `lattice::LatticeWalker{C}`: The lattice walker to perform the swap on.
+- `hop_from::Int`: The index of the site to hop from.
+- `hop_to::Int`: The index of the site to hop to.
+# Returns
+- `lattice::LatticeWalker{C}`: The updated lattice walker after the swap.
+"""
 function swap_occupied_sites_across_components!(lattice::LatticeWalker{C}, 
                                      hop_from::Int, 
                                      hop_to::Int) where C

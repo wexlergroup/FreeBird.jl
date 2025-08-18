@@ -258,7 +258,7 @@ function MC_random_walk!(n_steps::Int,
 
         proposed_lattice = deepcopy(current_lattice)
 
-        MC_random_walk_lattice!(proposed_lattice)
+        lattice_random_walk!(proposed_lattice)
         
         perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
         proposed_energy = interacting_energy(proposed_lattice, h) + perturbation_energy
@@ -429,14 +429,14 @@ function generate_random_new_lattice_sample!(lattice::SLattice)
 end
 
 """
-    MC_random_walk_lattice!(lattice::SLattice)  
+    lattice_random_walk!(lattice::SLattice)  
 Perform a Monte Carlo random walk on the single-component lattice system.
 # Arguments
 - `lattice::SLattice`: The single-component lattice system to perform the random walk on.
 # Returns
 - `lattice::SLattice`: The proposed lattice after the random walk.
 """
-function MC_random_walk_lattice!(lattice::SLattice)
+function lattice_random_walk!(lattice::SLattice)
     # pick a random site to hop from
     hop_from = rand(eachindex(lattice.components[1]))
     # pick a random site to hop to (can be the same as hop_from)
@@ -451,20 +451,20 @@ function MC_random_walk_lattice!(lattice::SLattice)
 end
 
 """
-    MC_random_walk_lattice!(lattice::MLattice{C,G}) where {C,G}
+    lattice_random_walk!(lattice::MLattice{C,G}) where {C,G}
 Perform a Monte Carlo random walk on the multi-component lattice system.
 # Arguments
 - `lattice::MLattice{C,G}`: The multi-component lattice system to perform the random walk on.
 # Returns
 - `lattice::MLattice{C,G}`: The proposed lattice after the random walk.
 """
-function MC_random_walk_lattice!(lattice::MLattice{C,G}) where {C,G}
+function lattice_random_walk!(lattice::MLattice{C,G}) where {C,G}
     # pick a random component to hop in
-    comp::Int = rand(1:C)
+    picked_comp::Int = rand(1:C)
     # pick a random site to hop from
-    hop_from::Int = rand(eachindex(lattice.components[comp]))
+    hop_from::Int = rand(eachindex(lattice.components[picked_comp]))
     # pick a random site to hop to (can be the same as hop_from)
-    hop_to::Int = rand(eachindex(lattice.components[comp]))
+    hop_to::Int = rand(eachindex(lattice.components[picked_comp]))
 
     # println("hop from: $hop_from, hop to: $hop_to, comp: $comp") # debug
     
@@ -474,27 +474,42 @@ function MC_random_walk_lattice!(lattice::MLattice{C,G}) where {C,G}
     # println("is_occupied_from: $is_occupied_from, is_occupied_to: $is_occupied_to") # debug
     if is_occupied_from != is_occupied_to # only swap if the occupation state changes
         # swap the occupation state of the sites
-        for comp::Int in 1:C
-            lattice.components[comp][hop_from], lattice.components[comp][hop_to] = 
-            lattice.components[comp][hop_to], lattice.components[comp][hop_from]
-        end
+        return swap_enmpty_occupied_sites!(lattice, hop_from, hop_to)
     # case 2: both sites occupied, swap components
     elseif is_occupied_from && is_occupied_to
-        # find out which components are occupied at the sites
-        comp_from::Int = findfirst(isequal(true), [lattice.components[comp][hop_from] for comp in 1:C])
-        comp_to::Int = findfirst(isequal(true), [lattice.components[comp][hop_to] for comp in 1:C])
-        # println("comp_from: $comp_from, comp_to: $comp_to") # debug
-        if comp_from != comp_to # only swap if the components are different
-            # first, unoccupy the site at comp_from
-            lattice.components[comp_from][hop_from] = !lattice.components[comp_from][hop_from]
-            # second, unoccupy the site at comp_to
-            lattice.components[comp_to][hop_from] = !lattice.components[comp_to][hop_from]
-            # third, occupy the site at comp_to
-            lattice.components[comp_to][hop_to] = !lattice.components[comp_to][hop_to]
-            # finally, occupy the site at comp_from
-            lattice.components[comp_from][hop_to] = !lattice.components[comp_from][hop_to]
-        end
+        return swap_occupied_sites_across_components!(lattice, hop_from, hop_to)
     end
     # case 3: both sites unoccupied, do nothing
+    return lattice
+end
+
+
+function swap_enmpty_occupied_sites!(lattice::LatticeWalker{C}, 
+                                     hop_from::Int, 
+                                     hop_to::Int) where C
+    for comp::Int in 1:C
+        lattice.components[comp][hop_from], lattice.components[comp][hop_to] = 
+        lattice.components[comp][hop_to], lattice.components[comp][hop_from]
+    end
+    return lattice
+end
+
+
+function swap_occupied_sites_across_components!(lattice::LatticeWalker{C}, 
+                                     hop_from::Int, 
+                                     hop_to::Int) where C
+    # find out which components are occupied at the sites
+    comp_from::Int = findfirst(isequal(true), [lattice.components[comp][hop_from] for comp in 1:C])
+    comp_to::Int = findfirst(isequal(true), [lattice.components[comp][hop_to] for comp in 1:C])
+    if comp_from != comp_to # only swap if the components are different
+        # first, unoccupy the site at comp_from
+        lattice.components[comp_from][hop_from] = !lattice.components[comp_from][hop_from]
+        # second, unoccupy the site at comp_to
+        lattice.components[comp_to][hop_from] = !lattice.components[comp_to][hop_from]
+        # third, occupy the site at comp_to
+        lattice.components[comp_to][hop_to] = !lattice.components[comp_to][hop_to]
+        # finally, occupy the site at comp_from
+        lattice.components[comp_from][hop_to] = !lattice.components[comp_from][hop_to]
+    end
     return lattice
 end

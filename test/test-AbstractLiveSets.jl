@@ -67,7 +67,7 @@
                 # Test type and structure
                 @test lj_walkers isa LJSurfaceWalkers
                 @test length(lj_walkers.walkers) == 3
-                @test lj_walkers.lj_potential === ljs
+                @test lj_walkers.potential === ljs
                 @test lj_walkers.surface === surface
                 
                 # Test energy assignment
@@ -79,7 +79,7 @@
                 threaded_lj_walkers = LJSurfaceWalkers(walkers, ljs, surface, :threads)
                 @test threaded_lj_walkers isa LJSurfaceWalkers
                 @test length(threaded_lj_walkers.walkers) == 3
-                @test threaded_lj_walkers.lj_potential === ljs
+                @test threaded_lj_walkers.potential === ljs
                 @test threaded_lj_walkers.surface === surface
                 @test all(threaded_lj_walkers.walkers[i].energy == lj_walkers.walkers[i].energy for i in 1:3)
                 @test all(threaded_lj_walkers.walkers[i].energy_frozen_part == lj_walkers.walkers[i].energy_frozen_part for i in 1:3)
@@ -88,7 +88,7 @@
                 distributed_lj_walkers = LJSurfaceWalkers(walkers, ljs, surface, :distributed)
                 @test distributed_lj_walkers isa LJSurfaceWalkers
                 @test length(distributed_lj_walkers.walkers) == 3
-                @test distributed_lj_walkers.lj_potential === ljs
+                @test distributed_lj_walkers.potential === ljs
                 @test distributed_lj_walkers.surface === surface
                 @test all(distributed_lj_walkers.walkers[i].energy == lj_walkers.walkers[i].energy for i in 1:3)
                 @test all(distributed_lj_walkers.walkers[i].energy_frozen_part == lj_walkers.walkers[i].energy_frozen_part for i in 1:3)
@@ -124,7 +124,7 @@
                 # Test type and structure
                 @test lj_walkers isa LJAtomWalkers
                 @test length(lj_walkers.walkers) == 3
-                @test lj_walkers.lj_potential === lj
+                @test lj_walkers.potential === lj
                 
                 # Test energy assignment
                 @test all(w.energy > 0.0u"eV" for w in lj_walkers.walkers)

@@ -88,7 +88,7 @@ The `LJAtomWalkers` struct represents a collection of atom walkers that interact
 """
 struct LJAtomWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
-    lj_potential::LennardJonesParameterSets
+    potential::LennardJonesParameterSets
     function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParameterSets; assign_energy=true, const_frozen_part=true) where C
         assign_energy!(walkers, lj_potential; assign_energy=assign_energy, const_frozen_part=const_frozen_part)
         return new(walkers, lj_potential)

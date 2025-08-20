@@ -14,9 +14,9 @@ Assigns the energy to the given `walker` using the Lennard-Jones parameters `lj`
 - `walker::AtomWalker`: The walker object with the assigned energy.
 
 """
-function assign_energy!(walker::AtomWalker, lj::LennardJonesParameterSets)
+function assign_energy!(walker::AtomWalker, pot::AbstractPotential)
     # walker.energy_frozen_part = frozen_energy(walker.configuration, lj, walker.list_num_par, walker.frozen)
-    walker.energy = interacting_energy(walker.configuration, lj, walker.list_num_par, walker.frozen) + walker.energy_frozen_part
+    walker.energy = interacting_energy(walker.configuration, pot, walker.list_num_par, walker.frozen) + walker.energy_frozen_part
     return walker
 end
 
@@ -53,6 +53,23 @@ function assign_energy!(walker::AtomWalker, lj::LennardJonesParameterSets, surfa
     return walker
 end
 
+function assign_energy!(walkers::Vector{AtomWalker{C}}, pot::AbstractPotential; assign_energy=true, const_frozen_part=true) where C
+    if const_frozen_part && !isempty(walkers)
+        frozen_part_energy = frozen_energy(walkers[1].configuration, pot, walkers[1].list_num_par, walkers[1].frozen)
+    end
+    if assign_energy
+        Threads.@threads for walker in walkers
+            if const_frozen_part
+                walker.energy_frozen_part = frozen_part_energy
+            else
+                assign_frozen_energy!(walker, pot)
+            end
+            assign_energy!(walker, pot) # comes after assign_frozen_energy!
+        end
+    end
+    return walkers
+end
+
 
 """
     struct LJAtomWalkers <: AtomWalkers
@@ -73,19 +90,7 @@ struct LJAtomWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
     lj_potential::LennardJonesParameterSets
     function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, lj_potential::LennardJonesParameterSets; assign_energy=true, const_frozen_part=true) where C
-        if const_frozen_part && !isempty(walkers)
-            frozen_part_energy = frozen_energy(walkers[1].configuration, lj_potential, walkers[1].list_num_par, walkers[1].frozen)
-        end
-        if assign_energy
-            Threads.@threads for walker in walkers
-                if const_frozen_part
-                    walker.energy_frozen_part = frozen_part_energy
-                else
-                    assign_frozen_energy!(walker, lj_potential)
-                end
-                assign_energy!(walker, lj_potential) # comes after assign_frozen_energy!
-            end
-        end
+        assign_energy!(walkers, lj_potential; assign_energy=assign_energy, const_frozen_part=const_frozen_part)
         return new(walkers, lj_potential)
     end
 end
@@ -121,7 +126,7 @@ with the presence of an external surface object wrapped in an `AtomWalker`.
 """
 struct LJSurfaceWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
-    lj_potential::LennardJonesParameterSets
+    potential::LennardJonesParameterSets
     surface::AtomWalker{CS} where CS
     function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}}, 
                                 lj_potential::LennardJonesParameterSets, 
@@ -181,4 +186,13 @@ function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}},
         error("Invalid parallelization option: $assign_energy_parallel. Use :threads or :distributed.")
     end
     return LJSurfaceWalkers(walkers, lj_potential, surface)
+end
+
+struct GuptaAtomWalkers <: AtomWalkers
+    walkers::Vector{AtomWalker{C}} where C
+    potential::GuptaParameters
+    function GuptaAtomWalkers(walkers::Vector{AtomWalker{C}}, gupta_potential::GuptaParameters; assign_energy=true, const_frozen_part=true) where C
+        assign_energy!(walkers, gupta_potential; assign_energy=assign_energy, const_frozen_part=const_frozen_part)
+        return new(walkers, gupta_potential)
+    end
 end

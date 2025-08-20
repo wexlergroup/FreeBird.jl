@@ -226,7 +226,7 @@ Returns
 function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine)
     sort_by_energy!(liveset)
     ats = liveset.walkers
-    lj = liveset.lj_potential
+    lj = liveset.potential
     iter::Union{Missing,Int} = missing
     emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
     if mc_routine isa MCRandomWalkMaxE

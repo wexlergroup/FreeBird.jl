@@ -77,13 +77,13 @@ function inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, pot::G
     pairs = [(i, j) for i in 1:length(at1), j in 1:length(at2)]
     # @show pairs # DEBUG
     energies_rep = Array{typeof(0.0u"eV"), 1}(undef, length(pairs))
-    energies_att = Array{typeof(0.0u"eV"), 1}(undef, length(pairs))
+    energies_att = Array{typeof(0.0u"eV^2"), 1}(undef, length(pairs))
     Threads.@threads for k in eachindex(pairs)
         # @show i,j # DEBUG
         (i, j) = pairs[k]
         r = pbc_dist(position(at1, i), position(at2, j), at1)
         energies_rep[k] = gupta_repulsion(r,pot)
-        energies_att[k] = gupta_attraction(r,pot)
+        energies_att[k] = gupta_attraction_squared(r,pot)
     end
     total_rep = sum(energies_rep)
     total_att = sum(energies_att)
@@ -134,12 +134,12 @@ function intra_component_energy(at::AbstractSystem, pot::GuptaParameters)
     end
     # @info "num_pairs: $num_pairs, length(pairs): $(length(pairs))"
     energies_rep = Vector{typeof(0.0u"eV")}(undef, length(pairs))
-    energies_att = Vector{typeof(0.0u"eV")}(undef, length(pairs))
+    energies_att = Vector{typeof(0.0u"eV^2")}(undef, length(pairs))
     Threads.@threads for k in eachindex(pairs)
         (i, j) = pairs[k]
         r = pbc_dist(position(at, i), position(at, j), at)
         energies_rep[k] = gupta_repulsion(r,pot)
-        energies_att[k] = gupta_attraction(r,pot)
+        energies_att[k] = gupta_attraction_squared(r,pot)
         # @info "interacting pair: [$(i),$(j)] $(lj_energy(r,lj))"
     end
     total_rep = sum(energies_rep)
@@ -211,7 +211,7 @@ Since the frozen particles do not move, the energy is typically only calculated 
 
 """
 function frozen_energy(at::AbstractSystem, 
-                       lj::LJParameters,
+                       lj::Union{LJParameters, GuptaParameters},
                        list_num_par::Vector{Int},
                        frozen::Vector{Bool}
                        )
@@ -330,7 +330,7 @@ The energy is calculated by summing the pairwise interactions between the free p
 
 """
 function interacting_energy(at::AbstractSystem, 
-                            lj::LJParameters,
+                            pot::Union{LJParameters, GuptaParameters},
                             list_num_par::Vector{Int},
                             frozen::Vector{Bool}
                             )
@@ -342,7 +342,7 @@ function interacting_energy(at::AbstractSystem,
     # intra-component interactions
     for i in findall(.!frozen) # find non-frozen components
         if length(components[i]) > 1
-            energy += intra_component_energy(components[i], lj)
+            energy += intra_component_energy(components[i], pot)
         end
     end
     # inter-component interactions
@@ -350,7 +350,7 @@ function interacting_energy(at::AbstractSystem,
         for j in (i+1):length(list_num_par)
             if !frozen[i] || !frozen[j] # not both frozen
                 # @info "component $i and $j"
-                energy += inter_component_energy(components[i], components[j], lj)
+                energy += inter_component_energy(components[i], components[j], pot)
             end
         end
     end

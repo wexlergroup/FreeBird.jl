@@ -29,9 +29,9 @@ function GuptaParameters(;A=1.0, ξ=1.0, p=10.0, q=5.0, r0=1.0, cutoff=Inf)
     return GuptaParameters(A*u"eV", ξ*u"eV", p, q, r0*u"Å", cutoff)
 end
 
-function gupta_attraction(r::typeof(1.0u"Å"), gp::GuptaParameters)
+function gupta_attraction_squared(r::typeof(1.0u"Å"), gp::GuptaParameters)
     if r > gp.cutoff * gp.r0
-        return 0.0u"eV"
+        return 0.0u"eV^2"
     else 
         return gp.ξ^2 * exp(-2 * gp.q * (r/gp.r0 - 1))
     end

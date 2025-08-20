@@ -266,7 +266,7 @@ end
 function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutineParallel)
     sort_by_energy!(liveset)
     ats = liveset.walkers
-    lj = liveset.lj_potential
+    lj = liveset.potential
     iter::Union{Missing,Int} = missing
     emax::Union{Vector{Missing},Vector{typeof(0.0u"eV")}} = [liveset.walkers[i].energy for i in 1:nworkers()]
 
@@ -318,7 +318,7 @@ end
 function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutineParallel)
     sort_by_energy!(liveset)
     ats = liveset.walkers
-    lj = liveset.lj_potential
+    lj = liveset.potential
     iter::Union{Missing,Int} = missing
     emax::Union{Vector{Missing},Vector{typeof(0.0u"eV")}} = [liveset.walkers[i].energy for i in 1:nworkers()]
 
@@ -370,7 +370,7 @@ end
 function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine)
     sort_by_energy!(liveset)
     ats = liveset.walkers
-    lj = liveset.lj_potential
+    lj = liveset.potential
     iter::Union{Missing,Int} = missing
     emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
     if mc_routine isa MCRandomWalkMaxE
@@ -421,7 +421,7 @@ Returns
 function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCMixedMoves)
     sort_by_energy!(liveset)
     ats = liveset.walkers
-    lj = liveset.lj_potential
+    lj = liveset.potential
     iter::Union{Missing,Int} = missing
     emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
 

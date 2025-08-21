@@ -1,20 +1,20 @@
 """
-    struct CompositeLJParameters{C} <: LennardJonesParameterSets
+    struct CompositeParameterSets{C,P} <: MultiComponentParameterSets
 
-CompositeLJParameters is a struct that represents a set of composite Lennard-Jones parameters.
+CompositeParameterSets is a struct that represents a set of composite parameter sets, typically used for multi-component systems.
 
 # Fields
-- `param_sets::Matrix{LJParameters}`: A matrix of LJParameters representing the LJ parameter sets.
+- `param_sets::Matrix{P}`: A matrix of parameter sets representing the composite parameter sets.
 
 # Type Parameters
 - `C::Int`: The number of composite parameter sets.
 
 """
-struct CompositeParameterSets{C,P} <: AbstractPotential
+struct CompositeParameterSets{C,P} <: MultiComponentParameterSets where {C,P}
     param_sets::Matrix{P}
     function CompositeParameterSets{C}(param_sets::Matrix{P}) where {C,P}
         if size(param_sets) != (C, C)
-            throw(ArgumentError("the size of the matrix is not compatible with the number of components."))
+            throw(ArgumentError("The size of the matrix is not compatible with the number of components."))
         end
         new{C,P}(param_sets)
     end
@@ -34,13 +34,13 @@ function Base.:(==)(cps1::CompositeParameterSets{C,P}, cps2::CompositeParameterS
 end
 
 """
-    CompositeLJParameters(c::Int, ljs::Vector{LJParameters})
+    CompositeParameterSets(c::Int, ps::Vector{P}) where {P <: SingleComponentParameterSets}
 
-Construct a `CompositeLJParameters` object from a vector of LJParameters.
+Construct a `CompositeParameterSets` object from a vector of `SingleComponentParameterSets`.
 
 # Arguments
 - `c::Int`: The number of components.
-- `ljs::Vector{LJParameters}`: A vector of LJParameters. 
+- `ps::Vector{LJParameters}`: A vector of LJParameters. 
 The number of elements in the vector must be equal to `c^2` or `c*(c+1)/2`. 
 The former case is for a full flattened matrix of LJParameters, useful when 
 the interactions are asymmetric, i.e., `epsilon_ij != epsilon_ji`. The latter
@@ -48,11 +48,11 @@ case is for symmetric interactions, i.e., `epsilon_ij = epsilon_ji`, hence only
 the upper triangular part of the matrix is needed.
 
 # Returns
-- A `CompositeLJParameters` object.
+- A `CompositeParameterSets` object.
 
 # Example
 ```jldoctest
-julia> ljs = [LJParameters(epsilon=e) for e in [11, 12, 13, 22, 23, 33]]
+julia> ps = [LJParameters(epsilon=e) for e in [11, 12, 13, 22, 23, 33]]
 6-element Vector{LJParameters}:
  LJParameters(11.0 eV, 1.0 Å, Inf, 0.0 eV)
  LJParameters(12.0 eV, 1.0 Å, Inf, 0.0 eV)
@@ -61,8 +61,8 @@ julia> ljs = [LJParameters(epsilon=e) for e in [11, 12, 13, 22, 23, 33]]
  LJParameters(23.0 eV, 1.0 Å, Inf, 0.0 eV)
  LJParameters(33.0 eV, 1.0 Å, Inf, 0.0 eV)
 
-julia> ljp = CompositeLJParameters(3,ljs)
-CompositeLJParameters{3}(param_sets::3x3 Matrix{LJParameters}):
+julia> ljp = CompositeParameterSets(3,ps)
+CompositeParameterSets{3}(param_sets::3x3 Matrix{LJParameters}):
     param_sets[1, 1] : LJParameters(11.0 eV, 1.0 Å, Inf, 0.0 eV)
     param_sets[1, 2] : LJParameters(12.0 eV, 1.0 Å, Inf, 0.0 eV)
     param_sets[1, 3] : LJParameters(13.0 eV, 1.0 Å, Inf, 0.0 eV)
@@ -74,7 +74,7 @@ CompositeLJParameters{3}(param_sets::3x3 Matrix{LJParameters}):
     param_sets[3, 3] : LJParameters(33.0 eV, 1.0 Å, Inf, 0.0 eV)
 ```
 """
-function CompositeParameterSets(c::Int, ps::Vector{P}) where P
+function CompositeParameterSets(c::Int, ps::Vector{P}) where {P <: SingleComponentParameterSets}
     if length(ps) == c^2
         # If the number of LJParameters sets is equal to the number 
         # of elements in the matrix, then assume that Vector{LJParameters} 

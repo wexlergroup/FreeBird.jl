@@ -1,4 +1,4 @@
-abstract type GuptaParameterSets <: AbstractPotential end
+abstract type GuptaParameterSets <: SingleComponentParameterSets end
 
 """
     struct GuptaParameters

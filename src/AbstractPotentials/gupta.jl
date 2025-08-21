@@ -1,4 +1,4 @@
-abstract type GuptaParameterSets <: SingleComponentParameterSets end
+abstract type GuptaParameterSets{T} <: SingleComponentPotential{T} end
 
 """
     struct GuptaParameters
@@ -12,7 +12,7 @@ The `GuptaParameters` struct represents the parameters for the Gupta potential.
 - `r0::typeof(1.0u"Å")`: The equilibrium distance for the potential.
 - `cutoff::Float64`: The cutoff distance for the potential, in units of `r0`.
 """
-struct GuptaParameters <: GuptaParameterSets
+struct GuptaParameters <: GuptaParameterSets{ManyBody}
     A::typeof(1.0u"eV")
     ξ::typeof(1.0u"eV")
     p::Float64
@@ -44,3 +44,5 @@ function gupta_repulsion(r::typeof(1.0u"Å"), gp::GuptaParameters)
         return gp.A * exp(-gp.p * (r/gp.r0 - 1))
     end 
 end
+
+

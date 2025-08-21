@@ -1,4 +1,4 @@
-abstract type LennardJonesParameterSets <: SingleComponentParameterSets end
+abstract type LennardJonesParameterSets{T} <: SingleComponentPotential{T} end
 
 
 """
@@ -13,7 +13,7 @@ The `LJParameters` struct represents the parameters for the Lennard-Jones potent
 - `shift::typeof(0.0u"eV")`: The energy shift applied to the potential, calculated at the cutoff distance.
 
 """
-struct LJParameters <: LennardJonesParameterSets
+struct LJParameters <: LennardJonesParameterSets{Pairwise}
     epsilon::typeof(1.0u"eV")
     sigma::typeof(1.0u"Å")
     cutoff::Float64
@@ -106,3 +106,15 @@ function lj_energy(r::typeof(1.0u"Å"), lj::LJParameters)
         return lj_energy(lj.epsilon, lj.sigma, r) - lj.shift
     end
 end
+
+"""
+    pair_energy(r::typeof(1.0u"Å"), lj::LJParameters)
+Compute the energy of a pair of particles separated by distance `r` using the Lennard-Jones potential.
+# Arguments
+- `r::typeof(1.0u"Å")`: The distance between the two particles.
+- `lj::LJParameters`: The Lennard-Jones parameters.
+# Returns
+- `energy::typeof(0.0u"eV")`: The energy of the pair of particles.
+
+"""
+pair_energy(r::typeof(1.0u"Å"), lj::LJParameters) = lj_energy(r, lj)

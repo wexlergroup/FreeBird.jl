@@ -10,7 +10,7 @@ CompositeParameterSets is a struct that represents a set of composite parameter 
 - `C::Int`: The number of composite parameter sets.
 
 """
-struct CompositeParameterSets{C,P} <: MultiComponentParameterSets where {C,P}
+struct CompositeParameterSets{C,P} <: MultiComponentPotential where {C,P}
     param_sets::Matrix{P}
     function CompositeParameterSets{C}(param_sets::Matrix{P}) where {C,P}
         if size(param_sets) != (C, C)
@@ -74,7 +74,7 @@ CompositeParameterSets{3}(param_sets::3x3 Matrix{LJParameters}):
     param_sets[3, 3] : LJParameters(33.0 eV, 1.0 Å, Inf, 0.0 eV)
 ```
 """
-function CompositeParameterSets(c::Int, ps::Vector{P}) where {P <: SingleComponentParameterSets}
+function CompositeParameterSets(c::Int, ps::Vector{P}) where {P <: SingleComponentPotential}
     if length(ps) == c^2
         # If the number of LJParameters sets is equal to the number 
         # of elements in the matrix, then assume that Vector{LJParameters} 

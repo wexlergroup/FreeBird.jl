@@ -21,7 +21,7 @@ struct CompositeParameterSets{C,P} <: MultiComponentPotential where {C,P}
 end
 
 function Base.show(io::IO, ps::CompositeParameterSets{C,P}) where {C,P}
-    println(io, "CompositeParameterSets{$C}(param_sets::$(C)x$C Matrix{$P}):")
+    println(io, "CompositeParameterSets{$C,$P}(param_sets::$(C)x$C Matrix):")
     for i in 1:C
         for j in 1:C
             println(io, "    param_sets[$i, $j] : ", ps.param_sets[i, j])

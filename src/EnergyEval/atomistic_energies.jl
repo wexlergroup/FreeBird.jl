@@ -255,4 +255,4 @@ The energy is calculated by summing the pairwise interactions between the free p
 - `energy`: The energy from interactions between particles.
 
 """
-interacting_energy(at::AbstractSystem, pot::SingleComponentPotential{S}) = intra_component_energy(at, pot)
+interacting_energy(at::AbstractSystem, pot::SingleComponentPotential{S}) where S = intra_component_energy(at, pot)

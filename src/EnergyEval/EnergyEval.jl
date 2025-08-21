@@ -18,6 +18,9 @@ export single_site_energy
 
 
 include("atomistic_energies.jl")
+include("atomistic_pairwise.jl")
+include("atomistic_single_site.jl")
+include("atomistic_many_body.jl")
 
 include("lattice_energies.jl")
 

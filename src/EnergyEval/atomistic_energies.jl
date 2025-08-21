@@ -151,7 +151,7 @@ end
 
 
 """
-    frozen_energy(at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int}, frozen::Vector{Bool})
+    frozen_energy(at::AbstractSystem, cps::CompositeParameterSets{C,P}, list_num_par::Vector{Int}, frozen::Vector{Bool})
 
 Calculate the energy of the frozen particles in the system using a composite Lennard-Jones potential.
 The energy is calculated by summing the pairwise interactions between the frozen particles.
@@ -159,7 +159,7 @@ Since the frozen particles do not move, the energy is typically only calculated 
 
 # Arguments
 - `at::AbstractSystem`: The system for which the energy is calculated.
-- `ljs::CompositeLJParameters{C}`: The composite Lennard-Jones parameters.
+- `cps::CompositeParameterSets{C,P}`: The composite Lennard-Jones parameters.
 - `list_num_par::Vector{Int}`: The number of particles in each component.
 - `frozen::Vector{Bool}`: A vector indicating whether each component is frozen.
 
@@ -168,17 +168,17 @@ Since the frozen particles do not move, the energy is typically only calculated 
 
 """
 function frozen_energy(at::AbstractSystem, 
-                       ljs::CompositeLJParameters{C}, 
+                       cps::CompositeParameterSets{C,P}, 
                        list_num_par::Vector{Int},
                        frozen::Vector{Bool}
-                       ) where {C}
+                       ) where {C,P}
     check_num_components(C, list_num_par, frozen)
     energy = 0.0u"eV"
     components = split_components(at, list_num_par)
     # intra-component interactions
     for i in findall(frozen) # find frozen components
         if length(components[i]) > 1
-            energy += intra_component_energy(components[i], ljs.lj_param_sets[i,i])
+            energy += intra_component_energy(components[i], cps.param_sets[i,i])
         end
     end
     # inter-component interactions
@@ -186,7 +186,7 @@ function frozen_energy(at::AbstractSystem,
         for j in 1:C
             if frozen[i] && frozen[j] && i != j # both frozen and different
                 # @info "component $i and $j"
-                energy += inter_component_energy(components[i], components[j], ljs.lj_param_sets[i,j])
+                energy += inter_component_energy(components[i], components[j], cps.param_sets[i,j])
             end
         end
     end
@@ -240,14 +240,14 @@ end
 
 
 """
-    interacting_energy(at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int}, frozen::Vector{Bool})
+    interacting_energy(at::AbstractSystem, cps::CompositeParameterSets{C,P}, list_num_par::Vector{Int}, frozen::Vector{Bool})
 
 Calculate the energy from interactions between free-free and free-frozen particles using the Lennard-Jones potential.
 The energy is calculated by summing the pairwise interactions between the free particles.
 
 # Arguments
 - `at::AbstractSystem`: The system for which the energy is calculated.
-- `ljs::CompositeLJParameters{C}`: The composite Lennard-Jones parameters.
+- `cps::CompositeParameterSets{C,P}`: The composite Lennard-Jones parameters.
 - `list_num_par::Vector{Int}`: The number of particles in each component.
 - `frozen::Vector{Bool}`: A vector indicating whether each component is frozen.
 
@@ -256,17 +256,17 @@ The energy is calculated by summing the pairwise interactions between the free p
 
 """
 function interacting_energy(at::AbstractSystem, 
-                            ljs::CompositeLJParameters{C}, 
+                            cps::CompositeParameterSets{C,P}, 
                             list_num_par::Vector{Int},
                             frozen::Vector{Bool}
-                            ) where {C}
+                            ) where {C,P}
     check_num_components(C, list_num_par, frozen)
     energy = 0.0u"eV"
     components = split_components(at, list_num_par)
     # intra-component interactions
     for i in findall(.!frozen) # find non-frozen components
         if length(components[i]) > 1
-            energy += intra_component_energy(components[i], ljs.lj_param_sets[i,i])
+            energy += intra_component_energy(components[i], cps.param_sets[i,i])
         end
     end
     # inter-component interactions
@@ -274,7 +274,7 @@ function interacting_energy(at::AbstractSystem,
         for j in (i+1):C
             if !frozen[i] || !frozen[j] # not both frozen
                 # @info "component $i and $j"
-                energy += inter_component_energy(components[i], components[j], ljs.lj_param_sets[i,j])
+                energy += inter_component_energy(components[i], components[j], cps.param_sets[i,j])
             end
         end
     end
@@ -282,11 +282,11 @@ function interacting_energy(at::AbstractSystem,
 end
 
 function interacting_energy(at::AbstractSystem, 
-                            ljs::CompositeLJParameters{C}, 
+                            cps::CompositeParameterSets{C,P}, 
                             list_num_par::Vector{Int},
                             frozen::Vector{Bool},
                             surface::AbstractSystem
-                            ) where {C}
+                            ) where {C,P}
     energy = 0.0u"eV"
     components_at = split_components(at, list_num_par)
     components = [components_at..., surface] # combine components from at and surface
@@ -298,7 +298,7 @@ function interacting_energy(at::AbstractSystem,
     # intra-component interactions
     for i in findall(.!frozen) # find non-frozen components
         if length(components[i]) > 1
-            energy += intra_component_energy(components[i], ljs.lj_param_sets[i,i])
+            energy += intra_component_energy(components[i], cps.param_sets[i,i])
         end
     end
     # inter-component interactions
@@ -306,7 +306,7 @@ function interacting_energy(at::AbstractSystem,
         for j in (i+1):num_components
             if !frozen[i] || !frozen[j] # not both frozen
                 # @info "component $i and $j"
-                energy += inter_component_energy(components[i], components[j], ljs.lj_param_sets[i,j])
+                energy += inter_component_energy(components[i], components[j], cps.param_sets[i,j])
             end
         end
     end
@@ -375,8 +375,8 @@ interacting_energy(at::AbstractSystem, lj::LJParameters) = intra_component_energ
 
 """
     single_site_energy(index::Int, at::AbstractSystem, lj::LJParameters)
-    single_site_energy(index::Int, at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int})
-    single_site_energy(index::Int, at::AbstractSystem, ljs::CompositeLJParameters{C}, list_num_par::Vector{Int}, surface::AbstractSystem)
+    single_site_energy(index::Int, at::AbstractSystem, cps::CompositeParameterSets{C,P}, list_num_par::Vector{Int})
+    single_site_energy(index::Int, at::AbstractSystem, cps::CompositeParameterSets{C,P}, list_num_par::Vector{Int}, surface::AbstractSystem)
 
 Calculate the energy of a single site in the system using the Lennard-Jones potential.
 The energy is calculated by summing the pairwise interactions between the site and all other sites in the system.
@@ -385,7 +385,7 @@ The energy is calculated by summing the pairwise interactions between the site a
 - `index::Int`: The index of the site for which the energy is calculated.
 - `at::AbstractSystem`: The system for which the energy is calculated.
 - `lj::LJParameters`: The Lennard-Jones parameters.
-- `ljs::CompositeLJParameters{C}`: The composite Lennard-Jones parameters.
+- `cps::CompositeParameterSets{C,P}`: The composite Lennard-Jones parameters.
 - `list_num_par::Vector{Int}`: The number of particles in each component.
 - `surface::AbstractSystem`: An optional surface system to consider in the energy calculation. See `LJSurfaceWalkers`.
 
@@ -411,9 +411,9 @@ end
 
 function single_site_energy(index::Int,
                             at::AbstractSystem, 
-                            ljs::CompositeLJParameters{C},
+                            cps::CompositeParameterSets{C,P},
                             list_num_par::Vector{Int},
-                            ) where {C}
+                            ) where {C,P}
     comp_cut = vcat([0],cumsum(list_num_par))
     # @info "comp_cut: $comp_cut"
     comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:length(list_num_par)]
@@ -426,11 +426,11 @@ function single_site_energy(index::Int,
     Threads.@threads for i in eachindex(all_index)
         r = pbc_dist(position(at, index), position(at, all_index[i]), at)
         if all_index[i] in comp_split[from_comp]
-            energy = lj_energy(r,ljs.lj_param_sets[from_comp,from_comp])
+            energy = lj_energy(r,cps.param_sets[from_comp,from_comp])
             energies[i] = energy
         else
             to_comp = findfirst(x->all_index[i] in x, comp_split)
-            energy = lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
+            energy = lj_energy(r,cps.param_sets[from_comp,to_comp])
             energies[i] = energy
         end
     end
@@ -439,10 +439,10 @@ end
 
 function single_site_energy(index::Int,
                             at::AbstractSystem, 
-                            ljs::CompositeLJParameters{C},
+                            cps::CompositeParameterSets{C,P},
                             list_num_par::Vector{Int},
                             surface::AbstractSystem
-                            ) where {C}
+                            ) where {C,P}
     comp_cut = vcat([0],cumsum(list_num_par))
     # @info "comp_cut: $comp_cut"
     comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:length(list_num_par)]
@@ -455,11 +455,11 @@ function single_site_energy(index::Int,
     Threads.@threads for i in eachindex(all_index)
         r = pbc_dist(position(at, index), position(at, all_index[i]), at)
         if all_index[i] in comp_split[from_comp]
-            energy = lj_energy(r,ljs.lj_param_sets[from_comp,from_comp])
+            energy = lj_energy(r,cps.param_sets[from_comp,from_comp])
             energies[i] = energy
         else
             to_comp = findfirst(x->all_index[i] in x, comp_split)
-            energy = lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
+            energy = lj_energy(r,cps.param_sets[from_comp,to_comp])
             energies[i] = energy
         end
     end
@@ -468,7 +468,7 @@ function single_site_energy(index::Int,
     Threads.@threads for i in eachindex(surface.position)
         r = pbc_dist(position(at, index), position(surface, i), at)
         to_comp = C # surface is the last component
-        energies_surface[i] = lj_energy(r,ljs.lj_param_sets[from_comp,to_comp])
+        energies_surface[i] = lj_energy(r,cps.param_sets[from_comp,to_comp])
     end
     external_e = sum(energies_surface)
     return internal_e + external_e

@@ -8,12 +8,16 @@ module AbstractPotentials
 using Unitful
 
 export AbstractPotential
+export CompositeParameterSets
+
 export LJParameters, lj_energy
-export CompositeLJParameters
+# export CompositeLJParameters
 export LennardJonesParameterSets
 export GuptaParameters, gupta_attraction_squared, gupta_repulsion
 
 abstract type AbstractPotential end
+
+include("composite_paramsets.jl")
 
 include("lennardjones.jl")
 

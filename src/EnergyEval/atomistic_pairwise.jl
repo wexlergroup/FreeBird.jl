@@ -1,12 +1,12 @@
 """
-    inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, pot::AbstractPotential)
+    inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, pot::SingleComponentPotential{Pairwise})
 
-Compute the energy between two components of a system using a specified (pairwise) potential.
+Compute the energy between two components of a system using a specified pairwise potential.
 
 # Arguments
 - `at1::AbstractSystem`: The first component of the system.
 - `at2::AbstractSystem`: The second component of the system.
-- `pot::AbstractPotential`: The potential used to compute the energy.
+- `pot::SingleComponentPotential{Pairwise}`: The potential used to compute the energy.
 
 # Returns
 - `energy`: The energy between the two components.
@@ -28,13 +28,13 @@ function inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, pot::S
 end
 
 """
-    intra_component_energy(at::AbstractSystem, pot::AbstractPotential)
+    intra_component_energy(at::AbstractSystem, pot::SingleComponentPotential{Pairwise})
 
-Compute the energy within a component of a system using a specified (pairwise) potential.
+Compute the energy within a component of a system using a specified pairwise potential.
 
 # Arguments
 - `at::AbstractSystem`: The component of the system.
-- `pot::AbstractPotential`: The potential used to compute the energy.
+- `pot::SingleComponentPotential{Pairwise}`: The potential used to compute the energy.
 
 # Returns
 - `energy`: The energy within the component.

@@ -46,3 +46,8 @@ function gupta_repulsion(r::typeof(1.0u"Å"), gp::GuptaParameters)
 end
 
 
+two_body_energy(r::typeof(1.0u"Å"), gp::GuptaParameters) = gupta_repulsion(r, gp)
+
+many_body_energy(r::typeof(1.0u"Å"), gp::GuptaParameters) = gupta_attraction_squared(r, gp)
+
+total_energy(energies_two_body::Vector{<:Real}, energies_many_body::Vector{<:Real}, pot::GuptaParameters) = sum(energies_two_body) + sum(-sqrt.(energies_many_body)) 

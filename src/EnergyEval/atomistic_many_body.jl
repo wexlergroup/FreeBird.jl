@@ -1,43 +1,32 @@
-function inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, pot::GuptaParameters)
-    # build pairs of particles
-    pairs = [(i, j) for i in 1:length(at1), j in 1:length(at2)]
-    # @show pairs # DEBUG
-    energies_rep = Array{typeof(0.0u"eV"), 1}(undef, length(pairs))
-    energies_att = Array{typeof(0.0u"eV^2"), 1}(undef, length(pairs))
-    Threads.@threads for k in eachindex(pairs)
-        # @show i,j # DEBUG
-        (i, j) = pairs[k]
-        r = pbc_dist(position(at1, i), position(at2, j), at1)
-        energies_rep[k] = gupta_repulsion(r,pot)
-        energies_att[k] = gupta_attraction_squared(r,pot)
-    end
-    total_rep = sum(energies_rep)
-    total_att = sum(energies_att)
-    total_energy = total_rep - sqrt(total_att) # Gupta potential energy
-    return total_energy
-end
-
-
-function intra_component_energy(at::AbstractSystem, pot::GuptaParameters)
-    # num_pairs = length(at) * (length(at) - 1) ÷ 2
+function interacting_energy(at::AbstractSystem, pot::SingleComponentPotential{ManyBody})
+    # Calculate the energy from interactions between particles using the a single-component potential.
+    # The energy is calculated by summing the pairwise interactions between the free particles.
+    
+    # Build pairs of particles without double counting
     pairs = Array{Tuple{Int,Int}, 1}()
     for i in 1:length(at)
         for j in (i+1):length(at)
             push!(pairs, (i, j))
         end
     end
-    # @info "num_pairs: $num_pairs, length(pairs): $(length(pairs))"
-    energies_rep = Vector{typeof(0.0u"eV")}(undef, length(pairs))
-    energies_att = Vector{typeof(0.0u"eV^2")}(undef, length(pairs))
+    
+    energies_two_body = zeros(Float64, length(pairs))
+    energies_many_body = zeros(Float64, length(at))
+    
     Threads.@threads for k in eachindex(pairs)
         (i, j) = pairs[k]
         r = pbc_dist(position(at, i), position(at, j), at)
-        energies_rep[k] = gupta_repulsion(r,pot)
-        energies_att[k] = gupta_attraction_squared(r,pot)
-        # @info "interacting pair: [$(i),$(j)] $(lj_energy(r,lj))"
+        energies_two_body[k] = ustrip(two_body_energy(r, pot))
     end
-    total_rep = sum(energies_rep)
-    total_att = sum(energies_att)
-    total_energy = total_rep - sqrt(total_att) # Gupta potential energy
-    return total_energy
+    
+    Threads.@threads for i in eachindex(at.position)
+        for j in eachindex(at.position)
+            if i != j
+                r = pbc_dist(position(at, i), position(at, j), at)
+                energies_many_body[i] += ustrip(many_body_energy(r, pot))
+            end
+        end
+    end
+    # @show energies_two_body, energies_many_body # Debugging output to check energies
+    return total_energy(energies_two_body, energies_many_body, pot)
 end

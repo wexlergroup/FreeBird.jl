@@ -188,11 +188,21 @@ function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}},
     return LJSurfaceWalkers(walkers, lj_potential, surface)
 end
 
+function assign_energy!(walker::Vector{AtomWalker{C}}, pot::GuptaParameters) where C
+    for w in walker
+        # w.energy_frozen_part = frozen_energy(w.configuration, lj, w.list_num_par, w.frozen)
+        w.energy = interacting_energy(w.configuration, pot)
+    end
+    return walker
+end
+
 struct GuptaAtomWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
     potential::GuptaParameters
-    function GuptaAtomWalkers(walkers::Vector{AtomWalker{C}}, gupta_potential::GuptaParameters; assign_energy=true, const_frozen_part=true) where C
-        assign_energy!(walkers, gupta_potential; assign_energy=assign_energy, const_frozen_part=const_frozen_part)
+    function GuptaAtomWalkers(walkers::Vector{AtomWalker{C}}, gupta_potential::GuptaParameters; assign_energy=true) where C
+        if assign_energy
+            assign_energy!(walkers, gupta_potential)
+        end
         return new(walkers, gupta_potential)
     end
 end

@@ -50,4 +50,4 @@ two_body_energy(r::typeof(1.0u"Å"), gp::GuptaParameters) = gupta_repulsion(r, g
 
 many_body_energy(r::typeof(1.0u"Å"), gp::GuptaParameters) = gupta_attraction_squared(r, gp)
 
-total_energy(energies_two_body::Vector{<:Real}, energies_many_body::Vector{<:Real}, pot::GuptaParameters) = sum(energies_two_body .- sqrt.(energies_many_body)) * u"eV"
+total_energy(energies_two_body::Vector{<:Real}, energies_many_body::Vector{<:Real}, pot::Union{GuptaParameters,CompositeParameterSets{C, GuptaParameters}}) where C = sum(energies_two_body .- sqrt.(energies_many_body)) * u"eV"

@@ -17,9 +17,8 @@ export Pairwise, ManyBody
 export CompositeParameterSets
 
 export LJParameters, lj_energy
-# export CompositeLJParameters
 export LennardJonesParameterSets
-export GuptaParameters #, gupta_attraction_squared, gupta_repulsion
+export GuptaParameters
 
 export pair_energy, two_body_energy, many_body_energy, total_energy
 

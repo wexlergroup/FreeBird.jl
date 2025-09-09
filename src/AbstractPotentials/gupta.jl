@@ -3,7 +3,20 @@ abstract type GuptaParameterSets{T} <: SingleComponentPotential{T} end
 """
     struct GuptaParameters
 The `GuptaParameters` struct represents the parameters for the Gupta potential.
-#
+# Formula
+The Gupta potential is given by:
+```math
+V(r) = A \\left( e^{-p \\left( \\frac{r}{r_0} - 1 \\right)} - \\xi e^{-q \\left( \\frac{r}{r_0} - 1 \\right)} \\right)
+```
+where:
+- ``V(r)`` is the potential energy as a function of interatomic distance ``r``.
+- ``A`` is the repulsive energy scale.
+- ``\\xi`` is the attractive energy scale.
+- ``p`` is the exponent for the repulsive term.
+- ``q`` is the exponent for the attractive term.
+- ``r_0`` is the equilibrium distance.
+- The potential is typically truncated at a cutoff distance, defined as a multiple of ``r_0``.
+
 # Fields
 - `A::typeof(1.0u"eV")`: The repulsive energy scale of the potential.
 - `ξ::typeof(1.0u"eV")`: The attractive energy scale of the potential.

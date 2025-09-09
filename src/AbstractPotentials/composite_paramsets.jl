@@ -40,9 +40,9 @@ Construct a `CompositeParameterSets` object from a vector of `SingleComponentPar
 
 # Arguments
 - `c::Int`: The number of components.
-- `ps::Vector{LJParameters}`: A vector of LJParameters. 
+- `ps::Vector{P}`: A vector of `SingleComponentParameterSets` objects.
 The number of elements in the vector must be equal to `c^2` or `c*(c+1)/2`. 
-The former case is for a full flattened matrix of LJParameters, useful when 
+The former case is for a full flattened matrix of `SingleComponentParameterSets`, useful when
 the interactions are asymmetric, i.e., `epsilon_ij != epsilon_ji`. The latter
 case is for symmetric interactions, i.e., `epsilon_ij = epsilon_ji`, hence only
 the upper triangular part of the matrix is needed.
@@ -62,7 +62,10 @@ julia> ps = [LJParameters(epsilon=e) for e in [11, 12, 13, 22, 23, 33]]
  LJParameters(33.0 eV, 1.0 Å, Inf, 0.0 eV)
 
 julia> ljp = CompositeParameterSets(3,ps)
-CompositeParameterSets{3}(param_sets::3x3 Matrix{LJParameters}):
+┌ Info: Creating CompositeParameterSets from the upper triangular part of the matrix.
+│         By specifying length(ps) sets of parameters, a 3 x 3 matrix is constructed.
+└         If this was not your intention, please check the documentation or raise an issue.
+CompositeParameterSets{3,LJParameters}(param_sets::3x3 Matrix):
     param_sets[1, 1] : LJParameters(11.0 eV, 1.0 Å, Inf, 0.0 eV)
     param_sets[1, 2] : LJParameters(12.0 eV, 1.0 Å, Inf, 0.0 eV)
     param_sets[1, 3] : LJParameters(13.0 eV, 1.0 Å, Inf, 0.0 eV)

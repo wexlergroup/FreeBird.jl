@@ -41,20 +41,28 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
       - uses: julia-actions/julia-processcoverage@v1
-      # - name: Coveralls Parallel
-      #   uses: coverallsapp/github-action@v2
-      #   with:
-      #     files: lcov.info
-      #     flag-name: run-${{ join(matrix.*, '-') }}
-      #     github-token: ${{ secrets.COVERALLS_REPO_TOKEN }}
-      #     # github-token: ${{ secrets.GITHUB_TOKEN }}
-      #     fail-on-error: false
-      #     parallel: true
-      #   continue-on-error: true
+      - name: Coveralls Parallel
+        uses: coverallsapp/github-action@v2
+        with:
+          files: lcov.info
+          flag-name: run-${{ join(matrix.*, '-') }}
+          github-token: ${{ secrets.COVERALLS_REPO_TOKEN }}
+          # github-token: ${{ secrets.GITHUB_TOKEN }}
+          fail-on-error: false
+          parallel: true
+        continue-on-error: true
       # - uses: julia-actions/julia-uploadcoveralls@v1
       #   env:
       #     COVERALLS_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
       #     github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Submit coverage to Coveralls
+        continue-on-error: true # TODO: https://github.com/JuliaDocs/Documenter.jl/issues/2343
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.COVERALLS_REPO_TOKEN }}
+          path-to-lcov: lcov.info
+          flag-name: test-${{ join(matrix.*, '-') }}
+          parallel: true
 
   finish:
     needs: test

@@ -17,7 +17,7 @@ where:
 - ``q`` is the exponent for the attractive term.
 - ``r_0`` is the nearest-neighbor distance in the bulk material.
 - The potential is typically truncated at a cutoff distance, defined as a multiple of ``r_0``.
-See Cleri and Rosato 1993 [Phys. Rev. B 48, 22 https://doi.org/10.1103/PhysRevB.48.22] for more details.
+See Cleri and Rosato 1993 [Phys. Rev. B 48, 22](https://doi.org/10.1103/PhysRevB.48.22) for more details.
 
 # Fields
 - `A::typeof(1.0u"eV")`: The repulsive energy scale of the potential.

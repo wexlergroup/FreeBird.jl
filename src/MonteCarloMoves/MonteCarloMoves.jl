@@ -21,11 +21,14 @@ export single_atom_random_walk!
 export MC_random_walk!, MC_random_walk_2D!
 export MC_new_sample!, MC_rejection_sampling!, MC_random_swap!
 export generate_random_new_lattice_sample!
+export MC_mixed_moves!
 
 include("helpers.jl")
 
 include("random_walks.jl")
 
 include("atomistic_swaps.jl")
+
+include("mixed_moves.jl")
 
 end # module MonteCarloMoves

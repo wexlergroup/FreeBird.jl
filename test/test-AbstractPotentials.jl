@@ -231,20 +231,20 @@
     end
 
 
-    @testset "CompositeLJParameters Tests" begin
+    @testset "CompositeParameterSets Tests" begin
         @testset "Direct matrix constructor tests" begin
             # Test 2x2 matrix constructor
             lj_matrix_2x2 = [
                 LJParameters(epsilon=1.0) LJParameters(epsilon=2.0);
                 LJParameters(epsilon=2.0) LJParameters(epsilon=3.0)
             ]
-            comp_lj = CompositeLJParameters{2}(lj_matrix_2x2)
-            @test size(comp_lj.lj_param_sets) == (2, 2)
-            @test comp_lj.lj_param_sets[1,1].epsilon == 1.0u"eV"
-            @test comp_lj.lj_param_sets[2,2].epsilon == 3.0u"eV"
+            comp_lj = CompositeParameterSets{2}(lj_matrix_2x2)
+            @test size(comp_lj.param_sets) == (2, 2)
+            @test comp_lj.param_sets[1,1].epsilon == 1.0u"eV"
+            @test comp_lj.param_sets[2,2].epsilon == 3.0u"eV"
     
             # Test error for wrong matrix size
-            @test_throws ArgumentError CompositeLJParameters{3}(lj_matrix_2x2)
+            @test_throws ArgumentError CompositeParameterSets{3}(lj_matrix_2x2)
         end
     
         @testset "Vector constructor - full matrix tests" begin
@@ -255,22 +255,22 @@
                 LJParameters(epsilon=3.0),  # (2,1)
                 LJParameters(epsilon=4.0)   # (2,2)
             ]
-            comp_lj = CompositeLJParameters(2, ljs_2x2)
-            @test size(comp_lj.lj_param_sets) == (2, 2)
-            @test comp_lj.lj_param_sets[1,1].epsilon == 1.0u"eV"
-            @test comp_lj.lj_param_sets[2,1].epsilon == 2.0u"eV"
-            @test comp_lj.lj_param_sets[1,2].epsilon == 3.0u"eV"
-            @test comp_lj.lj_param_sets[2,2].epsilon == 4.0u"eV"
+            comp_lj = CompositeParameterSets(2, ljs_2x2)
+            @test size(comp_lj.param_sets) == (2, 2)
+            @test comp_lj.param_sets[1,1].epsilon == 1.0u"eV"
+            @test comp_lj.param_sets[2,1].epsilon == 2.0u"eV"
+            @test comp_lj.param_sets[1,2].epsilon == 3.0u"eV"
+            @test comp_lj.param_sets[2,2].epsilon == 4.0u"eV"
     
             # Test 3x3 case from docstring example
             ljs_3x3 = [LJParameters(epsilon=e) for e in [11, 12, 13, 22, 23, 33]]
-            comp_lj = CompositeLJParameters(3, ljs_3x3)
-            @test size(comp_lj.lj_param_sets) == (3, 3)
-            @test comp_lj.lj_param_sets[1,1].epsilon == 11.0u"eV"
-            @test comp_lj.lj_param_sets[3,3].epsilon == 33.0u"eV"
+            comp_lj = CompositeParameterSets(3, ljs_3x3)
+            @test size(comp_lj.param_sets) == (3, 3)
+            @test comp_lj.param_sets[1,1].epsilon == 11.0u"eV"
+            @test comp_lj.param_sets[3,3].epsilon == 33.0u"eV"
             
             # Test error for wrong number of parameters
-            @test_throws ArgumentError CompositeLJParameters(2, ljs_3x3)
+            @test_throws ArgumentError CompositeParameterSets(2, ljs_3x3)
         end
     
         @testset "Vector constructor - symmetric matrix tests" begin
@@ -280,11 +280,11 @@
                 LJParameters(epsilon=2.0),  # (1,2) and (2,1)
                 LJParameters(epsilon=3.0)   # (2,2)
             ]
-            comp_lj = CompositeLJParameters(2, ljs_sym_2x2)
-            @test size(comp_lj.lj_param_sets) == (2, 2)
-            @test comp_lj.lj_param_sets[1,2] == comp_lj.lj_param_sets[2,1]
-            @test comp_lj.lj_param_sets[1,1].epsilon == 1.0u"eV"
-            @test comp_lj.lj_param_sets[2,2].epsilon == 3.0u"eV"
+            comp_lj = CompositeParameterSets(2, ljs_sym_2x2)
+            @test size(comp_lj.param_sets) == (2, 2)
+            @test comp_lj.param_sets[1,2] == comp_lj.param_sets[2,1]
+            @test comp_lj.param_sets[1,1].epsilon == 1.0u"eV"
+            @test comp_lj.param_sets[2,2].epsilon == 3.0u"eV"
     
             # Test 3x3 symmetric case
             ljs_sym_3x3 = [
@@ -295,31 +295,31 @@
                 LJParameters(epsilon=5.0),  # (2,3) and (3,2)
                 LJParameters(epsilon=6.0)   # (3,3)
             ]
-            comp_lj = CompositeLJParameters(3, ljs_sym_3x3)
-            @test size(comp_lj.lj_param_sets) == (3, 3)
-            @test comp_lj.lj_param_sets[1,2] == comp_lj.lj_param_sets[2,1]
-            @test comp_lj.lj_param_sets[1,3] == comp_lj.lj_param_sets[3,1]
-            @test comp_lj.lj_param_sets[2,3] == comp_lj.lj_param_sets[3,2]
+            comp_lj = CompositeParameterSets(3, ljs_sym_3x3)
+            @test size(comp_lj.param_sets) == (3, 3)
+            @test comp_lj.param_sets[1,2] == comp_lj.param_sets[2,1]
+            @test comp_lj.param_sets[1,3] == comp_lj.param_sets[3,1]
+            @test comp_lj.param_sets[2,3] == comp_lj.param_sets[3,2]
         end
     
         @testset "Equality operator tests" begin
-            # Test equal CompositeLJParameters
+            # Test equal CompositeParameterSets
             ljs1 = [LJParameters(epsilon=e) for e in [1, 2, 3, 4]]
             ljs2 = [LJParameters(epsilon=e) for e in [1, 2, 3, 4]]
-            comp_lj1 = CompositeLJParameters(2, ljs1)
-            comp_lj2 = CompositeLJParameters(2, ljs2)
+            comp_lj1 = CompositeParameterSets(2, ljs1)
+            comp_lj2 = CompositeParameterSets(2, ljs2)
             @test comp_lj1 == comp_lj2
     
-            # Test unequal CompositeLJParameters
+            # Test unequal CompositeParameterSets
             ljs3 = [LJParameters(epsilon=e) for e in [1, 2, 3, 5]]  # Different last value
-            comp_lj3 = CompositeLJParameters(2, ljs3)
+            comp_lj3 = CompositeParameterSets(2, ljs3)
             @test comp_lj1 != comp_lj3
         end
     
         @testset "Show method tests" begin
             # Create a test instance
             ljs = [LJParameters(epsilon=e) for e in [1, 2, 2, 3]]
-            comp_lj = CompositeLJParameters(2, ljs)
+            comp_lj = CompositeParameterSets(2, ljs)
             
             # Capture output
             io = IOBuffer()
@@ -327,29 +327,29 @@
             output = String(take!(io))
             
             # Test output format
-            @test contains(output, "CompositeLJParameters{2}")
-            @test contains(output, "2x2 Matrix{LJParameters}")
-            @test contains(output, "lj_param_sets[1, 1]")
+            @test contains(output, "CompositeParameterSets{2,LJParameters}")
+            @test contains(output, "2x2 Matrix")
+            @test contains(output, "param_sets[1, 1]")
             @test contains(output, "LJParameters(1.0 eV")
             
             # Test output for larger matrix
             ljs_3x3 = [LJParameters(epsilon=e) for e in [11, 12, 13, 22, 23, 33]]
-            comp_lj_3 = CompositeLJParameters(3, ljs_3x3)
+            comp_lj_3 = CompositeParameterSets(3, ljs_3x3)
             io = IOBuffer()
             show(io, comp_lj_3)
             output = String(take!(io))
-            @test contains(output, "CompositeLJParameters{3}")
-            @test contains(output, "3x3 Matrix{LJParameters}")
-            @test contains(output, "lj_param_sets[3, 3]")
+            @test contains(output, "CompositeParameterSets{3,LJParameters}")
+            @test contains(output, "3x3 Matrix")
+            @test contains(output, "param_sets[3, 3]")
         end
     
         @testset "Error cases tests" begin
             # Test invalid matrix sizes
-            @test_throws ArgumentError CompositeLJParameters(4, [LJParameters() for _ in 1:3])
-            @test_throws ArgumentError CompositeLJParameters(3, [LJParameters() for _ in 1:5])
+            @test_throws ArgumentError CompositeParameterSets(4, [LJParameters() for _ in 1:3])
+            @test_throws ArgumentError CompositeParameterSets(3, [LJParameters() for _ in 1:5])
             
             # Test invalid number of parameters for symmetric case
-            @test_throws ArgumentError CompositeLJParameters(3, [LJParameters() for _ in 1:4])
+            @test_throws ArgumentError CompositeParameterSets(3, [LJParameters() for _ in 1:4])
             
             # Test attempting to create non-square matrix
             lj_matrix_nonsquare = [
@@ -357,7 +357,7 @@
                 LJParameters() LJParameters();
                 LJParameters() LJParameters()
             ]
-            @test_throws ArgumentError CompositeLJParameters{2}(lj_matrix_nonsquare)
+            @test_throws ArgumentError CompositeParameterSets{2}(lj_matrix_nonsquare)
         end
     end
 

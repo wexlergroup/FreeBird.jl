@@ -1,5 +1,5 @@
 function Base.show(io::IO, walkers::LJAtomWalkers)
-    println(io, "LJAtomWalkers($(eltype(walkers.walkers)), $(typeof(walkers.lj_potential))):")
+    println(io, "LJAtomWalkers($(eltype(walkers.walkers)), $(typeof(walkers.potential))):")
     if length(walkers.walkers) > 10
         for i in 1:5
             println(io, "[$i] ", walkers.walkers[i])
@@ -13,11 +13,11 @@ function Base.show(io::IO, walkers::LJAtomWalkers)
             println(io, "[$ind] ", w)
         end
     end
-    println(io, walkers.lj_potential)
+    println(io, walkers.potential)
 end
 
 function Base.show(io::IO, walkers::LJSurfaceWalkers)
-    println(io, "LJSurfaceWalkers($(eltype(walkers.walkers)), $(typeof(walkers.lj_potential))):")
+    println(io, "LJSurfaceWalkers($(eltype(walkers.walkers)), $(typeof(walkers.potential))):")
     if length(walkers.walkers) > 10
         for i in 1:5
             println(io, "[$i] ", walkers.walkers[i])
@@ -31,6 +31,6 @@ function Base.show(io::IO, walkers::LJSurfaceWalkers)
             println(io, "[$ind] ", w)
         end
     end
-    println(io, walkers.lj_potential)
+    println(io, walkers.potential)
     println(io, "Surface: ", walkers.surface)
 end

@@ -20,6 +20,8 @@ export AtomWalkers, LatticeWalkers
 export LJAtomWalkers, LatticeGasWalkers
 export LJSurfaceWalkers
 
+export GuptaAtomWalkers
+
 abstract type AbstractLiveSet end
 
 

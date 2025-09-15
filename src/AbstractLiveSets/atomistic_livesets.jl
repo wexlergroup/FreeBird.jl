@@ -192,7 +192,7 @@ end
                             pot::Union{LJParameters, CompositeParameterSets{CP, LJParameters}},
                             surface::AtomWalker{CS}, 
                             assign_energy_parallel::Symbol,
-                            ) where C where CS
+                            ) where {C, CP, CS}
 
 Constructs a new `LJSurfaceWalkers` object with the given walkers, Lennard-Jones potential parameters, and a single surface walker.
 The `assign_energy_parallel` argument determines whether to assign energy in parallel using threads (`:threads`) or distributed 

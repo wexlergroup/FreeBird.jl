@@ -189,7 +189,7 @@ end
 
 """
     LJSurfaceWalkers(walkers::Vector{AtomWalker{C}}, 
-                            pot::Union{LJParameters, CompositeParameterSets{C, LJParameters}},
+                            pot::Union{LJParameters, CompositeParameterSets{CP, LJParameters}},
                             surface::AtomWalker{CS}, 
                             assign_energy_parallel::Symbol,
                             ) where C where CS

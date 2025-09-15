@@ -1,3 +1,14 @@
+#=
+This file contains energy evaluation functions for atomistic systems using many-body potentials.
+Currently, it includes implementations for the Gupta potential. In principle, it should also work 
+for other many-body potentials that can be defined using the `two_body_energy` and `many_body_energy` functions.
+=#
+
+""""
+    intra_component_energy(at::AbstractSystem, pot::GuptaParameters)
+
+Calculate the energy from interactions between particles using the Gupta potential for a single component.
+"""
 function intra_component_energy(at::AbstractSystem, pot::GuptaParameters)
     # Calculate the energy from interactions between particles using the Gupta potential.
     # The energy is calculated by summing the pairwise interactions between the free particles.
@@ -17,6 +28,13 @@ function intra_component_energy(at::AbstractSystem, pot::GuptaParameters)
     return total_energy(pair_energies, bond_energies, pot)
 end
 
+"""
+    interacting_energy(at::AbstractSystem, 
+                            pot::CompositeParameterSets{C,GuptaParameters},
+                            list_num_par::Vector{Int}
+                            ) where C
+Calculate the energy from interactions between particles using the Gupta potential for a multi-component system.
+"""
 function interacting_energy(at::AbstractSystem, 
                             pot::CompositeParameterSets{C,GuptaParameters},
                             list_num_par::Vector{Int}

@@ -3,14 +3,14 @@
     single_site_energy(index::Int, at::AbstractSystem, cps::CompositeParameterSets{C,P}, list_num_par::Vector{Int})
     single_site_energy(index::Int, at::AbstractSystem, cps::CompositeParameterSets{C,P}, list_num_par::Vector{Int}, surface::AbstractSystem)
 
-Calculate the energy of a single site in the system using the Lennard-Jones potential.
+Calculate the energy of a single site in the system using a pairwise potential.
 The energy is calculated by summing the pairwise interactions between the site and all other sites in the system.
 
 # Arguments
 - `index::Int`: The index of the site for which the energy is calculated.
 - `at::AbstractSystem`: The system for which the energy is calculated.
-- `pot::SingleComponentPotential{Pairwise}`: The Lennard-Jones parameters.
-- `cps::CompositeParameterSets{C,P}`: The composite Lennard-Jones parameters.
+- `pot::SingleComponentPotential{Pairwise}`: The single-component pairwise potential.
+- `cps::CompositeParameterSets{C,P}`: The composite potential parameters. The unpacked type `P` must be `Pairwise`.
 - `list_num_par::Vector{Int}`: The number of particles in each component.
 - `surface::AbstractSystem`: An optional surface system to consider in the energy calculation. See `LJSurfaceWalkers`.
 

@@ -8,7 +8,7 @@ CompositeParameterSets is a struct that represents a set of composite parameter 
 
 # Type Parameters
 - `C::Int`: The number of composite parameter sets.
-
+- `P <: SingleComponentParameterSets`: The type of the single component parameter sets.
 """
 struct CompositeParameterSets{C,P} <: MultiComponentPotential where {C,P}
     param_sets::Matrix{P}
@@ -93,18 +93,18 @@ function CompositeParameterSets(c::Int, ps::Vector{P}) where {P <: SingleCompone
         @info "Creating CompositeParameterSets from the upper triangular part of the matrix.
         By specifying $length(ps) sets of parameters, a $c x $c matrix is constructed.
         If this was not your intention, please check the documentation or raise an issue."
-        ljmatrix = Matrix{P}(undef, c, c)
+        psmatrix = Matrix{P}(undef, c, c)
         k = 1
         for i in 1:c
             for j in i:c
-            ljmatrix[i, j] = ps[k]
+            psmatrix[i, j] = ps[k]
             if i != j
-                ljmatrix[j, i] = ps[k]
+                psmatrix[j, i] = ps[k]
             end
             k += 1
             end
         end
-        return CompositeParameterSets{c}(ljmatrix)
+        return CompositeParameterSets{c}(psmatrix)
     else
         throw(ArgumentError("the number of parameter sets is not compatible with the number of components."))
     end

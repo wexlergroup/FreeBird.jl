@@ -4,7 +4,7 @@ Currently, it includes implementations for the Gupta potential. In principle, it
 for other many-body potentials that can be defined using the `two_body_energy` and `many_body_energy` functions.
 =#
 
-""""
+"""
     intra_component_energy(at::AbstractSystem, pot::GuptaParameters)
 
 Calculate the energy from interactions between particles using the Gupta potential for a single component.

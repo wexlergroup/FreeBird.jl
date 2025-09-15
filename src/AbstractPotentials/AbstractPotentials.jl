@@ -30,9 +30,11 @@ export pair_energy, two_body_energy, many_body_energy, total_energy
     AbstractPotential
 An abstract type for potentials. All potentials should be subtypes of `AbstractPotential`.
 
-Currently, there are two main categories of potentials:
+Currently, there are two main categories of potentials:  
+
     1. `SingleComponentPotential{T}`: Potentials that use the same parameters for all components. 
-       Here, `T` is the type of the single component parameter sets, e.g., `LJParameters` or `GuptaParameters`.
+       Here, `T` is the type of the single component parameter sets, e.g., `LJParameters` or `GuptaParameters`.  
+
     2. `MultiComponentPotential`: Potentials that use different parameters for different components, e.g., `CompositeParameterSets{C,P}`.
        This type is not parameterized by `C` or `P` to allow for more flexibility in defining multi-component potentials, i.e.,
        using different interaction models for different pairs of components.

@@ -14,7 +14,6 @@ Swap the positions of two atoms in the `AtomWalker`.
 function two_atoms_swap!(at::AtomWalker{C}, ind1, ind2) where C
     config = at.configuration
     config.position[ind1], config.position[ind2] = config.position[ind2], config.position[ind1]
-    config.species[ind1], config.species[ind2] = config.species[ind2], config.species[ind1]
     return at
 end
 

@@ -23,6 +23,16 @@ export CompositeParameterSets
 export LJParameters, lj_energy
 export LennardJonesParameterSets
 export GuptaParameters
+export PyCalculator
+
+
+using AtomsBase, StaticArrays, Unitful
+# using ASECalculators
+using AtomsCalculators
+using ASEconvert
+using PythonCall
+
+export ASELennardJones, MACEPotential, OrbPotential
 
 export pair_energy, two_body_energy, many_body_energy, total_energy
 
@@ -93,5 +103,7 @@ include("composite_paramsets.jl")
 include("lennardjones.jl")
 
 include("gupta.jl")
+
+include("ase_calculators.jl")
 
 end # module AbstractPotentials

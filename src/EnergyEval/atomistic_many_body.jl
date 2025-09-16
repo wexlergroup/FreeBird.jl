@@ -62,3 +62,22 @@ function interacting_energy(at::AbstractSystem,
     end
     return total_energy(pair_energies, bond_energies, pot)
 end
+
+
+"""
+    interacting_energy(system::AbstractSystem, calc::ASECalculator)
+
+Evaluate total potential energy (eV) of `system` using the wrapped ASE
+calculator.
+"""
+function interacting_energy(system::AtomsBase.AbstractSystem, calc::PyCalculator)
+    return AtomsCalculators.potential_energy(system, calc.calc)
+end
+
+# variant with list_num_par/frozen passed by callers in LJ workflow
+function interacting_energy(system::AtomsBase.AbstractSystem,
+                            calc::PyCalculator,
+                            list_num_par::Vector{Int},
+                            frozen::Vector{Bool})
+    return interacting_energy(system, calc)
+end

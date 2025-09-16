@@ -91,7 +91,7 @@ If `assign_energy=true`, the energy is assigned to each walker.
 - `walkers::Vector{AtomWalker{C}}`: The vector of walker objects with the assigned energy.
 """
 function assign_energy!(walkers::Vector{AtomWalker{C}}, 
-                        pot::Union{LJParameters, CompositeParameterSets{C, LJParameters}}; 
+                        pot::Union{LJParameters, CompositeParameterSets{C, LJParameters}, PyCalculator}; 
                         assign_energy=true, 
                         const_frozen_part=true
                         ) where C
@@ -129,8 +129,8 @@ The `LJAtomWalkers` struct represents a collection of atom walkers that interact
 """
 struct LJAtomWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
-    potential::Union{LJParameters, CompositeParameterSets{C, LJParameters}} where C
-    function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::Union{LJParameters, CompositeParameterSets{C, LJParameters}}; assign_energy=true, const_frozen_part=true) where C
+    potential::Union{LJParameters, CompositeParameterSets{C, LJParameters}, PyCalculator} where C
+    function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::Union{LJParameters, CompositeParameterSets{C, LJParameters}, PyCalculator}; assign_energy=true, const_frozen_part=true) where C
         assign_energy!(walkers, pot; assign_energy=assign_energy, const_frozen_part=const_frozen_part)
         return new(walkers, pot)
     end

@@ -27,7 +27,6 @@ export PyCalculator
 
 
 using AtomsBase, StaticArrays, Unitful
-# using ASECalculators
 using AtomsCalculators
 using ASEconvert
 using PythonCall

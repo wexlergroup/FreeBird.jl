@@ -35,12 +35,12 @@ function MACEPotential(; mace_model::String, default_dtype::String="float64")
     return ASEcalculator(mace_calc)
 end
 
-function OrbPotential(; device::String="cpu", precision::String="float64")
+function OrbPotential(; device::String="cpu", precision::String="float32-high")
     os = pyimport("os")
     os.environ["KMP_DUPLICATE_LIB_OK"]="True"
     pretrained = pyimport("orb_models.forcefield.pretrained")
-    ORBCalculator = pyimport("orb_models.forcefield.calculator.ORBCalculator")
-    orbff = pretrained.orb_v3_conservative_inf_omat(
+    ORBCalculator = pyimport("orb_models.forcefield.calculator").ORBCalculator
+    orbff = pretrained.orb_v3_direct_20_omat(
         device=device,
         precision=precision
     )

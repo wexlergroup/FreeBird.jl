@@ -26,27 +26,37 @@ function ASELennardJones(; epsilon = 1.0, sigma = 1.0, cutoff = Inf)
     return ASECalculator(py_calc)
 end
 
-
-function MACEPotential(; mace_model::String, default_dtype::String="float64")
+function MLPotential(;model_type::String, model_version:: String, float_type::String, use_gpu::Bool=false)
     os = pyimport("os")
-    os.environ["KMP_DUPLICATE_LIB_OK"]="True"
-    mace = pyimport("mace.calculators")
-    mace_calc = mace.mace_mp(model=mace_model, default_dtype=default_dtype)
-    return ASEcalculator(mace_calc)
+    os.environ["KMP_DUPLICATE_LIB_OK"]=raw"True"
+
+    # Mace
+    if model_type == "mace"
+        mace = pyimport("mace.calculators")
+        mace_calc = mace.mace_mp(model=model_version, default_dtype=float_type, enable_cueq=use_gpu)
+        return ASEcalculator(mace_calc)
+    end
+
+    # Orb
+    if model_type == "orb"
+        if use_gpu
+            device = "cuda"
+        else
+            device = "cpu"
+        end
+
+        pretrained = pyimport("orb_models.forcefield.pretrained")
+        ORBCalculator = pyimport("orb_models.forcefield.calculator").ORBCalculator
+        orbff = pretrained.orb_v3_direct_20_omat(
+            device=device,
+            precision=float_type
+        )
+        orb_calc = ORBCalculator(orbff, device=device)
+        return ASEcalculator(orb_calc)
+    end
 end
 
-function OrbPotential(; device::String="cpu", precision::String="float32-high")
-    os = pyimport("os")
-    os.environ["KMP_DUPLICATE_LIB_OK"]="True"
-    pretrained = pyimport("orb_models.forcefield.pretrained")
-    ORBCalculator = pyimport("orb_models.forcefield.calculator").ORBCalculator
-    orbff = pretrained.orb_v3_direct_20_omat(
-        device=device,
-        precision=precision
-    )
-    orb_calc = ORBCalculator(orbff, device=device)
-    return ASEcalculator(orb_calc)
-end
+
 
 # Dummy frozen_energy for compatibility with LJAtomWalkers constructor when no
 # atoms are actually frozen (returns zero).

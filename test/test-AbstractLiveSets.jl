@@ -7,7 +7,7 @@
                [0u"Å", 0u"Å", 10.0u"Å"]]
         lj = LJParameters(epsilon=0.1,sigma=2.5,cutoff=3.5,shift=false)
 
-        ljs = CompositeLJParameters(3, [lj for _ in 1:6]) # 3 components, 6 parameters
+        ljs = CompositeParameterSets(3, [lj for _ in 1:6]) # 3 components, 6 parameters
 
         # Test with 4 atoms: 2 H and 2 O atoms
         coor_list = [:H => [0.2, 0.5, 0.5],
@@ -67,7 +67,7 @@
                 # Test type and structure
                 @test lj_walkers isa LJSurfaceWalkers
                 @test length(lj_walkers.walkers) == 3
-                @test lj_walkers.lj_potential === ljs
+                @test lj_walkers.potential === ljs
                 @test lj_walkers.surface === surface
                 
                 # Test energy assignment
@@ -79,7 +79,7 @@
                 threaded_lj_walkers = LJSurfaceWalkers(walkers, ljs, surface, :threads)
                 @test threaded_lj_walkers isa LJSurfaceWalkers
                 @test length(threaded_lj_walkers.walkers) == 3
-                @test threaded_lj_walkers.lj_potential === ljs
+                @test threaded_lj_walkers.potential === ljs
                 @test threaded_lj_walkers.surface === surface
                 @test all(threaded_lj_walkers.walkers[i].energy == lj_walkers.walkers[i].energy for i in 1:3)
                 @test all(threaded_lj_walkers.walkers[i].energy_frozen_part == lj_walkers.walkers[i].energy_frozen_part for i in 1:3)
@@ -88,7 +88,7 @@
                 distributed_lj_walkers = LJSurfaceWalkers(walkers, ljs, surface, :distributed)
                 @test distributed_lj_walkers isa LJSurfaceWalkers
                 @test length(distributed_lj_walkers.walkers) == 3
-                @test distributed_lj_walkers.lj_potential === ljs
+                @test distributed_lj_walkers.potential === ljs
                 @test distributed_lj_walkers.surface === surface
                 @test all(distributed_lj_walkers.walkers[i].energy == lj_walkers.walkers[i].energy for i in 1:3)
                 @test all(distributed_lj_walkers.walkers[i].energy_frozen_part == lj_walkers.walkers[i].energy_frozen_part for i in 1:3)
@@ -124,7 +124,7 @@
                 # Test type and structure
                 @test lj_walkers isa LJAtomWalkers
                 @test length(lj_walkers.walkers) == 3
-                @test lj_walkers.lj_potential === lj
+                @test lj_walkers.potential === lj
                 
                 # Test energy assignment
                 @test all(w.energy > 0.0u"eV" for w in lj_walkers.walkers)

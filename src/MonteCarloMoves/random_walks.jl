@@ -574,20 +574,20 @@ function lattice_random_walk!(lattice::MLattice{C,G}) where {C,G}
 end
 
 """
-    swap_empty_occupied_sites!(lattice::LatticeWalker{C}, hop_from::Int, hop_to::Int) where C
+    swap_empty_occupied_sites!(lattice::MLattice{C,G}, hop_from::Int, hop_to::Int) where {C,G}
 
-Swap the occupation state of two sites in the lattice walker of any component.
+Swap the occupation state of two sites in the lattice of any component.
 
 # Arguments
-- `lattice::LatticeWalker{C}`: The lattice walker to perform the swap on.
+- `lattice::MLattice{C,G}`: The lattice to perform the swap on.
 - `hop_from::Int`: The index of the site to hop from.
 - `hop_to::Int`: The index of the site to hop to.
 # Returns
-- `lattice::LatticeWalker{C}`: The updated lattice walker after the swap.
+- `lattice::MLattice{C,G}`: The updated lattice after the swap.
 """
-function swap_empty_occupied_sites!(lattice::LatticeWalker{C}, 
+function swap_empty_occupied_sites!(lattice::MLattice{C,G}, 
                                      hop_from::Int, 
-                                     hop_to::Int) where C
+                                     hop_to::Int) where {C,G}
     for comp::Int in 1:C
         lattice.components[comp][hop_from], lattice.components[comp][hop_to] = 
         lattice.components[comp][hop_to], lattice.components[comp][hop_from]
@@ -595,18 +595,18 @@ function swap_empty_occupied_sites!(lattice::LatticeWalker{C},
     return lattice
 end
 
-"""    swap_occupied_sites_across_components!(lattice::LatticeWalker{C}, hop_from::Int, hop_to::Int) where C
-Swap the occupation state of two sites across different components in the lattice walker.
+"""    swap_occupied_sites_across_components!(lattice::MLattice{C,G}, hop_from::Int, hop_to::Int) where {C,G}
+Swap the occupation state of two sites across different components in the lattice.
 # Arguments
-- `lattice::LatticeWalker{C}`: The lattice walker to perform the swap on.
+- `lattice::MLattice{C,G}`: The lattice to perform the swap on.
 - `hop_from::Int`: The index of the site to hop from.
 - `hop_to::Int`: The index of the site to hop to.
 # Returns
-- `lattice::LatticeWalker{C}`: The updated lattice walker after the swap.
+- `lattice::MLattice{C,G}`: The updated lattice after the swap.
 """
-function swap_occupied_sites_across_components!(lattice::LatticeWalker{C}, 
+function swap_occupied_sites_across_components!(lattice::MLattice{C,G}, 
                                      hop_from::Int, 
-                                     hop_to::Int) where C
+                                     hop_to::Int) where {C,G}
     # find out which components are occupied at the sites
     comp_from::Int = findfirst(isequal(true), [lattice.components[comp][hop_from] for comp in 1:C])
     comp_to::Int = findfirst(isequal(true), [lattice.components[comp][hop_to] for comp in 1:C])

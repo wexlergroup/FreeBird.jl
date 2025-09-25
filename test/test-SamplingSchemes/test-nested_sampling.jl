@@ -172,7 +172,7 @@
                     [0u"Å", 0u"Å", 10.0u"Å"]]
 
             lj = LJParameters(epsilon=0.1, sigma=2.5, cutoff=3.5, shift=false)
-            ljs = CompositeLJParameters(3, [lj for _ in 1:6])
+            ljs = CompositeParameterSets(3, [lj for _ in 1:6])
             
             coor_list = [:H => [0.2, 0.5, 0.5],
                         :H => [0.4, 0.5, 0.5],

@@ -1,7 +1,7 @@
 name = "FreeBird"
 uuid = "b4936512-85e8-430f-a91d-7f510ed448a2"
 authors = ["Ray Yang <mingrui.yang@outlook.com> and contributors"]
-version = "0.1.2"
+version = "0.2.0"
 
 [deps]
 Arrow = "69666777-d1a9-59fb-9406-91d4454c9d45"

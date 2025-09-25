@@ -99,8 +99,8 @@
             lj = LJParameters(epsilon=0.1, sigma=2.5, cutoff=3.5, shift=false)
             ljs1 = [LJParameters(epsilon=e) for e in [11, 21, 31, 12, 22, 32, 13, 23, 33]]
             ljs2 = [LJParameters(epsilon=e) for e in [11, 12, 13, 22, 23, 33]]
-            ljp1 = CompositeLJParameters(3, ljs1)
-            ljp2 = CompositeLJParameters(3, ljs2)
+            ljp1 = CompositeParameterSets(3, ljs1)
+            ljp2 = CompositeParameterSets(3, ljs2)
 
             @testset "pair energy function tests" begin
                 

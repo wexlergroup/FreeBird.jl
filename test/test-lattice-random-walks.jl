@@ -14,4 +14,26 @@
         @test length(ml.components[1]) == length(new_ml.components[1])
         @test length(ml.components[2]) == length(new_ml.components[2])
     end
+
+    @testset "Swap occupied sites across components tests" begin
+        ml = MLattice{2,SquareLattice}(components=[[1,3],[2,4]])
+        new_ml = deepcopy(ml)
+        MonteCarloMoves.swap_occupied_sites_across_components!(new_ml, 1, 2)
+
+        @test new_ml.components[1][1] == 0
+        @test new_ml.components[1][2] == 1
+        @test new_ml.components[2][1] == 1
+        @test new_ml.components[2][2] == 0
+    end
+
+    @testset "Swap empty and occupied sites tests" begin
+        ml = MLattice{2,SquareLattice}(components=[[1],[2]])
+        new_ml = deepcopy(ml)
+        MonteCarloMoves.swap_empty_occupied_sites!(new_ml, 1, 2)
+
+        @test new_ml.components[1][1] == 0
+        @test new_ml.components[1][2] == 1
+        @test new_ml.components[2][1] == 1
+        @test new_ml.components[2][2] == 0
+    end
 end

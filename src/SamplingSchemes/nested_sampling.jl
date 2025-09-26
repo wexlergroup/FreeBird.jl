@@ -125,6 +125,17 @@ struct MCRandomWalkCloneParallel <: MCRoutineParallel
 end
 
 """
+    struct MCParallelDecorrelation <: MCRoutineParallel
+Nested sampling strategy that clone multiple walkers and perform random walks for decorrelation in parallel with Monte Carlo random walks.
+"""
+struct MCParallelDecorrelation <: MCRoutineParallel
+    dims::Vector{Int64}
+    function MCParallelDecorrelation(;dims::Vector{Int64}=[1, 2, 3])
+        new(dims)
+    end
+end
+
+"""
     MCRandomWalkMaxEParallel <: MCRoutineParallel
 A type for generating a new walker by performing a random walk for decorrelation on the highest-energy walker(s) in parallel.
 """
@@ -262,6 +273,60 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
 end
 
 
+
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCParallelDecorrelation)
+    sort_by_energy!(liveset)
+    ats = liveset.walkers
+    lj = liveset.potential
+    iter::Union{Missing,Int} = missing
+    emax::Union{Vector{Missing},Vector{typeof(0.0u"eV")}} = [liveset.walkers[i].energy for i in 1:nworkers()]
+
+    to_walk_inds = sort!(sample(2:length(ats), nworkers()))
+    # println("to_walk_inds: ", to_walk_inds) # DEBUG
+    
+    to_walks = deepcopy.(ats[to_walk_inds])
+
+    if length(mc_routine.dims) == 3
+        random_walk_function = MC_random_walk!
+    elseif length(mc_routine.dims) == 2
+        random_walk_function = MC_random_walk_2D!
+    else
+        error("Unsupported dimensions: $(mc_routine.dims)")
+    end
+
+    walking = [remotecall(random_walk_function, workers()[i], ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax[1]) for (i,to_walk) in enumerate(to_walks)]
+    walked = fetch.(walking)
+    finalize.(walking) # finalize the remote calls, clear the memory
+
+    accepted_rates = [x[2] for x in walked]
+    rate = mean(accepted_rates)
+
+    # sort!(walked, by = x -> x[3].energy, rev=true)
+    filter!(x -> x[1], walked) # remove the failed ones
+
+    if isempty(walked) # if all of the walkers failed
+        ns_params.fail_count += 1
+        emax = [missing]
+        return iter, emax[end], liveset, ns_params
+    else
+        # for (i, at) in enumerate(walked) # replace the highest energy walkers with decorrelated ones
+        #     ats[i] = at[3]
+        # end
+        ats[1] = walked[1][3]
+        if length(walked) > 1
+            for (i, at) in enumerate(walked[2:end])
+                ats[to_walk_inds[i+1]] = at[3]
+            end
+        end
+    end
+
+    update_iter!(liveset)
+    ns_params.fail_count = 0
+    iter = liveset.walkers[1].iter
+
+    adjust_step_size(ns_params, rate)
+    return iter, emax[1], liveset, ns_params
+end
 
 function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutineParallel)
     sort_by_energy!(liveset)

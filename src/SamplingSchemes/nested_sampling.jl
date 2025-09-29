@@ -302,20 +302,26 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     rate = mean(accepted_rates)
 
     # sort!(walked, by = x -> x[3].energy, rev=true)
-    filter!(x -> x[1], walked) # remove the failed ones
+    # filter!(x -> x[1], walked) # remove the failed ones
+    accepted_inds = findall(x -> x[1]==1, walked)
 
-    if isempty(walked) # if all of the walkers failed
+    if length(accepted_inds) == 0 # if all of the walkers failed
         ns_params.fail_count += 1
         emax = [missing]
         return iter, emax[end], liveset, ns_params
     else
-        # for (i, at) in enumerate(walked) # replace the highest energy walkers with decorrelated ones
-        #     ats[i] = at[3]
-        # end
-        ats[1] = walked[1][3]
-        if length(walked) > 1
-            for (i, at) in enumerate(walked[2:end])
-                ats[to_walk_inds[i+1]] = at[3]
+        # pick one from the accepted ones
+        picked = rand(accepted_inds)
+        ats[1] = walked[picked][3]
+        # println("picked: ", picked) # DEBUG
+        # remove the picked one from accepted_inds
+        filter!(x -> x != picked, accepted_inds)
+        # println("remaining accepted_inds: ", accepted_inds) # DEBUG
+
+        if !isempty(accepted_inds)
+            for i in accepted_inds
+                ats[to_walk_inds[i]] = walked[i][3]
+                # println("Updating ats at index $(to_walk_inds[i])") # DEBUG
             end
         end
     end

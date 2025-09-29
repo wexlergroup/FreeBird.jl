@@ -1,0 +1,7 @@
+
+[pip.deps]
+cmake = "==4.1.0"
+dm-tree = ">=0.1.9"
+orb-models = ""
+fairchem-core = "==2.6"
+numpy = ">2.0, <2.3"

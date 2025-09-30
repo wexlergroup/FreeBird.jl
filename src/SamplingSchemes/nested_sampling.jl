@@ -139,7 +139,11 @@ struct MCDistributed <: MCRoutineParallel
     n_cull::Int64
     n_decorr::Int64
     dims::Vector{Int64}
-    function MCDistributed(;n_cull::Int64=1, n_decorr::Int64=1, dims::Vector{Int64}=[1, 2, 3])
+    function MCDistributed(;n_cull::Int64=1, n_decorr::Int64=nworkers()-1, dims::Vector{Int64}=[1, 2, 3])
+        if n_cull + n_decorr != nworkers()
+            error("n_cull + n_decorr must be equal to the number of workers: $(nworkers())")
+        end
+        @info "Distributed nested sampling initiated: n_cull: $n_cull, n_decorr: $n_decorr, total workers: $(n_cull + n_decorr)"
         new(n_cull, n_decorr, dims)
     end
 end
@@ -290,7 +294,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     iter::Union{Missing,Int} = missing
     emax::Union{Vector{Missing},Vector{typeof(0.0u"eV")}} = [liveset.walkers[i].energy for i in 1:nworkers()]
 
-    to_walk_inds = sort!(sample(2:length(ats), nworkers(); replace=false))
+    to_walk_inds = sample(2:length(ats), nworkers(); replace=false)
     # println("to_walk_inds: ", to_walk_inds) # DEBUG
     
     to_walks = deepcopy.(ats[to_walk_inds])
@@ -350,8 +354,8 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     iter::Union{Missing,Int} = missing
     emax::Union{Vector{Missing},Vector{typeof(0.0u"eV")}} = [liveset.walkers[i].energy for i in 1:nworkers()]
 
-    to_walk_inds = sort!(sample(2:length(ats), nworkers(); replace=false))
-    println("to_walk_inds: ", to_walk_inds) # DEBUG
+    to_walk_inds = sample(2:length(ats), nworkers(); replace=false)
+    # println("to_walk_inds: ", to_walk_inds) # DEBUG
     
     to_walks = deepcopy.(ats[to_walk_inds])
 
@@ -374,7 +378,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     # filter!(x -> x[1], walked) # remove the failed ones
     accepted_inds = findall(x -> x[1]==1, walked)
 
-    if length(accepted_inds) == 0 # if all of the walkers failed
+    if length(accepted_inds) < mc_routine.n_cull # if not enough accepted walkers
         ns_params.fail_count += 1
         emax = [missing]
         return iter, emax[end], liveset, ns_params
@@ -384,15 +388,15 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         for (i, ind) in enumerate(picked)
             ats[i] = walked[ind][3]
         end
-        println("picked: ", picked) # DEBUG
+        # println("picked: ", picked) # DEBUG
         # remove the picked one from accepted_inds
         filter!(x -> x ∉ picked, accepted_inds)
-        println("remaining accepted_inds: ", accepted_inds) # DEBUG
+        # println("remaining accepted_inds: ", accepted_inds) # DEBUG
 
         if !isempty(accepted_inds)
             for i in accepted_inds
                 ats[to_walk_inds[i]] = walked[i][3]
-                println("Updating ats at index $(to_walk_inds[i])") # DEBUG
+                # println("Updating ats at index $(to_walk_inds[i])") # DEBUG
             end
         end
     end
@@ -402,7 +406,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     iter = liveset.walkers[1].iter
 
     adjust_step_size(ns_params, rate)
-    return iter, emax[1], liveset, ns_params
+    return iter, emax[mc_routine.n_cull], liveset, ns_params
 end
 
 function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutineParallel)
@@ -415,7 +419,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     if mc_routine isa MCRandomWalkMaxEParallel
         to_walk_inds = 1:nworkers()
     elseif mc_routine isa MCRandomWalkCloneParallel
-        to_walk_inds = sort!(sample(2:length(ats), nworkers(); replace=false))
+        to_walk_inds = sample(2:length(ats), nworkers(); replace=false)
     end
     
     to_walks = deepcopy.(ats[to_walk_inds])
@@ -467,7 +471,7 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSampl
     if mc_routine isa MCRandomWalkMaxEParallel
         to_walk_inds = 1:nworkers()
     elseif mc_routine isa MCRandomWalkCloneParallel
-        to_walk_inds = sort!(sample(2:length(ats), nworkers(); replace=false))
+        to_walk_inds = sample(2:length(ats), nworkers(); replace=false)
     end
     
     to_walks = deepcopy.(ats[to_walk_inds])

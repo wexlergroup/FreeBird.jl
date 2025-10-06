@@ -1,32 +1,32 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Tutorials · FreeBird.jl</title><meta name="title" content="Tutorials · FreeBird.jl"/><meta property="og:title" content="Tutorials · FreeBird.jl"/><meta property="twitter:title" content="Tutorials · FreeBird.jl"/><meta name="description" content="Documentation for FreeBird.jl."/><meta property="og:description" content="Documentation for FreeBird.jl."/><meta property="twitter:description" content="Documentation for FreeBird.jl."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../"><img src="../assets/logo.svg" alt="FreeBird.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../">FreeBird.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">FreeBird.jl</a></li><li class="is-active"><a class="tocitem" href>Tutorials</a><ul class="internal"><li><a class="tocitem" href="#Atomistic-walkers-and-nested-sampling"><span>Atomistic walkers and nested sampling</span></a></li><li><a class="tocitem" href="#Lattice-walkers-and-exact-enumeration"><span>Lattice walkers and exact enumeration</span></a></li></ul></li><li><a class="tocitem" href="../examples/">Examples</a></li><li><span class="tocitem">Modules and Documentation</span><ul><li><a class="tocitem" href="../AbstractLiveSets/"><code>AbstractLiveSets</code></a></li><li><a class="tocitem" href="../AbstractWalkers/"><code>AbstractWalkers</code></a></li><li><a class="tocitem" href="../SamplingSchemes/"><code>SamplingSchemes</code></a></li><li><a class="tocitem" href="../AbstractPotentials/"><code>AbstractPotentials</code></a></li><li><a class="tocitem" href="../AbstractHamiltonians/"><code>AbstractHamiltonians</code></a></li><li><a class="tocitem" href="../EnergyEval/"><code>EnergyEval</code></a></li><li><a class="tocitem" href="../MonteCarloMoves/"><code>MonteCarloMoves</code></a></li><li><a class="tocitem" href="../FreeBirdIO/"><code>FreeBirdIO</code></a></li><li><a class="tocitem" href="../AnalysisTools/"><code>AnalysisTools</code></a></li></ul></li><li><a class="tocitem" href="../API/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Tutorials</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Tutorials</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/wexlergroup/FreeBird.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/wexlergroup/FreeBird.jl/blob/main/scripts/tutorials.jl" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="FreeBird.jl-Tutorial"><a class="docs-heading-anchor" href="#FreeBird.jl-Tutorial">FreeBird.jl Tutorial</a><a id="FreeBird.jl-Tutorial-1"></a><a class="docs-heading-anchor-permalink" href="#FreeBird.jl-Tutorial" title="Permalink"></a></h1><p>This is a tutorial to using the FreeBird.jl package. It covers the basic functionalities of the package, such as generating atomistic and lattice walkers, defining a potential energy function or Hamiltonian, and running a sampling simulation. For more detailed information, please refer to the documentation of the package. You can find the runnable version of this script in the <code>scripts</code> directory of the package.</p><h2 id="Atomistic-walkers-and-nested-sampling"><a class="docs-heading-anchor" href="#Atomistic-walkers-and-nested-sampling">Atomistic walkers and nested sampling</a><a id="Atomistic-walkers-and-nested-sampling-1"></a><a class="docs-heading-anchor-permalink" href="#Atomistic-walkers-and-nested-sampling" title="Permalink"></a></h2><p>First, let&#39;s load the FreeBird.jl package:</p><pre><code class="language-julia hljs">using FreeBird</code></pre><p>Now, let&#39;s create a few configurations of a simple atomistic system with six particles in a 3D box.</p><pre><code class="language-julia hljs">single_config = generate_initial_configs(1, 562.5, 6; particle_type=:H)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">1-element Vector{AtomsBase.FastSystem{3, AtomsBase.PeriodicCell{3, Quantity{Float64, 𝐋, Unitful.FreeUnits{(Å,), 𝐋, nothing}}}, Quantity{Float64, 𝐋, Unitful.FreeUnits{(Å,), 𝐋, nothing}}, Quantity{Float64, 𝐌, Unitful.FreeUnits{(u,), 𝐌, nothing}}, AtomsBase.ChemicalSpecies}}:
  FastSystem(H₆, periodicity = FFF)</code></pre><p>The function above has generated a single configuration, with 562.5 Å<span>$^3$</span> volume per particle, and 6 particles of type H. Note that the <code>particle_type</code> keyword argument can be used to specify the type of particle, i.e., chemical element. By default, the type is set to <code>:H</code>. Use <code>?generate_initial_configs</code> in the REPL to see the documentation of the function. Or see <a href="../FreeBirdIO/#FreeBird.FreeBirdIO.generate_initial_configs-Tuple{Int64, Float64, Int64}"><code>generate_initial_configs</code></a>.</p><p>Let&#39;s inspect the generated configuration using the <code>view_structure</code> function:</p><pre><code class="language-julia hljs">single_config[1] |&gt; view_structure</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">          .------------------------------------.
-         /|                             H      |
+         /|                                    |
         / |                                    |
        /  |                                    |
       /   |                                    |
      /    |                                    |
     /     |                                    |
    /      |                                    |
-  /       |                                    |
+  /       |          H                         |
  *        |                                    |
- |        |   H                                |
  |        |                                    |
  |        |                                    |
+ |        |                       H            |
  |        |                                    |
- |        |              H                     |
  |        |                                    |
- |        |                                    |
+ |        |         H                          |
+ |        |               H                    |
  |        |                                    |
  |        .------------------------------------.
- |       /                        H           /
- |      /                           H        /
+ |       /   H                                /
+ |      /                                    /
  |     /                                    /
  |    /                                    /
  |   /                                    /
- |  /        H                           /
+ |  /                                    /
  | /                                    /
- |/                                    /
+ |H                                    /
  *------------------------------------*</code></pre><p>It&#39;s of a <code>FastSystem</code> type from <code>AtomsBase</code>. The dimensions of the box are 15 Å x 15 Å x 15 Å, following the volume per particle specified. The positions of the particles are randomly generated within the box.</p><p>Now, let&#39;s generate a few more configurations:</p><pre><code class="language-julia hljs">configs = generate_initial_configs(120, 562.5, 6)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">120-element Vector{AtomsBase.FastSystem{3, AtomsBase.PeriodicCell{3, Quantity{Float64, 𝐋, Unitful.FreeUnits{(Å,), 𝐋, nothing}}}, Quantity{Float64, 𝐋, Unitful.FreeUnits{(Å,), 𝐋, nothing}}, Quantity{Float64, 𝐌, Unitful.FreeUnits{(u,), 𝐌, nothing}}, AtomsBase.ChemicalSpecies}}:
  FastSystem(H₆, periodicity = FFF)
  FastSystem(H₆, periodicity = FFF)
@@ -50,7 +50,7 @@
  FastSystem(H₆, periodicity = FFF)</code></pre><p>The function above has generated 120 configurations, again, with 562.5 Å<span>$^3$</span> volume per particle, and 6 particles of type H. These configurations will be served as the initial walkers for a sampling run, but first, we need to wrap them into the <a href="../AbstractWalkers/#FreeBird.AbstractWalkers.AtomWalker"><code>AtomWalker</code></a> type defined in FreeBird.jl.</p><pre><code class="language-julia hljs">walkers = AtomWalker.(generate_initial_configs(120, 562.5, 6));</code></pre><p>Let&#39;s inquire the type of the <code>walkers</code> variable:</p><pre><code class="language-julia hljs">walkers |&gt; typeof</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Vector{AtomWalker{1}}<span class="sgr90"> (alias for Array{AtomWalker{1}, 1})</span></code></pre><p>The <code>walkers</code> variable is of a <code>Vector{AtomWalker{1}}</code> type, which is a vector of <code>AtomWalker{1}</code> objects. The <code>AtomWalker{1}</code> type is a parametrized type, where the parameter is the number of components in the system. In this case, the system has only one component, consisting of 6 particles of type H.</p><p>To define how these particles interact with each other, we need to create a potential energy function. Let&#39;s use the Lennard-Jones potential:</p><pre><code class="language-julia hljs">lj = LJParameters(epsilon=0.1, sigma=2.5, cutoff=4.0)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)</code></pre><p>The <a href="../AbstractPotentials/#FreeBird.AbstractPotentials.LJParameters"><code>LJParameters</code></a> type is a struct that holds the parameters of the Lennard-Jones potential. The <code>epsilon</code> and <code>sigma</code> fields are the energy and length scales of the potential, respectively. The <code>cutoff</code> field is the distance at which the potential is truncated. An energy shift is applied to the potential to ensure continuity at the cutoff distance, automatically in this case. See the documentation of the <code>LJParameters</code> type for more information and examples.</p><p>We now can create a so-called <em>liveset</em> that will be used to store the walkers during the simulation. The <code>lj</code> potential will be used to attached and used to calculate the potential energy of the walkers.</p><pre><code class="language-julia hljs">ls = LJAtomWalkers(walkers, lj)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">LJAtomWalkers(AtomWalker{1}, LJParameters):
 [1] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.0063707894274238 eV
+    energy             : -0.007874930666911412 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -58,7 +58,7 @@
 
 [2] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.11422881492342062 eV
+    energy             : -0.028626836434973726 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -66,7 +66,7 @@
 
 [3] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.025972005114454636 eV
+    energy             : -0.030230498118391434 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -74,7 +74,7 @@
 
 [4] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.07729816873266651 eV
+    energy             : 72.50640009649956 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -82,7 +82,7 @@
 
 [5] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : 1156.3470711950079 eV
+    energy             : -0.0664504267564266 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -94,7 +94,7 @@ Omitted 110 walkers
 
 [116] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.11809330750613266 eV
+    energy             : -0.01990990685281547 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -102,7 +102,7 @@ Omitted 110 walkers
 
 [117] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.01674215801043463 eV
+    energy             : 0.1493835691806577 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -110,7 +110,7 @@ Omitted 110 walkers
 
 [118] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.03585495622682211 eV
+    energy             : -0.08260419659591914 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -118,7 +118,7 @@ Omitted 110 walkers
 
 [119] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.08624814370935854 eV
+    energy             : -0.019746109268276784 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -126,7 +126,7 @@ Omitted 110 walkers
 
 [120] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -0.21803203754203618 eV
+    energy             : -0.012041298885516277 eV
     iter               : 0
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -137,14 +137,14 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
    Row │ iter   emax
        │ Int64  Float64
 ───────┼──────────────────────
-     1 │     1      6.89606e7
-     2 │     2  62998.3
-     3 │     3  22295.8
-     4 │     4   8363.94
-     5 │     5   4170.28
-     6 │     6   4042.81
-     7 │     7   2674.4
-     8 │     8   1156.35
+     1 │     1      5.28803e5
+     2 │     2  45607.9
+     3 │     3     72.5064
+     4 │     4     32.4184
+     5 │     5     25.0036
+     6 │     6     15.5213
+     7 │     7     11.5422
+     8 │     8      9.58084
    ⋮   │   ⋮          ⋮
  19994 │ 19994     -1.26974
  19995 │ 19995     -1.26974
@@ -156,7 +156,7 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
             19985 rows omitted, LJAtomWalkers(AtomWalker{1}, LJParameters):
 [1] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -1.2697417395127268 eV
+    energy             : -1.2697417394971218 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -164,7 +164,7 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
 
 [2] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -1.2697417395128774 eV
+    energy             : -1.2697417394972104 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -172,7 +172,7 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
 
 [3] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -1.2697417395129498 eV
+    energy             : -1.2697417394972976 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -180,7 +180,7 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
 
 [4] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -1.2697417395130124 eV
+    energy             : -1.269741739497309 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -188,7 +188,7 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
 
 [5] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -1.269741739513127 eV
+    energy             : -1.269741739497448 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -200,7 +200,7 @@ Omitted 110 walkers
 
 [116] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -1.2697417395350499 eV
+    energy             : -1.2697417395290362 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -208,7 +208,7 @@ Omitted 110 walkers
 
 [117] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -1.2697417395361863 eV
+    energy             : -1.2697417395311759 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -216,7 +216,7 @@ Omitted 110 walkers
 
 [118] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -1.2697417395367887 eV
+    energy             : -1.2697417395312558 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -224,7 +224,7 @@ Omitted 110 walkers
 
 [119] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -1.2697417395370754 eV
+    energy             : -1.2697417395358157 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
@@ -232,32 +232,32 @@ Omitted 110 walkers
 
 [120] AtomWalker{1}(
     configuration      : FastSystem(H₆, periodicity = FFF)
-    energy             : -1.269741739513138 eV
+    energy             : -1.2697417395040294 eV
     iter               : 20000
     list_num_par       : [6]
     frozen             : Bool[0]
     energy_frozen_part : 0.0 eV)
 
 LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
-, NestedSamplingParameters(200, 0.01, 4.319497657268189e-6, 1.0e-6, 1.0, (0.25, 0.75), 0, 100, 1.0e-12, 1234))</code></pre><p>The results of the simulation are stored in the <code>energies</code> and <code>liveset</code> variables. The <code>energies</code> variable is a <code>DataFrame</code> that contains the energies of the walkers at each iteration. The <code>liveset</code> variable is the final liveset after the simulation. Let&#39;s see how the walkers look like after the simulation:</p><pre><code class="language-julia hljs">liveset.walkers[1].configuration |&gt; view_structure</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">          .------------------------------------.
+, NestedSamplingParameters(200, 0.01, 5.33271315712122e-6, 1.0e-6, 1.0, (0.25, 0.75), 0, 100, 1.0e-12, 1234))</code></pre><p>The results of the simulation are stored in the <code>energies</code> and <code>liveset</code> variables. The <code>energies</code> variable is a <code>DataFrame</code> that contains the energies of the walkers at each iteration. The <code>liveset</code> variable is the final liveset after the simulation. Let&#39;s see how the walkers look like after the simulation:</p><pre><code class="language-julia hljs">liveset.walkers[1].configuration |&gt; view_structure</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">          .------------------------------------.
          /|                                    |
         / |                                    |
        /  |                                    |
       /   |                                    |
      /    |                                    |
     /     |                                    |
-   /      |                                    |
-  /       |                                    |
- *        |                                    |
+   /      |                  H                 |
+  /       |             H                      |
+ *        |            H      H                |
+ |        |                                    |
+ |        |             H   H                  |
  |        |                                    |
  |        |                                    |
  |        |                                    |
  |        |                                    |
- |        |                     H              |
- |        |                        H   H       |
  |        |                                    |
- |        |                   H                |
- |        .-----------------------H--H---------.
+ |        |                                    |
+ |        .------------------------------------.
  |       /                                    /
  |      /                                    /
  |     /                                    /
@@ -267,7 +267,7 @@ LJParameters(0.1 eV, 2.5 Å, 4.0, -9.763240814208984e-5 eV)
  | /                                    /
  |/                                    /
  *------------------------------------*</code></pre><p>They should be in a more ordered state, in this case, a cluster, than the initial gaseous state.</p><h3 id="Calculating-heat-capacity-with-AnalysisTools-module"><a class="docs-heading-anchor" href="#Calculating-heat-capacity-with-AnalysisTools-module">Calculating heat capacity with <code>AnalysisTools</code> module</a><a id="Calculating-heat-capacity-with-AnalysisTools-module-1"></a><a class="docs-heading-anchor-permalink" href="#Calculating-heat-capacity-with-AnalysisTools-module" title="Permalink"></a></h3><p>The <a href="../AnalysisTools/#FreeBird.AnalysisTools"><code>AnalysisTools</code></a> module provides functions to calculate the heat capacity of the system. First, we calculate the <code>ω</code> factors, which account for the fractions of phase-space volume sampled during each nested sampling iteration, defined as:</p><p class="math-container">\[\omega_i = \frac{1}{N+1} \left(\frac{N}{N+1}\right)^i\]</p><p>where <span>$N$</span> is the number of walkers and <span>$i$</span> is the iteration number.</p><pre><code class="language-julia hljs">ωi = ωᵢ(energies.iter, 120);</code></pre><p>Let&#39;s shift the energies to be greater than or equal to zero, making the calculation of the heat capacity more stable.</p><pre><code class="language-julia hljs">Ei = energies.emax .- minimum(energies.emax);</code></pre><p>Specify the temperatures that we are interested in, in units of Kelvin.</p><pre><code class="language-julia hljs">Ts = collect(1:0.1:1000);</code></pre><p>Define the Boltzmann constant in units of eV/K.</p><pre><code class="language-julia hljs">kb = 8.617333262e-5 # eV/K</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">8.617333262e-5</code></pre><p>Calculate the inverse temperatures</p><pre><code class="language-julia hljs">β = 1 ./(kb.*Ts);</code></pre><p>Define the degrees of freedom, which is 3×6 for the 6-particle system.</p><pre><code class="language-julia hljs">dof = 18</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">18</code></pre><p>Calculate the heat capacities as a function of temperature using the <code>cv</code> function,</p><p class="math-container">\[C_V(\beta) = \frac{\mathrm{dof} \cdot k_B}{2} + k_B \beta^2 \left(\frac{\sum_i \omega_i E_i^2 \exp(-E_i \beta)}{Z(\beta)} - U(\beta)^2\right)\]</p><pre><code class="language-julia hljs">cvs = cv(energies, β, dof, 120);</code></pre><p>Let&#39;s plot the heat capacity as a function of temperature</p><pre><code class="language-julia hljs">using Plots
-plot(Ts, cvs./kb, xlabel=&quot;Temperature (K)&quot;, ylabel=&quot;Heat Capacity (\$k_B\$)&quot;, label=&quot;LJ\$_6\$&quot;)</code></pre><img src="4006b315.svg" alt="Example block output"/><p>The plot should show the heat capacity as a function of temperature for the 6-particle Lennard-Jones system, with a main peak around 400 K, representing the phase transition, and some fluctuations at low temperatures, and tailing off to zero at high temperatures.</p><p>That&#39;s it! You have successfully run a nested sampling simulation using the FreeBird.jl package.</p><h2 id="Lattice-walkers-and-exact-enumeration"><a class="docs-heading-anchor" href="#Lattice-walkers-and-exact-enumeration">Lattice walkers and exact enumeration</a><a id="Lattice-walkers-and-exact-enumeration-1"></a><a class="docs-heading-anchor-permalink" href="#Lattice-walkers-and-exact-enumeration" title="Permalink"></a></h2><p>Another feature of FreeBird.jl is the ability to work with lattice systems. The lattice systems are defined by the <a href="../AbstractWalkers/#FreeBird.AbstractWalkers.MLattice"><code>MLattice</code></a> which is a parametrized type.</p><pre><code class="language-julia hljs">MLattice{C,G}(
+plot(Ts, cvs./kb, xlabel=&quot;Temperature (K)&quot;, ylabel=&quot;Heat Capacity (\$k_B\$)&quot;, label=&quot;LJ\$_6\$&quot;)</code></pre><img src="da81e6a4.svg" alt="Example block output"/><p>The plot should show the heat capacity as a function of temperature for the 6-particle Lennard-Jones system, with a main peak around 400 K, representing the phase transition, and some fluctuations at low temperatures, and tailing off to zero at high temperatures.</p><p>That&#39;s it! You have successfully run a nested sampling simulation using the FreeBird.jl package.</p><h2 id="Lattice-walkers-and-exact-enumeration"><a class="docs-heading-anchor" href="#Lattice-walkers-and-exact-enumeration">Lattice walkers and exact enumeration</a><a id="Lattice-walkers-and-exact-enumeration-1"></a><a class="docs-heading-anchor-permalink" href="#Lattice-walkers-and-exact-enumeration" title="Permalink"></a></h2><p>Another feature of FreeBird.jl is the ability to work with lattice systems. The lattice systems are defined by the <a href="../AbstractWalkers/#FreeBird.AbstractWalkers.MLattice"><code>MLattice</code></a> which is a parametrized type.</p><pre><code class="language-julia hljs">MLattice{C,G}(
     lattice_vectors::Matrix{Float64},
     basis::Vector{Tuple{Float64, Float64, Float64}},
     supercell_dimensions::Tuple{Int64, Int64, Int64},
@@ -421,4 +421,4 @@ GenericLatticeHamiltonian{2,Quantity{Float64, 𝐋^2 𝐌 𝐓^-2, Unitful.FreeU
       ● ● ● ● 
     adsorptions          : full adsorption
 </code></pre><p>Be warned that the exact enumeration can be computationally expensive for large systems.</p><h3 id="Calculating-heat-capacity"><a class="docs-heading-anchor" href="#Calculating-heat-capacity">Calculating heat capacity</a><a id="Calculating-heat-capacity-1"></a><a class="docs-heading-anchor-permalink" href="#Calculating-heat-capacity" title="Permalink"></a></h3><p>Since we enumerated all possible configurations of the lattice system, we can calculate the partition function, then the heat capacity directly.</p><p>Let&#39;s calculate the heat capacity for the lattice system: Define the temperatures that we are interested in, in units of Kelvin.</p><pre><code class="language-julia hljs">Ts = collect(1:0.1:500);</code></pre><p>Define the Boltzmann constant in units of eV/K.</p><pre><code class="language-julia hljs">kb = 8.617333262e-5 # eV/K</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">8.617333262e-5</code></pre><p>Convert them to inverse temperatures</p><pre><code class="language-julia hljs">βs = 1 ./(kb.*Ts);</code></pre><p>Extract the energies from the DataFrame, keeping the values only</p><pre><code class="language-julia hljs">es = [e.val for e in df.energy];</code></pre><p>Since this is not a nested sampling run, each configuration carries the same weight:</p><pre><code class="language-julia hljs">ω_1 = ones(length(df.energy));</code></pre><p>And for a lattice, the degrees of freedom is 0:</p><pre><code class="language-julia hljs">dof = 0</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">0</code></pre><p>Now we can use a scaler version of the <a href="../AnalysisTools/#FreeBird.AnalysisTools.cv-Tuple{DataFrames.DataFrame, Vector{Float64}, Int64, Int64}"><code>cv</code></a> function to calculate the heat capacity:</p><pre><code class="language-julia hljs">cvs = [cv(β, ω_1, es, dof) for β in βs];</code></pre><p>Let&#39;s plot the heat capacity as a function of temperature</p><pre><code class="language-julia hljs">using Plots
-plot(Ts, cvs./kb, xlabel=&quot;Temperature (K)&quot;, ylabel=&quot;Heat Capacity (\$k_B\$)&quot;, label=&quot;Square Lattice&quot;)</code></pre><img src="0c5aab39.svg" alt="Example block output"/><p>You should expect to see a single peak in the heat capacity curve around 40 K, and tailing off to zero at high temperatures.</p><p>That&#39;s it! You have successfully run an exact enumeration simulation using the FreeBird.jl package.</p><hr/><p><em>This page was generated using <a href="https://github.com/fredrikekre/Literate.jl">Literate.jl</a>.</em></p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« FreeBird.jl</a><a class="docs-footer-nextpage" href="../examples/">Examples »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.8.0 on <span class="colophon-date" title="Monday 6 October 2025 19:51">Monday 6 October 2025</span>. Using Julia version 1.11.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+plot(Ts, cvs./kb, xlabel=&quot;Temperature (K)&quot;, ylabel=&quot;Heat Capacity (\$k_B\$)&quot;, label=&quot;Square Lattice&quot;)</code></pre><img src="75a5603c.svg" alt="Example block output"/><p>You should expect to see a single peak in the heat capacity curve around 40 K, and tailing off to zero at high temperatures.</p><p>That&#39;s it! You have successfully run an exact enumeration simulation using the FreeBird.jl package.</p><hr/><p><em>This page was generated using <a href="https://github.com/fredrikekre/Literate.jl">Literate.jl</a>.</em></p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« FreeBird.jl</a><a class="docs-footer-nextpage" href="../examples/">Examples »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.8.0 on <span class="colophon-date" title="Monday 6 October 2025 19:56">Monday 6 October 2025</span>. Using Julia version 1.11.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

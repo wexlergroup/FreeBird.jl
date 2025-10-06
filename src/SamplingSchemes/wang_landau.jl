@@ -86,7 +86,7 @@ end
 
     wang_landau(
         walker::AtomWalker,
-        lj::LennardJonesParameterSets,
+        pot::AbstractPotential,
         wl_params::WangLandauParameters
     )
 
@@ -94,7 +94,7 @@ Perform the Wang-Landau sampling scheme for a lattice or an atomistic system.
 
 # Arguments
 - `lattice::AbstractLattice`/`walker::AtomWalker`: The initial lattice/atomistic configuration.
-- `h::ClassicalHamiltonian`/`lj::LennardJonesParameterSets`: The Hamiltonian parameters for the lattice/atomistic system.
+- `h::ClassicalHamiltonian`/`pot::AbstractPotential`: The Hamiltonian parameters for the lattice/atomistic system.
 - `wl_params::WangLandauParameters`: The parameters for the Wang-Landau sampling scheme.
 
 # Returns
@@ -204,7 +204,7 @@ end
 
 function wang_landau(
     walker::AtomWalker,
-    lj::LennardJonesParameterSets,
+    pot::AbstractPotential,
     wl_params::WangLandauParameters
     )
 
@@ -232,7 +232,7 @@ function wang_landau(
     f = wl_params.f_initial
 
     current_walker = deepcopy(walker)
-    current_energy = interacting_energy(current_walker.configuration, lj, current_walker.list_num_par, current_walker.frozen) + current_walker.energy_frozen_part
+    current_energy = interacting_energy(current_walker.configuration, pot, current_walker.list_num_par, current_walker.frozen) + current_walker.energy_frozen_part
     current_walker.energy = current_energy
     println("Initial energy: ", current_energy)
     push!(energies, current_energy.val)
@@ -250,10 +250,10 @@ function wang_landau(
             # Propose a swap in occupation state (only if it maintains constant N)
             proposed_walker = deepcopy(current_walker)
 
-            proposed_walker, ΔE = single_atom_random_walk!(proposed_walker, lj, wl_params.step_size)
+            proposed_walker, ΔE = single_atom_random_walk!(proposed_walker, pot, wl_params.step_size)
 
             # Calculate the proposed energy
-            # proposed_energy = interacting_energy(proposed_walker.configuration, lj, proposed_walker.list_num_par, proposed_walker.frozen) + proposed_walker.energy_frozen_part
+            # proposed_energy = interacting_energy(proposed_walker.configuration, pot, proposed_walker.list_num_par, proposed_walker.frozen) + proposed_walker.energy_frozen_part
             # proposed_walker.energy = proposed_energy
             proposed_energy = current_energy + ΔE
             proposed_walker.energy = proposed_energy

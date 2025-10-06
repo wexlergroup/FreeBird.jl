@@ -287,7 +287,7 @@ should be in Kelvin, and the units of the energy should be in eV.
 
 # Arguments
 - `at::AtomWalker`: The initial atom walker configuration.
-- `pot::AbstractPotential`: The potential energy function for the atoms.
+- `pot::AbstractPotential`: The potential energy function.
 - `mc_params::MetropolisMCParameters`: The parameters for the Metropolis Monte Carlo algorithm.
 
 # Returns

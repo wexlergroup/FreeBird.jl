@@ -35,6 +35,9 @@ include("test-lattice-random-walks.jl")
 
 # new tests
 
+# test module AbstractHamiltonians
 include("test-AbstractHamiltonians/test-AbstractHamiltonians.jl")
 
+# test module AbstractLiveSets
 include("test-AbstractLiveSets/test-atomistic-livesets.jl")
+include("test-AbstractLiveSets/test-lattice-livesets.jl")

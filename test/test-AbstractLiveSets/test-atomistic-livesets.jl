@@ -74,7 +74,7 @@
 
         @testset "Constructor with energy assignment" begin
 
-            # Create a live set
+            # Create a live set, single-threaded/single-process by default
             lj_walkers = LJSurfaceWalkers(walkers, ljs, surface; assign_energy=true)
 
             # Test type and structure

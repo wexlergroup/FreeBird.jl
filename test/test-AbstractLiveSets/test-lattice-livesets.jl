@@ -1,15 +1,7 @@
 @testset "Lattice live sets tests" begin
     @testset "LatticeGasWalkers with SLattice tests" begin
         # Setup a simple lattice configuration for testing
-        square_lattice = SLattice{SquareLattice}(
-                    lattice_constant=1.0,                   # Unit cell size
-                    basis=[(0.0, 0.0, 0.0)],                # Single atom per unit cell
-                    supercell_dimensions=(4, 4, 1),         # 4x4x1 supercell
-                    periodicity=(true, true, false),        # Periodic in x,y but not z
-                    cutoff_radii=[1.1, 1.5],                # Neighbor cutoff distances
-                    components=[[1,2,3,4]],                 # Single component with four sites
-                    adsorptions=:full                       # All sites are adsorption sites
-                )
+        square_lattice = SLattice{SquareLattice}(supercell_dimensions=(4, 4, 1), components=[[1,2,3,4]]) # 4x4 square lattice with one component
 
         lattices = [generate_random_new_lattice_sample!(deepcopy(square_lattice)) for _ in 1:9]
         push!(lattices, square_lattice) # add the original lattice as well

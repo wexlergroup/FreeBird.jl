@@ -43,8 +43,12 @@ To get back to the Julia REPL, press `Ctrl+C` or backspace (when the REPL cursor
 
 ## References
 
+The FreeBird.jl code paper on the Journal of Chemical Theory and Computation:
+- Yang, R.; Chen, J.; Thibodeaux, D.; B. Wexler, R. FreeBird.jl: An Extensible Toolbox for Simulating Interfacial Phase Equilibria. *J. Chem. Theory Comput.* **2025**. https://doi.org/10.1021/acs.jctc.5c01348
+
 Published surface nested sampling work from Wexler group:
 - Yang, M.; B. Pártay, L.; B. Wexler, R. Surface Phase Diagrams from Nested Sampling. *Phys. Chem. Chem. Phys.* **2024**. https://doi.org/10.1039/D4CP00050A.
+- Chatbipho, T.; Yang, R,; B. Wexler, R.; Pártay, L. B. Adsorbate phase transitions on nanoclusters from nested sampling. *arXiv:2506.01295* **2025** https://arxiv.org/abs/2506.01295
 
 The nested sampling method:
 - Pártay, L. B.; Csányi, G.; Bernstein, N. Nested Sampling for Materials. *Eur. Phys. J. B* **2021**, 94 (8), 159. https://doi.org/10.1140/epjb/s10051-021-00172-1.

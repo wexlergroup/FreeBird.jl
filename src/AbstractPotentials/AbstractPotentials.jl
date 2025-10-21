@@ -31,7 +31,7 @@ using AtomsCalculators
 using ASEconvert
 using PythonCall
 
-export ASELennardJones, MACEPotential, OrbPotential
+export ASELennardJones, MACEPotential, OrbPotential, MLPotential
 
 export pair_energy, two_body_energy, many_body_energy, total_energy
 

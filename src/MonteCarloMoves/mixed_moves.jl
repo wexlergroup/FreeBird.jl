@@ -27,7 +27,7 @@ function MC_mixed_moves!(
     for i_mc_step in 1:n_steps
         swap_prob = freq[2] / sum(freq)
         if rand() > swap_prob
-            #println("Performing a swap move")
+            #println("Performing a random walk move")
             config = at.configuration
             free_index = free_par_index(at)
             i_at = rand(free_index)
@@ -51,7 +51,7 @@ function MC_mixed_moves!(
                 accept_this_walker = true
             end
         elseif rand() <= swap_prob
-            #println("Performing a random walk move")
+            #println("Performing a swap move")
             config = at.configuration
             free_comp = free_component_index(at)
             comp1, comp2 = sample(free_comp, 2, replace=false)

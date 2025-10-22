@@ -606,31 +606,51 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     ats = liveset.walkers
     lj = liveset.potential
     iter::Union{Missing,Int} = missing
-    emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
+    emax::Union{Vector{Missing},Vector{typeof(0.0u"eV")}} = [liveset.walkers[i].energy for i in 1:nworkers()]
 
-    # clone one of the lower energy walkers
-    to_walk = deepcopy(rand(ats[2:end]))
-    # determine whether to perform a random walk or a swap
-    #swap_prob = mc_routine.swaps_freq / (mc_routine.walks_freq + mc_routine.swaps_freq)
+    to_walk_inds = sample(2:length(ats), nworkers(); replace=false)
+    # println("to_walk_inds: ", to_walk_inds) # DEBUG
     
-    # @show mc_routine
-    
-    accept, rate, at = MC_mixed_moves!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax, [mc_routine.walks_freq, mc_routine.swaps_freq])
-    # @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: swap"
+    to_walks = deepcopy.(ats[to_walk_inds])
 
-    if accept
-        push!(ats, at)
-        popfirst!(ats)
-        update_iter!(liveset)
-        ns_params.fail_count = 0
-        iter = liveset.walkers[1].iter
-    else
-        # @warn "Failed to accept MC move"
-        emax = missing
+    walking = [remotecall(MC_mixed_moves!, workers()[i], ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax[1], [mc_routine.walks_freq, mc_routine.swaps_freq]) for (i,to_walk) in enumerate(to_walks)]
+    walked = fetch.(walking)
+    finalize.(walking) # finalize the remote calls, clear the memory
+
+    accepted_rates = [x[2] for x in walked]
+    rate = mean(accepted_rates)
+
+    # sort!(walked, by = x -> x[3].energy, rev=true)
+    # filter!(x -> x[1], walked) # remove the failed ones
+    accepted_inds = findall(x -> x[1]==1, walked)
+
+    if length(accepted_inds) == 0 # if all of the walkers failed
         ns_params.fail_count += 1
+        emax = [missing]
+        return iter, emax[end], liveset, ns_params
+    else
+        # pick one from the accepted ones
+        picked = rand(accepted_inds)
+        ats[1] = walked[picked][3]
+        # println("picked: ", picked) # DEBUG
+        # remove the picked one from accepted_inds
+        filter!(x -> x != picked, accepted_inds)
+        # println("remaining accepted_inds: ", accepted_inds) # DEBUG
+
+        if !isempty(accepted_inds)
+            for i in accepted_inds
+                ats[to_walk_inds[i]] = walked[i][3]
+                # println("Updating ats at index $(to_walk_inds[i])") # DEBUG
+            end
+        end
     end
+
+    update_iter!(liveset)
+    ns_params.fail_count = 0
+    iter = liveset.walkers[1].iter
+
     adjust_step_size(ns_params, rate)
-    return iter, emax, liveset, ns_params
+    return iter, emax[1], liveset, ns_params
 end
 
 """

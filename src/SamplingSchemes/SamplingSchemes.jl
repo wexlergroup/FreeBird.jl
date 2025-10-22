@@ -37,7 +37,7 @@ export sort_by_energy!, nested_sampling_step!
 export nested_sampling
 export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCNewSample, MCRejectionSampling, MCMixedMoves
 
-export MCRandomWalkMaxEParallel, MCRandomWalkCloneParallel
+export MCRandomWalkMaxEParallel, MCRandomWalkCloneParallel, MCParallelDecorrelation, MCDistributed
 
 # other sampling schemes
 export exact_enumeration

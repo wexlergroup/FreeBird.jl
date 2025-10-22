@@ -97,6 +97,92 @@ function MC_random_walk!(
         config = at.configuration
         free_index = free_par_index(at)
         i_at = rand(free_index)
+        # prewalk_energy = interacting_energy(config, pot, at.list_num_par, at.frozen)
+        pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
+        orig_pos = deepcopy(pos)
+        pos = single_atom_random_walk!(pos, step_size)
+        pos = periodic_boundary_wrap!(pos, config)
+        config.position[i_at] = pos
+        postwalk_energy = interacting_energy(config, pot, at.list_num_par, at.frozen)
+
+        if postwalk_energy >= emax
+            # reject the move, revert to original position
+            config.position[i_at] = orig_pos
+        else
+            at.energy = postwalk_energy
+            # accept the move
+            n_accept += 1
+            accept_this_walker = true
+        end
+    end
+    return accept_this_walker, n_accept/n_steps, at
+end
+
+function MC_random_walk!(
+                    n_steps::Int, 
+                    at::AtomWalker{C}, 
+                    pot::SingleComponentPotential{ManyBody}, 
+                    step_size::Float64, 
+                    emax::typeof(0.0u"eV")
+                    ) where C
+    n_accept = 0
+    accept_this_walker = false
+    for i_mc_step in 1:n_steps
+        config = at.configuration
+        free_index = free_par_index(at)
+        i_at = rand(free_index)
+        # prewalk_energy = interacting_energy(config, pot, at.list_num_par, at.frozen)
+        pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
+        orig_pos = deepcopy(pos)
+        pos = single_atom_random_walk!(pos, step_size)
+        pos = periodic_boundary_wrap!(pos, config)
+        config.position[i_at] = pos
+        postwalk_energy = interacting_energy(config, pot)
+
+        if postwalk_energy >= emax
+            # reject the move, revert to original position
+            config.position[i_at] = orig_pos
+        else
+            at.energy = postwalk_energy
+            # accept the move
+            n_accept += 1
+            accept_this_walker = true
+        end
+    end
+    return accept_this_walker, n_accept/n_steps, at
+end
+
+"""
+    MC_random_walk!(n_steps::Int, at::AtomWalker, pot::LennardJonesParameterSets, step_size::Float64, emax::typeof(0.0u"eV"))
+
+Perform a Monte Carlo random walk on the atomic/molecular system. Specialized for Lennard-Jones potentials.
+
+# Arguments
+- `n_steps::Int`: The number of Monte Carlo steps to perform.
+- `at::AtomWalker{C}`: The walker to perform the random walk on.
+- `pot::LennardJonesParameterSets`: The potential energy function for the system.
+- `step_size::Float64`: The maximum distance an atom can move in any direction.
+- `emax::typeof(0.0u"eV")`: The maximum energy allowed for accepting a move.
+
+# Returns
+- `accept_this_walker::Bool`: Whether the walker is accepted or not.
+- `accept_rate::Float64`: The acceptance rate of the random walk.
+- `at::AtomWalker`: The updated walker.
+
+"""
+function MC_random_walk!(
+                    n_steps::Int, 
+                    at::AtomWalker{C}, 
+                    pot::LennardJonesParameterSets, 
+                    step_size::Float64, 
+                    emax::typeof(0.0u"eV")
+                    ) where C
+    n_accept = 0
+    accept_this_walker = false
+    for i_mc_step in 1:n_steps
+        config = at.configuration
+        free_index = free_par_index(at)
+        i_at = rand(free_index)
         prewalk_energy = single_site_energy(i_at, config, pot, at.list_num_par)
         pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
         orig_pos = deepcopy(pos)
@@ -243,11 +329,11 @@ Perform a Monte Carlo random walk on the lattice system.
 
 """
 function MC_random_walk!(n_steps::Int,
-                         lattice::LatticeWalker{1},
+                         lattice::LatticeWalker{C},
                          h::ClassicalHamiltonian,
                          emax::Float64;
                          energy_perturb::Float64=0.0,
-                         )
+                         ) where C
 
     n_accept = 0
     accept_this_walker = false
@@ -255,17 +341,10 @@ function MC_random_walk!(n_steps::Int,
 
     for i_mc_step in 1:n_steps
         current_lattice = lattice.configuration
-        # select a random site to hop from
-        hop_from = rand(eachindex(current_lattice.components[1]))
-        # select a random site to hop to (can be the same as hop_from)
-        hop_to = rand(eachindex(current_lattice.components[1]))
-        # propose a swap in occupation state (only if it maintains constant N)
+
         proposed_lattice = deepcopy(current_lattice)
 
-        if proposed_lattice.components[1][hop_from] != proposed_lattice.components[1][hop_to]
-            proposed_lattice.components[1][hop_from], proposed_lattice.components[1][hop_to] = 
-            proposed_lattice.components[1][hop_to], proposed_lattice.components[1][hop_from]
-        end
+        lattice_random_walk!(proposed_lattice)
         
         perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
         proposed_energy = interacting_energy(proposed_lattice, h) + perturbation_energy
@@ -431,6 +510,115 @@ function generate_random_new_lattice_sample!(lattice::SLattice)
     lattice.components[1] .= false
     for i in sample(eachindex(lattice.components[1]), number_occupied_sites, replace=false)
         lattice.components[1][i] = true
+    end
+    return lattice
+end
+
+"""
+    lattice_random_walk!(lattice::SLattice)  
+
+Perform a Monte Carlo random walk on the single-component lattice system.
+
+# Arguments
+- `lattice::SLattice`: The single-component lattice system to perform the random walk on.
+# Returns
+- `lattice::SLattice`: The proposed lattice after the random walk.
+"""
+function lattice_random_walk!(lattice::SLattice)
+    # pick a random site to hop from
+    hop_from = rand(eachindex(lattice.components[1]))
+    # pick a random site to hop to (can be the same as hop_from)
+    hop_to = rand(eachindex(lattice.components[1]))
+    # propose a swap in occupation state (only if it maintains constant N)
+    # proposed_lattice = deepcopy(lattice)
+    if lattice.components[1][hop_from] != lattice.components[1][hop_to]
+        lattice.components[1][hop_from], lattice.components[1][hop_to] = 
+        lattice.components[1][hop_to], lattice.components[1][hop_from]
+    end
+    return lattice
+end
+
+"""
+    lattice_random_walk!(lattice::MLattice{C,G}) where {C,G}
+
+Perform a Monte Carlo random walk on the multi-component lattice system.
+
+# Arguments
+- `lattice::MLattice{C,G}`: The multi-component lattice system to perform the random walk on.
+# Returns
+- `lattice::MLattice{C,G}`: The proposed lattice after the random walk.
+"""
+function lattice_random_walk!(lattice::MLattice{C,G}) where {C,G}
+    # pick a random component to hop in
+    picked_comp::Int = rand(1:C)
+    # pick a random site to hop from
+    hop_from::Int = rand(eachindex(lattice.components[picked_comp]))
+    # pick a random site to hop to (can be the same as hop_from)
+    hop_to::Int = rand(eachindex(lattice.components[picked_comp]))
+
+    # println("hop from: $hop_from, hop to: $hop_to, comp: $comp") # debug
+    
+    # case 1: occupied/unoccupied swap
+    is_occupied_from::Bool = any([lattice.components[comp][hop_from] for comp in 1:C])
+    is_occupied_to::Bool = any([lattice.components[comp][hop_to] for comp in 1:C])
+    # println("is_occupied_from: $is_occupied_from, is_occupied_to: $is_occupied_to") # debug
+    if is_occupied_from != is_occupied_to # only swap if the occupation state changes
+        # swap the occupation state of the sites
+        return swap_empty_occupied_sites!(lattice, hop_from, hop_to)
+    # case 2: both sites occupied, swap components
+    elseif is_occupied_from && is_occupied_to
+        return swap_occupied_sites_across_components!(lattice, hop_from, hop_to)
+    end
+    # case 3: both sites unoccupied, do nothing
+    return lattice
+end
+
+"""
+    swap_empty_occupied_sites!(lattice::MLattice{C,G}, hop_from::Int, hop_to::Int) where {C,G}
+
+Swap the occupation state of two sites in the lattice of any component.
+
+# Arguments
+- `lattice::MLattice{C,G}`: The lattice to perform the swap on.
+- `hop_from::Int`: The index of the site to hop from.
+- `hop_to::Int`: The index of the site to hop to.
+# Returns
+- `lattice::MLattice{C,G}`: The updated lattice after the swap.
+"""
+function swap_empty_occupied_sites!(lattice::MLattice{C,G}, 
+                                     hop_from::Int, 
+                                     hop_to::Int) where {C,G}
+    for comp::Int in 1:C
+        lattice.components[comp][hop_from], lattice.components[comp][hop_to] = 
+        lattice.components[comp][hop_to], lattice.components[comp][hop_from]
+    end
+    return lattice
+end
+
+"""    swap_occupied_sites_across_components!(lattice::MLattice{C,G}, hop_from::Int, hop_to::Int) where {C,G}
+Swap the occupation state of two sites across different components in the lattice.
+# Arguments
+- `lattice::MLattice{C,G}`: The lattice to perform the swap on.
+- `hop_from::Int`: The index of the site to hop from.
+- `hop_to::Int`: The index of the site to hop to.
+# Returns
+- `lattice::MLattice{C,G}`: The updated lattice after the swap.
+"""
+function swap_occupied_sites_across_components!(lattice::MLattice{C,G}, 
+                                     hop_from::Int, 
+                                     hop_to::Int) where {C,G}
+    # find out which components are occupied at the sites
+    comp_from::Int = findfirst(isequal(true), [lattice.components[comp][hop_from] for comp in 1:C])
+    comp_to::Int = findfirst(isequal(true), [lattice.components[comp][hop_to] for comp in 1:C])
+    if comp_from != comp_to # only swap if the components are different
+        # first, unoccupy the site at comp_from
+        lattice.components[comp_from][hop_from] = !lattice.components[comp_from][hop_from]
+        # second, unoccupy the site at comp_to
+        lattice.components[comp_to][hop_from] = !lattice.components[comp_to][hop_from]
+        # third, occupy the site at comp_to
+        lattice.components[comp_to][hop_to] = !lattice.components[comp_to][hop_to]
+        # finally, occupy the site at comp_from
+        lattice.components[comp_from][hop_to] = !lattice.components[comp_from][hop_to]
     end
     return lattice
 end

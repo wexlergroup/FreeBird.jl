@@ -90,7 +90,8 @@ function nvt_monte_carlo(
         # Propose a swap in occupation state (only if it maintains constant N)
         proposed_lattice = deepcopy(current_lattice)
 
-        generate_random_new_lattice_sample!(proposed_lattice)
+        # generate_random_new_lattice_sample!(proposed_lattice)
+        lattice_random_walk!(proposed_lattice)
 
         # Calculate the proposed energy
         proposed_energy = interacting_energy(proposed_lattice, h).val
@@ -274,7 +275,7 @@ end
 """
     monte_carlo_sampling(
         at::AtomWalker,
-        lj::LennardJonesParameterSets,
+        pot::AbstractPotential,
         mc_params::MetropolisMCParameters;
         kb::Float64 = 8.617333262e-5 # eV/K
     )
@@ -286,7 +287,7 @@ should be in Kelvin, and the units of the energy should be in eV.
 
 # Arguments
 - `at::AtomWalker`: The initial atom walker configuration.
-- `lj::LennardJonesParameterSets`: The Lennard-Jones parameters.
+- `pot::AbstractPotential`: The potential energy function.
 - `mc_params::MetropolisMCParameters`: The parameters for the Metropolis Monte Carlo algorithm.
 
 # Returns
@@ -297,7 +298,7 @@ should be in Kelvin, and the units of the energy should be in eV.
 """
 function monte_carlo_sampling(
     at::AtomWalker,
-    lj::LennardJonesParameterSets,
+    pot::AbstractPotential,
     mc_params::MetropolisMCParameters;
     kb::Float64 = 8.617333262e-5 # eV/K
 )
@@ -313,7 +314,7 @@ function monte_carlo_sampling(
         # Equilibrate the lattice
         equilibration_energies, equilibration_configurations, equilibration_accepted_steps = nvt_monte_carlo(
             at,
-            lj,
+            pot,
             temp,
             mc_params.equilibrium_steps,
             mc_params.step_size,
@@ -332,7 +333,7 @@ function monte_carlo_sampling(
         # Sample the lattice
         sampling_energies, sampling_configurations, sampling_accepted_steps = nvt_monte_carlo(
             equilibration_configurations[end],
-            lj,
+            pot,
             temp,
             mc_params.sampling_steps,
             mc_params.step_size,
@@ -359,7 +360,7 @@ function monte_carlo_sampling(
         @info "Temperature: $temp K, Energy: $E, Variance: $(round(E_var.val; sigdigits=4)), Cv: $(round(Cv.val; sigdigits=4)), Acceptance rate: $(round(acceptance_rate; sigdigits=4)), Step size: $(round(mc_params.step_size; sigdigits=4))"
     end
 
-    ls = LJAtomWalkers(configs, lj)
+    ls = LJAtomWalkers(configs, pot)
 
     return energies, ls, cvs, acceptance_rates
 end

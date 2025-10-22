@@ -48,7 +48,7 @@ and \$i\$ is the iteration number.
 # Returns
 - A vector of \$\\omega\$ factors.
 """
-function ωᵢ(iters::Vector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
+function ωᵢ(iters::AbstractVector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
     ωi = ω0 * (n_cull/(n_walkers+n_cull)) * (n_walkers/(n_walkers+n_cull)).^iters
     return ωi
 end

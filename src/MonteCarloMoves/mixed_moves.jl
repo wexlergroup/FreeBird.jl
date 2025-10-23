@@ -54,7 +54,8 @@ function MC_mixed_moves!(
             #println("Performing a swap move")
             config = at.configuration
             free_comp = free_component_index(at)
-            comp1, comp2 = sample(free_comp, 2, replace=false)
+            comp1, comp2 = sample(free_comp, 2, replace=true) # allow swapping within same component
+            (comp1 == comp2) && continue # skip the swap if both components are the same
             ind1 = rand(comp1)
             ind2 = rand(comp2)
             two_atoms_swap!(at, ind1, ind2)

@@ -4,7 +4,8 @@
 The `NestedSamplingParameters` struct represents the parameters used in the nested sampling scheme.
 
 # Fields
-- `mc_steps::Int64`: The number of total Monte Carlo moves to perform.
+- `mc_steps::Int64`: The number of total Monte Carlo moves to perform. For a parallel MC routine, this number will be distributed among workers. 
+If `mc_steps` is not divisible by the number of workers, the actual number of MC moves per worker will be `ceil(mc_steps / nworkers())`.
 - `initial_step_size::Float64`: The initial step size, which is the fallback step size if MC routine fails to accept a move.
 - `step_size::Float64`: The on-the-fly step size used in the sampling process.
 - `step_size_lo::Float64`: The lower bound of the step size.
@@ -82,6 +83,8 @@ intended to use this routine for multi-component systems. The actual number of r
 determined by the weights of the fields `walks_freq` and `swaps_freq`. See [`MCMixedMoves`](@ref).
 - `MCRejectionSampling`: A type for generating a new walker by performing rejection sampling. Currently, it is intended
 to use this routine for lattice gas systems.
+- `MCDistributed`: A type for generating new walkers by performing random walks for decorrelation in parallel using Distributed.jl.
+This routine supports multiple culling walkers and multiple decorrelation walkers. See [`MCDistributed`](@ref).
 """
 abstract type MCRoutine end
 
@@ -121,6 +124,27 @@ struct MCRandomWalkCloneParallel <: MCRoutineParallel
     dims::Vector{Int64}
     function MCRandomWalkCloneParallel(;dims::Vector{Int64}=[1, 2, 3])
         new(dims)
+    end
+end
+
+"""
+    struct MCDistributed <: MCRoutineParallel
+A type for generating new walkers by performing random walks for decorrelation in parallel using Distributed.jl.
+# Fields
+- `n_cull::Int64`: The number of lowest-energy walkers to cull (replace) in each iteration. The default is 1.
+- `n_decorr::Int64`: The number of walkers to use for decorrelation (random walks). The default is `nworkers() - 1`.
+- `dims::Vector{Int64}`: The dimensions along which to perform the random walks.
+"""
+struct MCDistributed <: MCRoutineParallel
+    n_cull::Int64
+    n_decorr::Int64
+    dims::Vector{Int64}
+    function MCDistributed(;n_cull::Int64=1, n_decorr::Int64=nworkers()-1, dims::Vector{Int64}=[1, 2, 3])
+        if n_cull + n_decorr != nworkers()
+            error("n_cull + n_decorr must be equal to the number of workers: $(nworkers())")
+        end
+        @info "Distributed nested sampling initiated: n_cull: $n_cull, n_decorr: $n_decorr, total workers: $(n_cull + n_decorr)"
+        new(n_cull, n_decorr, dims)
     end
 end
 
@@ -212,12 +236,12 @@ end
 
 Perform a single step of the nested sampling algorithm using the Monte Carlo random walk routine.
 
-Arguments
+# Arguments
 - `liveset::AtomWalkers`: The set of atom walkers.
 - `ns_params::NestedSamplingParameters`: The parameters for nested sampling.
 - `mc_routine::MCRoutine`: The Monte Carlo routine for generating new samples. See [`MCRoutine`](@ref).
 
-Returns
+# Returns
 - `iter`: The iteration number after the step.
 - `emax`: The highest energy recorded during the step.
 - `liveset`: The updated set of atom walkers.
@@ -261,7 +285,82 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     return iter, emax, liveset, ns_params
 end
 
+"""
+    nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutineParallel)
+Perform a single step of the nested sampling algorithm using the parallel Monte Carlo random walk routine.
+# Arguments
+- `liveset::AtomWalkers`: The set of atom walkers.
+- `ns_params::NestedSamplingParameters`: The parameters for nested sampling.
+- `mc_routine::MCRoutineParallel`: The parallel Monte Carlo routine for generating new samples. See [`MCRoutineParallel`](@ref).
+# Returns
+- `iter`: The iteration number after the step.
+- `emax`: The highest energy recorded during the step.
+- `liveset`: The updated set of atom walkers.
+- `ns_params`: The updated nested sampling parameters.
+"""
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCDistributed)
+    sort_by_energy!(liveset)
+    ats = liveset.walkers
+    lj = liveset.potential
+    iter::Union{Missing,Int} = missing
+    emax::Union{Vector{Missing},Vector{typeof(0.0u"eV")}} = [liveset.walkers[i].energy for i in 1:nworkers()]
 
+    to_walk_inds = sample(2:length(ats), nworkers(); replace=false)
+    # println("to_walk_inds: ", to_walk_inds) # DEBUG
+    
+    to_walks = deepcopy.(ats[to_walk_inds])
+
+    if length(mc_routine.dims) == 3
+        random_walk_function = MC_random_walk!
+    elseif length(mc_routine.dims) == 2
+        random_walk_function = MC_random_walk_2D!
+    else
+        error("Unsupported dimensions: $(mc_routine.dims)")
+    end
+
+    mc_steps_per_worker = ceil(Int, ns_params.mc_steps / nworkers()) # distribute the total MC steps among workers
+
+    walking = [remotecall(random_walk_function, workers()[i], mc_steps_per_worker, to_walk, lj, ns_params.step_size, emax[mc_routine.n_cull]) for (i,to_walk) in enumerate(to_walks)]
+    walked = fetch.(walking)
+    finalize.(walking) # finalize the remote calls, clear the memory
+
+    accepted_rates = [x[2] for x in walked]
+    rate = mean(accepted_rates)
+
+    # sort!(walked, by = x -> x[3].energy, rev=true)
+    # filter!(x -> x[1], walked) # remove the failed ones
+    accepted_inds = findall(x -> x[1]==1, walked)
+
+    if length(accepted_inds) < mc_routine.n_cull # if not enough accepted walkers
+        ns_params.fail_count += 1
+        emax = [missing]
+        return iter, emax[end], liveset, ns_params
+    else
+        # pick one from the accepted ones
+        picked = sample(accepted_inds, mc_routine.n_cull; replace=false)
+        for (i, ind) in enumerate(picked)
+            ats[i] = walked[ind][3]
+        end
+        # println("picked: ", picked) # DEBUG
+        # remove the picked one from accepted_inds
+        filter!(x -> x ∉ picked, accepted_inds)
+        # println("remaining accepted_inds: ", accepted_inds) # DEBUG
+
+        if !isempty(accepted_inds)
+            for i in accepted_inds
+                ats[to_walk_inds[i]] = walked[i][3]
+                # println("Updating ats at index $(to_walk_inds[i])") # DEBUG
+            end
+        end
+    end
+
+    update_iter!(liveset)
+    ns_params.fail_count = 0
+    iter = liveset.walkers[1].iter
+
+    adjust_step_size(ns_params, rate)
+    return iter, emax[mc_routine.n_cull], liveset, ns_params
+end
 
 function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutineParallel)
     sort_by_energy!(liveset)
@@ -273,7 +372,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     if mc_routine isa MCRandomWalkMaxEParallel
         to_walk_inds = 1:nworkers()
     elseif mc_routine isa MCRandomWalkCloneParallel
-        to_walk_inds = sort!(sample(2:length(ats), nworkers()))
+        to_walk_inds = sample(2:length(ats), nworkers(); replace=false)
     end
     
     to_walks = deepcopy.(ats[to_walk_inds])
@@ -325,7 +424,7 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSampl
     if mc_routine isa MCRandomWalkMaxEParallel
         to_walk_inds = 1:nworkers()
     elseif mc_routine isa MCRandomWalkCloneParallel
-        to_walk_inds = sort!(sample(2:length(ats), nworkers()))
+        to_walk_inds = sample(2:length(ats), nworkers(); replace=false)
     end
     
     to_walks = deepcopy.(ats[to_walk_inds])
@@ -406,6 +505,7 @@ end
     nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCMixedMoves)
 
 Perform a single step of the nested sampling algorithm using the Monte Carlo mixed moves routine.
+By default, this routine performs parallel decorrelation of multiple walkers.
 
 Arguments
 - `liveset::AtomWalkers`: The set of atom walkers.
@@ -423,36 +523,51 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     ats = liveset.walkers
     lj = liveset.potential
     iter::Union{Missing,Int} = missing
-    emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
+    emax::Union{Vector{Missing},Vector{typeof(0.0u"eV")}} = [liveset.walkers[i].energy for i in 1:nworkers()]
 
-    # clone one of the lower energy walkers
-    to_walk = deepcopy(rand(ats[2:end]))
-    # determine whether to perform a random walk or a swap
-    swap_prob = mc_routine.swaps_freq / (mc_routine.walks_freq + mc_routine.swaps_freq)
+    to_walk_inds = sample(2:length(ats), nworkers(); replace=false)
+    # println("to_walk_inds: ", to_walk_inds) # DEBUG
     
-    # @show mc_routine
-    if rand() > swap_prob
-        accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
-        @info "Swap move performed at iter: $(liveset.walkers[1].iter), accepted: $accept"
-        # @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: $(round(ns_params.step_size; sigdigits=4))"
-    else
-        accept, rate, at = MC_random_swap!(ns_params.mc_steps, to_walk, lj, emax)
-        # @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: swap"
-    end
-    
-    if accept
-        push!(ats, at)
-        popfirst!(ats)
-        update_iter!(liveset)
-        ns_params.fail_count = 0
-        iter = liveset.walkers[1].iter
-    else
-        # @warn "Failed to accept MC move"
-        emax = missing
+    to_walks = deepcopy.(ats[to_walk_inds])
+
+    walking = [remotecall(MC_mixed_moves!, workers()[i], ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax[1], [mc_routine.walks_freq, mc_routine.swaps_freq]) for (i,to_walk) in enumerate(to_walks)]
+    walked = fetch.(walking)
+    finalize.(walking) # finalize the remote calls, clear the memory
+
+    accepted_rates = [x[2] for x in walked]
+    rate = mean(accepted_rates)
+
+    # sort!(walked, by = x -> x[3].energy, rev=true)
+    # filter!(x -> x[1], walked) # remove the failed ones
+    accepted_inds = findall(x -> x[1]==1, walked)
+
+    if length(accepted_inds) == 0 # if all of the walkers failed
         ns_params.fail_count += 1
+        emax = [missing]
+        return iter, emax[end], liveset, ns_params
+    else
+        # pick one from the accepted ones
+        picked = rand(accepted_inds)
+        ats[1] = walked[picked][3]
+        # println("picked: ", picked) # DEBUG
+        # remove the picked one from accepted_inds
+        filter!(x -> x != picked, accepted_inds)
+        # println("remaining accepted_inds: ", accepted_inds) # DEBUG
+
+        if !isempty(accepted_inds)
+            for i in accepted_inds
+                ats[to_walk_inds[i]] = walked[i][3]
+                # println("Updating ats at index $(to_walk_inds[i])") # DEBUG
+            end
+        end
     end
+
+    update_iter!(liveset)
+    ns_params.fail_count = 0
+    iter = liveset.walkers[1].iter
+
     adjust_step_size(ns_params, rate)
-    return iter, emax, liveset, ns_params
+    return iter, emax[1], liveset, ns_params
 end
 
 """

@@ -245,7 +245,7 @@ function wang_landau(
 
         accepted = 0
 
-        for _ in 1:wl_params.num_steps
+        t = @elapsed for _ in 1:wl_params.num_steps
             
             # Propose a swap in occupation state (only if it maintains constant N)
             proposed_walker = deepcopy(current_walker)
@@ -296,10 +296,174 @@ function wang_landau(
             push!(energies, current_energy.val)
         end
 
+        println("Wang-Landau step took $t seconds.")
+
         @info "Iteration: $counter, f = $f, current_energy = $current_energy, acceptance rate = $(accepted/wl_params.num_steps)"
         
         # Save the last configuration
         push!(configs, deepcopy(current_walker)) 
+
+        # If the histogram is flat, decrease f, e.g. f_{i + 1} = f_i^{1/2}
+        non_zero_histogram = H[H .> 0]
+        if length(non_zero_histogram) > 0 && minimum(non_zero_histogram) > wl_params.flatness_criterion * mean(non_zero_histogram)
+            f = sqrt(f)
+            # Print progress
+            @info "Update f = $f, iterations = $counter"
+            H .= 0
+            counter = 0
+            @info "Saving the current entropy to entropy.csv"
+            df = DataFrame(energy=wl_params.energy_bins, entropy=S)
+            write_df("entropy.csv", df)
+        elseif counter > wl_params.max_iter
+            @warn "Maximum number of iterations reached!"
+            break
+        end
+    end
+
+    return energies, configs, wl_params, S, H
+end
+
+
+function wang_landau_step!(current_walker::AtomWalker, 
+                           current_energy::typeof(1.0u"eV"),
+                           mc_steps::Int64,
+                           pot::AbstractPotential, 
+                           wl_params::WangLandauParameters,
+                           S::Vector{Float64},
+                           H::Vector{Int64},
+                           f::Float64,
+                           )
+
+    accepted = 0
+
+    for _ in 1:mc_steps
+
+        # Propose a swap in occupation state (only if it maintains constant N)
+        proposed_walker = deepcopy(current_walker)
+
+        proposed_walker, ΔE = single_atom_random_walk!(proposed_walker, pot, wl_params.step_size)
+
+        # Calculate the proposed energy
+        # proposed_energy = interacting_energy(proposed_walker.configuration, pot, proposed_walker.list_num_par, proposed_walker.frozen) + proposed_walker.energy_frozen_part
+        # proposed_walker.energy = proposed_energy
+        proposed_energy = current_energy + ΔE
+        proposed_walker.energy = proposed_energy
+        # @info "Proposed energy: $proposed_energy"
+
+        if proposed_energy.val > wl_params.energy_bins[end] || proposed_energy.val < wl_params.energy_bins[1]
+            continue
+        end
+        
+        
+        current_bin = get_bin_index(current_energy.val, wl_params.energy_bins)
+        proposed_bin = get_bin_index(proposed_energy.val, wl_params.energy_bins)
+
+        # if current_bin == proposed_bin
+        #     continue
+        # end
+
+        # Calculate the ratio of the density of states which results if the occupation state is swapped
+        # η = g[current_bin] / g[proposed_bin]
+        η = exp(S[current_bin] - S[proposed_bin])
+
+        # Generate a random number r such that 0 < r < 1
+        r = rand()
+
+        # If r < η, swap the occupation state
+        if r < η
+            current_walker = deepcopy(proposed_walker)
+            current_energy = proposed_energy
+            accepted += 1
+            # push!(configs, current_walker)
+            # @info "Accepted, energy = $current_energy"
+        end
+
+        # Set g(E) = g(E) * f and H(E) = H(E) + 1
+        current_bin = get_bin_index(current_energy.val, wl_params.energy_bins)
+        # g[current_bin] *= f
+        S[current_bin] += log(f)
+        H[current_bin] += 1
+
+        # push!(energies, current_energy.val)
+    end
+
+    return accepted, current_walker, current_energy, S, H
+end
+
+function wang_landau(
+    ls::LJAtomWalkers,
+    wl_params::WangLandauParameters
+    )
+
+    # Set the random seed
+    Random.seed!(wl_params.random_seed)
+    
+    energy_bins_count = length(wl_params.energy_bins)
+    
+    # Set g(E) = 1 and H(E) = 0
+    # g = ones(Float64, energy_bins_count)
+    S = zeros(Float64, energy_bins_count)  # Entropy
+    H = zeros(Int64, energy_bins_count)
+
+    df = DataFrame(energy=wl_params.energy_bins, entropy=S)
+
+    energies = Float64[]
+    configs = AtomWalker[]
+    
+    # Choose a modification factor
+    f = wl_params.f_initial
+
+    current_walkers = ls.walkers
+    current_energies = [walker.energy for walker in current_walkers]
+    println("Initial energy: ", current_energies)
+    # push!(energies, current_energies)
+    # push!(configs, deepcopy(current_walkers[end]))
+    counter = 0
+
+    entropies = [deepcopy(S) for _ in 1:nworkers()]
+    histograms = [deepcopy(H) for _ in 1:nworkers()]
+
+    while f > wl_params.f_min
+
+        counter += 1
+        accepted = 0
+        mc_steps = ceil(Int, wl_params.num_steps / nworkers())
+
+        # @info "MC steps: $mc_steps per worker"
+        # # wang_landau_step!(current_walker::AtomWalker, 
+        #                    current_energy::typeof(1.0u"eV"),
+        #                    mc_steps::Int64,
+        #                    pot::AbstractPotential, 
+        #                    wl_params::WangLandauParameters,
+        #                    S::Vector{Float64},
+        #                    H::Vector{Int64}
+        #                    )
+        # return accepted, current_walker, current_energy, S, H
+
+        walking = [remotecall(wang_landau_step!, workers()[i], deepcopy(current_walkers[i]), current_energies[i], mc_steps, ls.potential, wl_params, entropies[i], histograms[i], f) for i in 1:nworkers()]
+        t = @elapsed walked = fetch.(walking)
+        println("Wang-Landau step took $t seconds.")
+        finalize.(walking) # finalize the remote calls, clear the memory
+
+        # consolidate results
+        for i in 1:nworkers()
+            accepted_worker, updated_walker, updated_energy, S_worker, H_worker = walked[i]
+            current_walkers[i] = updated_walker
+            current_energies[i] = updated_energy
+            entropies[i] = S_worker
+            histograms[i] = H_worker
+            accepted += accepted_worker
+        end
+
+        S .= sum(entropies)
+        H .= sum(histograms)
+
+        # @show sum(H)
+
+        @info "Iteration: $counter, f = $f, current_energy = $(current_energies[end]), acceptance rate = $(accepted/mc_steps/nworkers())"
+
+        # Save the last configuration
+        # push!(configs, deepcopy(current_walkers[end])) 
 
         # If the histogram is flat, decrease f, e.g. f_{i + 1} = f_i^{1/2}
         non_zero_histogram = H[H .> 0]

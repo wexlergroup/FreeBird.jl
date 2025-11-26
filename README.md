@@ -43,14 +43,13 @@ To get back to the Julia REPL, press `Ctrl+C` or backspace (when the REPL cursor
 
 ## References
 
-The FreeBird.jl code paper on the Journal of Chemical Theory and Computation:
-- Yang, R.; Chen, J.; Thibodeaux, D.; B. Wexler, R. FreeBird.jl: An Extensible Toolbox for Simulating Interfacial Phase Equilibria. *J. Chem. Theory Comput.* **2025**. https://doi.org/10.1021/acs.jctc.5c01348
+The FreeBird.jl code paper in the Journal of Chemical Theory and Computation:
+- Yang, R.; Chen, J.; Thibodeaux, D.; Wexler, R. B. FreeBird.jl: An Extensible Toolbox for Simulating Interfacial Phase Equilibria. *J. Chem. Theory Comput.* **2025**, *21* (21), 10765–10779. [https://doi.org/10.1021/acs.jctc.5c01348](https://doi.org/10.1021/acs.jctc.5c01348)
 
-Published surface nested sampling work from Wexler group:
-- Yang, M.; B. Pártay, L.; B. Wexler, R. Surface Phase Diagrams from Nested Sampling. *Phys. Chem. Chem. Phys.* **2024**. https://doi.org/10.1039/D4CP00050A.
-- Chatbipho, T.; Yang, R,; B. Wexler, R.; Pártay, L. B. Adsorbate phase transitions on nanoclusters from nested sampling. *arXiv:2506.01295* **2025** https://arxiv.org/abs/2506.01295
+Published surface nested sampling work from the Wexler group:
+- Yang, M.; Pártay, L. B.; Wexler, R. B. Surface phase diagrams from nested sampling. *Phys. Chem. Chem. Phys.* **2024**, *26* (18), 13862–13874. [https://doi.org/10.1039/D4CP00050A](https://doi.org/10.1039/D4CP00050A)
+- Chatbipho, T.; Yang, R.; Wexler, R. B.; Pártay, Livia B. Adsorbate phase transitions on nanoclusters from nested sampling. *J. Chem. Phys.* **2025**, *163* (17), 174701. [https://doi.org/10.1063/5.0283538](https://doi.org/10.1063/5.0283538)
 
 The nested sampling method:
-- Pártay, L. B.; Csányi, G.; Bernstein, N. Nested Sampling for Materials. *Eur. Phys. J. B* **2021**, 94 (8), 159. https://doi.org/10.1140/epjb/s10051-021-00172-1.
-
-- Ashton, G.; Bernstein, N.; Buchner, J.; Chen, X.; Csányi, G.; Fowlie, A.; Feroz, F.; Griffiths, M.; Handley, W.; Habeck, M.; Higson, E.; Hobson, M.; Lasenby, A.; Parkinson, D.; Pártay, L. B.; Pitkin, M.; Schneider, D.; Speagle, J. S.; South, L.; Veitch, J.; Wacker, P.; Wales, D. J.; Yallup, D. Nested Sampling for Physical Scientists. *Nat Rev Methods Primers* **2022**, 2 (1), 39. https://doi.org/10.1038/s43586-022-00121-x.
+- Pártay, L. B.; Bartók, A. P.; Csányi, G. Efficient Sampling of Atomic Configurational Spaces. *J. Phys. Chem. B* **2010**, *114* (32), 10502–10512. [https://doi.org/10.1021/jp1012973](https://doi.org/10.1021/jp1012973)
+- Ashton, G.; Bernstein, N.; Buchner, J.; Chen, X.; Csányi, G.; Fowlie, A.; Feroz, F.; Griffiths, M.; Handley, W.; Habeck, M.; Higson, E.; Hobson, M.; Lasenby, A.; Parkinson, D.; Pártay, L. B.; Pitkin, M.; Schneider, D.; Speagle, J. S.; South, L.; Veitch, J.; Wacker, P.; Wales, D. J.; Yallup, D. Nested Sampling for Physical Scientists. *Nat, Rev. Methods Primers* **2022**, *2* (1), 39. [https://doi.org/10.1038/s43586-022-00121-x](https://doi.org/10.1038/s43586-022-00121-x)

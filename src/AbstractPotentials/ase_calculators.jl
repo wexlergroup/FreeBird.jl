@@ -26,7 +26,7 @@ function ASELennardJones(; epsilon = 1.0, sigma = 1.0, cutoff = Inf)
     return ASECalculator(py_calc)
 end
 
-function MLPotential(;model_type::String, model_version:: String, float_type::String, use_gpu::Bool=false)
+function MLPotential(;model_type::String, model_version::String, float_type::String, use_gpu::Bool=false)
     os = pyimport("os")
     os.environ["KMP_DUPLICATE_LIB_OK"]=raw"True"
 
@@ -54,18 +54,5 @@ function MLPotential(;model_type::String, model_version:: String, float_type::St
         orb_calc = ORBCalculator(orbff, device=device)
         return ASEcalculator(orb_calc)
     end
-end
-
-
-
-# Dummy frozen_energy for compatibility with LJAtomWalkers constructor when no
-# atoms are actually frozen (returns zero).
-function frozen_energy(system::AtomsBase.AbstractSystem,
-                       calc::PyCalculator,
-                       list_num_par::Vector{Int},
-                       frozen::Vector{Bool})
-    # For now we simply return 0 because ASE calculators do not currently
-    # support separating frozen–frozen interactions.
-    return 0.0u"eV"
 end
 

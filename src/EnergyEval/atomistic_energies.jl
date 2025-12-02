@@ -97,7 +97,7 @@ end
 # Dummy frozen_energy for compatibility with LJAtomWalkers constructor when no
 # atoms are actually frozen (returns zero).
 function frozen_energy(system::AbstractSystem,
-                       calc::PyCalculator,
+                       calc::PyMLPotential,
                        list_num_par::Vector{Int},
                        frozen::Vector{Bool})
     # For now we simply return 0 because ASE calculators do not currently

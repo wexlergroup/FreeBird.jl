@@ -91,7 +91,7 @@ If `assign_energy=true`, the energy is assigned to each walker.
 - `walkers::Vector{AtomWalker{C}}`: The vector of walker objects with the assigned energy.
 """
 function assign_energy!(walkers::Vector{AtomWalker{C}}, 
-                        pot::Union{LJParameters, CompositeParameterSets{C, LJParameters}, PyCalculator}; 
+                        pot::Union{LJParameters, CompositeParameterSets{C, LJParameters}}; 
                         assign_energy=true, 
                         const_frozen_part=true
                         ) where C
@@ -129,70 +129,81 @@ The `LJAtomWalkers` struct represents a collection of atom walkers that interact
 """
 struct LJAtomWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
-    potential::Union{LJParameters, CompositeParameterSets{C, LJParameters}, PyCalculator} where C
-    function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::Union{LJParameters, CompositeParameterSets{C, LJParameters}, PyCalculator}; assign_energy=true, const_frozen_part=true) where C
+    potential::Union{LJParameters, CompositeParameterSets{C, LJParameters}} where C
+    function LJAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::Union{LJParameters, CompositeParameterSets{C, LJParameters}}; assign_energy=true, const_frozen_part=true) where C
         assign_energy!(walkers, pot; assign_energy=assign_energy, const_frozen_part=const_frozen_part)
         return new(walkers, pot)
     end
 end
 
 
-function MACE_assign_energy!(walkers::Vector{AtomWalker{C}}, 
-                        pot::PyCalculator; 
-                        assign_energy=true, 
-                        const_frozen_part=true
-                        ) where C
-    if const_frozen_part && !isempty(walkers)
-        frozen_part_energy = frozen_energy(walkers[1].configuration, pot, walkers[1].list_num_par, walkers[1].frozen)
-    end
-    if assign_energy
-        Threads.@threads for walker in walkers
-            if const_frozen_part
-                walker.energy_frozen_part = frozen_part_energy
-            else
-                assign_frozen_energy!(walker, pot)
-            end
-            assign_energy!(walker, pot) # comes after assign_frozen_energy!
-        end
-    end
-    return walkers
-end
+# function MACE_assign_energy!(walkers::Vector{AtomWalker{C}}, 
+#                         pot::PyCalculator; 
+#                         assign_energy=true, 
+#                         const_frozen_part=true
+#                         ) where C
+#     if const_frozen_part && !isempty(walkers)
+#         frozen_part_energy = frozen_energy(walkers[1].configuration, pot, walkers[1].list_num_par, walkers[1].frozen)
+#     end
+#     if assign_energy
+#         Threads.@threads for walker in walkers
+#             if const_frozen_part
+#                 walker.energy_frozen_part = frozen_part_energy
+#             else
+#                 assign_frozen_energy!(walker, pot)
+#             end
+#             assign_energy!(walker, pot) # comes after assign_frozen_energy!
+#         end
+#     end
+#     return walkers
+# end
 
-struct MACEAtomWalkers <: AtomWalkers
+# struct MACEAtomWalkers <: AtomWalkers
+#     walkers::Vector{AtomWalker{C}} where C
+#     potential::PyCalculator
+#     function MACEAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::PyCalculator; assign_energy=true, const_frozen_part=true) where C
+#         MACE_assign_energy!(walkers, pot; assign_energy=assign_energy, const_frozen_part=const_frozen_part)
+#         return new(walkers, pot)
+#     end
+# end
+
+# function Orb_assign_energy!(walkers::Vector{AtomWalker{C}}, 
+#                         pot::PyCalculator; 
+#                         assign_energy=true, 
+#                         const_frozen_part=true
+#                         ) where C
+#     if const_frozen_part && !isempty(walkers)
+#         frozen_part_energy = frozen_energy(walkers[1].configuration, pot, walkers[1].list_num_par, walkers[1].frozen)
+#     end
+#     if assign_energy
+#         for walker in walkers
+#             if const_frozen_part
+#                 walker.energy_frozen_part = frozen_part_energy
+#             else
+#                 assign_frozen_energy!(walker, pot)
+#             end
+#             assign_energy!(walker, pot) # comes after assign_frozen_energy!
+#         end
+#     end
+#     return walkers
+# end
+
+# struct OrbAtomWalkers <: AtomWalkers
+#     walkers::Vector{AtomWalker{C}} where C
+#     potential::PyCalculator
+#     function OrbAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::PyCalculator; assign_energy=true, const_frozen_part=true) where C
+#         Orb_assign_energy!(walkers, pot; assign_energy=assign_energy, const_frozen_part=const_frozen_part)
+#         return new(walkers, pot)
+#     end
+# end
+
+struct MLIPAtomWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
-    potential::PyCalculator
-    function MACEAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::PyCalculator; assign_energy=true, const_frozen_part=true) where C
-        MACE_assign_energy!(walkers, pot; assign_energy=assign_energy, const_frozen_part=const_frozen_part)
-        return new(walkers, pot)
-    end
-end
-
-function Orb_assign_energy!(walkers::Vector{AtomWalker{C}}, 
-                        pot::PyCalculator; 
-                        assign_energy=true, 
-                        const_frozen_part=true
-                        ) where C
-    if const_frozen_part && !isempty(walkers)
-        frozen_part_energy = frozen_energy(walkers[1].configuration, pot, walkers[1].list_num_par, walkers[1].frozen)
-    end
-    if assign_energy
-        for walker in walkers
-            if const_frozen_part
-                walker.energy_frozen_part = frozen_part_energy
-            else
-                assign_frozen_energy!(walker, pot)
-            end
-            assign_energy!(walker, pot) # comes after assign_frozen_energy!
+    potential::PyMLPotential
+    function MLIPAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::PyMLPotential; assign_energy=true) where {C}
+        if assign_energy
+            assign_energy!(walkers, pot)
         end
-    end
-    return walkers
-end
-
-struct OrbAtomWalkers <: AtomWalkers
-    walkers::Vector{AtomWalker{C}} where C
-    potential::PyCalculator
-    function OrbAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::PyCalculator; assign_energy=true, const_frozen_part=true) where C
-        Orb_assign_energy!(walkers, pot; assign_energy=assign_energy, const_frozen_part=const_frozen_part)
         return new(walkers, pot)
     end
 end

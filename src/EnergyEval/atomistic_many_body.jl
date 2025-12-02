@@ -70,13 +70,13 @@ end
 Evaluate total potential energy (eV) of `system` using the wrapped ASE
 calculator.
 """
-function interacting_energy(system::AbstractSystem, calc::PyCalculator)
+function interacting_energy(system::AbstractSystem, calc::PyMLPotential)
     return AtomsCalculators.potential_energy(system, calc.calc)
 end
 
 # variant with list_num_par/frozen passed by callers in LJ workflow
 function interacting_energy(system::AbstractSystem,
-                            calc::PyCalculator,
+                            calc::PyMLPotential,
                             list_num_par::Vector{Int},
                             frozen::Vector{Bool})
     return interacting_energy(system, calc)

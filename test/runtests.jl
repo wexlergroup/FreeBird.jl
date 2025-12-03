@@ -30,3 +30,5 @@ include("test-MonteCarloMoves.jl")
 include("test-SamplingSchemes/test-SamplingSchemes.jl")
 
 include("test-FreeBirdIO.jl")
+
+include("test-lattice-random-walks.jl")

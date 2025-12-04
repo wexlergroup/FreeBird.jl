@@ -1,6 +1,12 @@
 [dependencies]
+openssl = ">=3, <3.6, >=3, <3.6"
 uv = ">=0.4"
-python = "*"
+ase = ">=3.26,<3.27"
+
+    [dependencies.python]
+    channel = "conda-forge"
+    build = "*cp*"
+    version = ">=3.9,<4, >=3.10,<3.14"
 
 [project]
 name = ".CondaPkg"

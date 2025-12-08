@@ -70,26 +70,6 @@ function PyMLPotential(;model_type::String,
 end
 
 
-# function PyMLPotential(;model_type::String="uma", 
-#                         model_version::String="uma-s-1p1", 
-#                         task_name::String, 
-#                         device::String="cpu",)
-#     os = pyimport("os")
-#     os.environ["KMP_DUPLICATE_LIB_OK"]=raw"True"
-
-#     # UMA
-#     if lowercase(model_type) != "uma"
-#         error("Currently, only UMA model type is supported when specifying task_name.")
-#     end
-
-#     uma_pretrained = pyimport("fairchem.core.calculate.pretrained_mlip")
-#     uma_ase_calc = pyimport("fairchem.core.calculate.ase_calculator").FAIRChemCalculator
-#     predictor = uma_pretrained.get_predict_unit(model_name=model_version, device=device)
-#     uma = uma_ase_calc(predictor, task_name=task_name)
-    
-#     return PyMLPotential(ASEcalculator(uma))
-# end
-
 """
     ASELennardJones(;epsilon=1.0, sigma=1.0, cutoff=Inf)
 

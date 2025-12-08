@@ -11,7 +11,12 @@ struct PyMLPotential <: SingleComponentPotential{ManyBody}
     calc::ASEcalculator
 end
 
-function PyMLPotential(;model_type::String, model_version::String, float_type::String, use_gpu::Bool=false)
+function PyMLPotential(;model_type::String, 
+                        model_version::String, 
+                        float_type::String="",
+                        task_name::String="",
+                        inference_settings::Union{String,Dict}="default",
+                        use_gpu::Bool=false)
     os = pyimport("os")
     os.environ["KMP_DUPLICATE_LIB_OK"]=raw"True"
 
@@ -38,6 +43,29 @@ function PyMLPotential(;model_type::String, model_version::String, float_type::S
         )
         orb_calc = ORBCalculator(orbff, device=device)
         return PyMLPotential(ASEcalculator(orb_calc))
+    end
+
+    # UMA
+    if lowercase(model_type) == "uma" 
+        if task_name == ""
+            error("Currently, using UMA MLIP model need specify the task_name.")
+        end
+
+        if use_gpu
+            device = "cuda"
+        else
+            device = "cpu"
+        end
+
+        uma_pretrained = pyimport("fairchem.core.calculate.pretrained_mlip")
+        uma_ase_calc = pyimport("fairchem.core.calculate.ase_calculator").FAIRChemCalculator
+        
+        predictor = uma_pretrained.get_predict_unit(model_name=model_version, 
+                                                    inference_settings=inference_settings, 
+                                                    device=device)
+        uma = uma_ase_calc(predictor, task_name=task_name)
+        
+        return PyMLPotential(ASEcalculator(uma))
     end
 end
 

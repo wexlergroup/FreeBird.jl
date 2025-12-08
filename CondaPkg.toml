@@ -1,8 +1,0 @@
-[deps]
-cmake = ""
-ase = ""
-python = "=3.11"
-
-[pip.deps]
-mace-torch = ""
-orb-models = ""

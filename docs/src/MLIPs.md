@@ -7,6 +7,7 @@ FreeBird.jl supports the use of machine learning interatomic potentials (MLIPs) 
 For UMA, we recommend setting up a local Conda environment. For example:
 
 ```bash
+# This is a bash command, run it in your terminal before starting Julia
 conda create -prefix ./uma_env python=3.11
 conda activate ./uma_env
 pip install fairchem-core
@@ -45,7 +46,7 @@ pkg> conda pip_add mace-torch
 To enable CUDA acceleration with cuEquivariance library, you need to install additional packages:
 
 ```julia
-conda pip_add cuequivariance cuequivariance-torch cuequivariance-ops-torch-cu12
+pkg> conda pip_add cuequivariance cuequivariance-torch cuequivariance-ops-torch-cu12
 ```
 
 See [MACE documentation](https://mace.readthedocs.io/en/latest/) for more details on installation and usage.
@@ -104,3 +105,35 @@ function interacting_energy(system::AbstractSystem, calc::PyMLPotential)
     return AtomsCalculators.potential_energy(system, calc.calc)
 end
 ```
+
+## Using MLIPs for nested sampling
+
+Here, we provide an example of using ORB MLIP for nested sampling with `MLIPAtomWalkers` live set.
+
+```julia
+using FreeBird
+
+# Set up ORB potential
+mlp = PyMLPotential(model_type="orb", model_version="n", float_type="float32-high", use_gpu=false)
+
+# Generate initial configurations and set up walkers, let's say 10 walkers of 6 Si atoms in a box
+walkers = AtomWalker.(generate_initial_configs(10, 562.5, 6; particle_type=:Si))
+
+# Set up MLIPAtomWalkers live set, energies will be evaluated using the ORB potential
+ls = MLIPAtomWalkers(walkers, mlp)
+
+# Set up nested sampling parameters, using 100 MC steps per iteration and small step sizes
+ns_params = NestedSamplingParameters(mc_steps=100, step_size=0.01, step_size_up=0.05, random_seed=1234*rand(Int))
+
+# Set up output saving parameters
+save = SaveEveryN(n_traj=10, n_snap=10_000, n_info=1)
+
+# Set up Monte Carlo routines
+mc = MCRandomWalkClone() # works with MLIPAtomWalkers on a GPU or CPU; one can use `MCDistributed()` for multi-processing on CPU (no GPU support yet)
+
+# Run nested sampling for 10_000 iterations
+energies, liveset, _ = nested_sampling(ls, ns_params, 10_000, mc, save)
+```
+
+Fundamentally, using other MLIPs follows the same procedure as above. Be aware of the computational costs with MLIPS, one typically needs to use
+GPU for fast energy evaluations, or massively parallel CPU computations to distribute the workload.

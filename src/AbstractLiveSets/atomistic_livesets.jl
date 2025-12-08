@@ -136,67 +136,19 @@ struct LJAtomWalkers <: AtomWalkers
     end
 end
 
+"""
+    struct MLIPAtomWalkers <: AtomWalkers
+The `MLIPAtomWalkers` struct represents a collection of atom walkers that interact with each other using a machine learning interatomic potential (MLIP).
 
-# function MACE_assign_energy!(walkers::Vector{AtomWalker{C}}, 
-#                         pot::PyCalculator; 
-#                         assign_energy=true, 
-#                         const_frozen_part=true
-#                         ) where C
-#     if const_frozen_part && !isempty(walkers)
-#         frozen_part_energy = frozen_energy(walkers[1].configuration, pot, walkers[1].list_num_par, walkers[1].frozen)
-#     end
-#     if assign_energy
-#         Threads.@threads for walker in walkers
-#             if const_frozen_part
-#                 walker.energy_frozen_part = frozen_part_energy
-#             else
-#                 assign_frozen_energy!(walker, pot)
-#             end
-#             assign_energy!(walker, pot) # comes after assign_frozen_energy!
-#         end
-#     end
-#     return walkers
-# end
+# Fields
+- `walkers::Vector{AtomWalker{C}}`: A vector of atom walkers, where `C` is the number of components.
+- `potential::PyMLPotential`: The machine learning interatomic potential wrapped in a `PyMLPotential`.
 
-# struct MACEAtomWalkers <: AtomWalkers
-#     walkers::Vector{AtomWalker{C}} where C
-#     potential::PyCalculator
-#     function MACEAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::PyCalculator; assign_energy=true, const_frozen_part=true) where C
-#         MACE_assign_energy!(walkers, pot; assign_energy=assign_energy, const_frozen_part=const_frozen_part)
-#         return new(walkers, pot)
-#     end
-# end
-
-# function Orb_assign_energy!(walkers::Vector{AtomWalker{C}}, 
-#                         pot::PyCalculator; 
-#                         assign_energy=true, 
-#                         const_frozen_part=true
-#                         ) where C
-#     if const_frozen_part && !isempty(walkers)
-#         frozen_part_energy = frozen_energy(walkers[1].configuration, pot, walkers[1].list_num_par, walkers[1].frozen)
-#     end
-#     if assign_energy
-#         for walker in walkers
-#             if const_frozen_part
-#                 walker.energy_frozen_part = frozen_part_energy
-#             else
-#                 assign_frozen_energy!(walker, pot)
-#             end
-#             assign_energy!(walker, pot) # comes after assign_frozen_energy!
-#         end
-#     end
-#     return walkers
-# end
-
-# struct OrbAtomWalkers <: AtomWalkers
-#     walkers::Vector{AtomWalker{C}} where C
-#     potential::PyCalculator
-#     function OrbAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::PyCalculator; assign_energy=true, const_frozen_part=true) where C
-#         Orb_assign_energy!(walkers, pot; assign_energy=assign_energy, const_frozen_part=const_frozen_part)
-#         return new(walkers, pot)
-#     end
-# end
-
+# Constructor
+- `MLIPAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::PyMLPotential; assign_energy=true)`: 
+    Constructs a new `MLIPAtomWalkers` object with the given walkers and MLIP potential. If `assign_energy=true`,
+    the energy of each walker is assigned using the MLIP potential.
+"""
 struct MLIPAtomWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
     potential::PyMLPotential

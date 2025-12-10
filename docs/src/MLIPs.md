@@ -2,7 +2,7 @@
 
 FreeBird.jl supports the use of machine learning interatomic potentials (MLIPs) by interfacing with the ASE (Atomic Simulation Environment) Python calculators. One can use your local Python environment or set up a Conda environment within Julia using `CondaPkg.jl`.
 
-## Fairchem UMA model
+## FAIRChem UMA model
 
 For UMA, we recommend setting up a local Conda environment. For example:
 
@@ -90,6 +90,23 @@ Now, we can use ORB MLIPs in FreeBird.jl. Here is an example of setting up an `M
 ```julia
 mlp = orb_model(precision="float32-high", device="cuda")
 ```
+
+## CHGNet models
+
+Similarly, you can point CondaPkg.jl to your local Conda environment where you have installed CHGNet.
+Alternatively, you can install the required packages within your Julia environment using CondaPkg.jl:
+```julia
+using CondaPkg
+# press the "]" key to enter Pkg mode
+pkg> conda pip_add chgnet
+```
+
+To use it, simply create a CHGNet model as follows:
+
+```julia
+mlp = chgnet_model(model_name="r2scan", use_device="cuda")
+```
+Here, we use the pre-trained `r2scan` model and enable CUDA.
 
 ## Add other MLIPs
 

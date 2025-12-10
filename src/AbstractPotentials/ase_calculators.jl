@@ -10,7 +10,7 @@ The wrapped calculator *must* be able to return energies in *electron-volts* via
 # Available Models
 - MACE: see [`mace_model`](@ref) function)
 - ORB: see [`orb_model`](@ref) function)
-- UMA: see [`uma_model`](@ref) function)
+- FAIRChem UMA: see [`uma_model`](@ref) function)
 - CHGNet: see [`chgnet_model`](@ref) function)
 """
 struct PyMLPotential <: SingleComponentPotential{ManyBody}
@@ -52,7 +52,7 @@ end
 """
     uma_model(task_name::String, model_name::String; kwargs...) <: PyMLPotential
 
-Loading Fairchem UMA model Python module through ASE interface.
+Loading FAIRChem UMA model Python module through ASE interface.
 See https://fair-chem.github.io/ for the available arguments and usage.
 `task_name` and `model_name` are required.
 

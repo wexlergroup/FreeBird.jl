@@ -69,6 +69,35 @@ function PyMLPotential(;model_type::String,
     end
 end
 
+function mace_model(arg...; kwargs...)
+    mace = pyimport("mace.calculators")
+    mace_calc = mace.mace_mp(arg...; kwargs...)
+    return PyMLPotential(ASEcalculator(mace_calc))
+end
+
+function orb_model(arg...; kwargs...)
+    pretrained = pyimport("orb_models.forcefield.pretrained")
+    ORBCalculator = pyimport("orb_models.forcefield.calculator").ORBCalculator
+    orbff = pretrained.orb_v3_direct_20_omat(arg...; kwargs...)
+    orb_calc = ORBCalculator(orbff)
+    return PyMLPotential(ASEcalculator(orb_calc))
+end
+
+function uma_model(arg...; kwargs...)
+    uma_pretrained = pyimport("fairchem.core.calculate.pretrained_mlip")
+    uma_ase_calc = pyimport("fairchem.core.calculate.ase_calculator").FAIRChemCalculator
+    predictor = uma_pretrained.get_predict_unit(arg...; kwargs...)
+    uma = uma_ase_calc(predictor)
+    return PyMLPotential(ASEcalculator(uma))
+end
+
+function chgnet_model(arg...; kwargs...)
+    model = pyimport("chgnet.model.model")
+    pot = model.CHGNet.load(arg...; kwargs...)
+    calc = pyimport("chgnet.model.dynamics").CHGNetCalculator(potential=pot, property="energy")
+    return PyMLPotential(ASEcalculator(calc))
+end
+
 
 """
     ASELennardJones(;epsilon=1.0, sigma=1.0, cutoff=Inf)

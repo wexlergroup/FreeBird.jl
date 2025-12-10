@@ -90,6 +90,7 @@ Now, we can use ORB MLIPs in FreeBird.jl. Here is an example of setting up an `M
 ```julia
 mlp = orb_model(precision="float32-high", device="cuda")
 ```
+See [ORB documentation](https://github.com/orbital-materials/orb-models) for more details on usage.
 
 ## CHGNet models
 
@@ -106,7 +107,7 @@ To use it, simply create a CHGNet model as follows:
 ```julia
 mlp = chgnet_model(model_name="r2scan", use_device="cuda")
 ```
-Here, we use the pre-trained `r2scan` model and enable CUDA.
+Here, we use the pre-trained `r2scan` model and enable CUDA. See [CHGNet documentation](https://chgnet.lbl.gov/) for more details on usage.
 
 ## Add other MLIPs
 
@@ -156,11 +157,10 @@ ns_params = NestedSamplingParameters(mc_steps=100, step_size=0.01, step_size_up=
 save = SaveEveryN(n_traj=10, n_snap=10_000, n_info=1)
 
 # Set up Monte Carlo routines
-mc = MCRandomWalkClone() # works with MLIPAtomWalkers on a GPU or CPU; one can use `MCDistributed()` for multi-processing on CPU (no GPU support yet)
+mc = MCRandomWalkClone() # works with MLIPAtomWalkers on a GPU or CPU; one can use `MCDistributed()` for multi-processing on CPU (no multi-GPU support yet)
 
 # Run nested sampling for 10_000 iterations
 energies, liveset, _ = nested_sampling(ls, ns_params, 10_000, mc, save)
 ```
 
-Fundamentally, using other MLIPs follows the same procedure as above. Be aware of the computational costs with MLIPS, one typically needs to use
-GPU for fast energy evaluations, or massively parallel CPU computations to distribute the workload.
+Fundamentally, using other MLIPs follows the same procedure as above. Be aware of the computational costs with MLIPS, one typically needs to use GPU for fast energy evaluations, or massively parallel CPU computations to distribute the workload.

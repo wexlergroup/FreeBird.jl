@@ -24,7 +24,9 @@ Loading MACE foundation model Python module through ASE interface.
 See https://github.com/ACEsuit/mace-foundations for the available arguments and usage.
 
 # Example
-mlp = mace_model(model_version="small", detype="float32", enable_cueq=true)
+```jldoctest
+julia> mlp = mace_model(model_version="small", detype="float32", enable_cueq=true)
+```
 """
 function mace_model(arg...; kwargs...)
     mace = pyimport("mace.calculators")
@@ -39,7 +41,9 @@ Loading ORB potential Python module through ASE interface.
 See https://github.com/orbital-materials/orb-models for the available arguments and usage.
 
 # Example
-mlp = orb_model(precision="float32-high", device="cuda")
+```jldoctest
+julia> mlp = orb_model(precision="float32-high", device="cuda")
+```
 """
 function orb_model(arg...; kwargs...)
     pretrained = pyimport("orb_models.forcefield.pretrained")
@@ -57,7 +61,9 @@ See https://fair-chem.github.io/ for the available arguments and usage.
 `task_name` and `model_name` are required.
 
 # Example
-mlp = uma_model("omat", "uma-s-1p1", device="cuda")
+```jldoctest
+julia> mlp = uma_model("omat", "uma-s-1p1", device="cuda")
+```
 """
 function uma_model(task_name::String, model_name::String; kwargs...)
     uma_pretrained = pyimport("fairchem.core.calculate.pretrained_mlip")
@@ -75,7 +81,9 @@ Loading CHGNet model Python module through ASE interface.
 See https://chgnet.lbl.gov/ for the available arguments and usage.
 
 # Example
-mlp = chgnet_model(model_name="r2scan", use_device="cuda")
+```jldoctest
+julia> mlp = chgnet_model(model_name="r2scan", use_device="cuda")
+```
 """
 function chgnet_model(arg...; kwargs...)
     model = pyimport("chgnet.model.model")

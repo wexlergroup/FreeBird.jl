@@ -73,3 +73,60 @@ function MC_mixed_moves!(
     end
     return accept_this_walker, n_accept/n_steps, at
 end
+
+function MC_mixed_moves!(
+                    n_steps::Int, 
+                    at::AtomWalker{C}, 
+                    pot::SingleComponentPotential{ManyBody}, 
+                    step_size::Float64, 
+                    emax::typeof(0.0u"eV"),
+                    freq::Vector{Int},
+                    ) where C
+    n_accept = 0
+    accept_this_walker = false
+    for i_mc_step in 1:n_steps
+        swap_prob = freq[2] / sum(freq)
+        if rand() > swap_prob
+            config = at.configuration
+            free_index = free_par_index(at)
+            i_at = rand(free_index)
+            # prewalk_energy = interacting_energy(config, pot, at.list_num_par, at.frozen)
+            pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
+            orig_pos = deepcopy(pos)
+            pos = single_atom_random_walk!(pos, step_size)
+            pos = periodic_boundary_wrap!(pos, config)
+            config.position[i_at] = pos
+            postwalk_energy = interacting_energy(config, pot)
+
+            if postwalk_energy >= emax
+                # reject the move, revert to original position
+                config.position[i_at] = orig_pos
+            else
+                at.energy = postwalk_energy
+                # accept the move
+                n_accept += 1
+                accept_this_walker = true
+            end
+        elseif rand() <= swap_prob
+            #println("Performing a swap move")
+            config = at.configuration
+            free_comp = free_component_index(at)
+            comp1, comp2 = sample(free_comp, 2, replace=true) # allow swapping within same component
+            (comp1 == comp2) && continue # skip the swap if both components are the same
+            ind1 = rand(comp1)
+            ind2 = rand(comp2)
+            two_atoms_swap!(at, ind1, ind2)
+            energy = interacting_energy(config, pot, at.list_num_par, at.frozen) + at.energy_frozen_part
+            if energy >= emax
+                # reject the move, revert to original position
+                two_atoms_swap!(at, ind1, ind2) # swap again to go back
+            else
+                at.energy = energy
+                # accept the move
+                n_accept += 1
+                accept_this_walker = true
+            end
+        end
+    end
+    return accept_this_walker, n_accept/n_steps, at
+end

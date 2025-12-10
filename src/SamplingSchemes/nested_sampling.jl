@@ -181,6 +181,21 @@ mutable struct MCMixedMoves <: MCRoutine
 end
 
 """
+    struct MCMixedMovesParallel <: MCRoutineParallel
+A type for generating a new walker by performing random walks and swapping atoms in parallel. Currently, it is intended to use this routine for
+multi-component systems. The actual number of random walks and swaps to perform is determined by the weights of the fields `walks_freq` and `swaps_freq`.
+For example, if `walks_freq=4` and `swaps_freq=1`, then the probability of performing a random walk is 4/5, and the probability of performing a swap is 1/5.
+
+# Fields
+- `walks_freq::Int`: The frequency of random walks to perform.
+- `swaps_freq::Int`: The frequency of atom swaps to perform.
+"""
+mutable struct MCMixedMovesParallel <: MCRoutineParallel
+    walks_freq::Int
+    swaps_freq::Int
+end
+
+"""
     struct MCRejectionSampling <: MCRoutine
 A type for generating a new walker by performing rejection sampling. Currently, it is intended to use this routine for lattice gas systems.
 """
@@ -517,8 +532,39 @@ Returns
 - `emax`: The highest energy recorded during the step.
 - `liveset`: The updated set of atom walkers.
 - `ns_params`: The updated nested sampling parameters.
+
+Note
+- To invoke the parallel version of this routine, use `MCMixedMovesParallel` as the `mc_routine` argument.
 """
 function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCMixedMoves)
+    sort_by_energy!(liveset)
+    ats = liveset.walkers
+    lj = liveset.potential
+    iter::Union{Missing,Int} = missing
+    emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
+    to_walk = deepcopy(rand(ats[2:end]))
+
+    accept, rate, at = MC_mixed_moves!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax, [mc_routine.walks_freq, mc_routine.swaps_freq])
+
+    # accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
+    # @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: $(round(ns_params.step_size; sigdigits=4))"
+    if accept
+        push!(ats, at)
+        popfirst!(ats)
+        update_iter!(liveset)
+        ns_params.fail_count = 0
+        iter = liveset.walkers[1].iter
+    else
+        # @warn "Failed to accept MC move"
+        emax = missing
+        ns_params.fail_count += 1
+    end
+    adjust_step_size(ns_params, rate)
+
+    return iter, emax, liveset, ns_params
+end
+
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCMixedMovesParallel)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.potential

@@ -11,6 +11,7 @@ using StaticArrays
 using ..AbstractWalkers
 using ..AbstractPotentials
 using ..AbstractHamiltonians
+using AtomsCalculators
 
 export pbc_dist
 export interacting_energy, frozen_energy

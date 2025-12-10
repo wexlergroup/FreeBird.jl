@@ -136,6 +136,29 @@ struct LJAtomWalkers <: AtomWalkers
     end
 end
 
+"""
+    struct MLIPAtomWalkers <: AtomWalkers
+The `MLIPAtomWalkers` struct represents a collection of atom walkers that interact with each other using a machine learning interatomic potential (MLIP).
+
+# Fields
+- `walkers::Vector{AtomWalker{C}}`: A vector of atom walkers, where `C` is the number of components.
+- `potential::PyMLPotential`: The machine learning interatomic potential wrapped in a `PyMLPotential`.
+
+# Constructor
+- `MLIPAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::PyMLPotential; assign_energy=true)`: 
+    Constructs a new `MLIPAtomWalkers` object with the given walkers and MLIP potential. If `assign_energy=true`,
+    the energy of each walker is assigned using the MLIP potential.
+"""
+struct MLIPAtomWalkers <: AtomWalkers
+    walkers::Vector{AtomWalker{C}} where C
+    potential::PyMLPotential
+    function MLIPAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::PyMLPotential; assign_energy=true) where {C}
+        if assign_energy
+            assign_energy!(walkers, pot)
+        end
+        return new(walkers, pot)
+    end
+end
 
 """
     struct LJSurfaceWalkers <: AtomWalkers

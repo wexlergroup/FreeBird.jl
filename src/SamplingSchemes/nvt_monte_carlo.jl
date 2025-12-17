@@ -40,6 +40,7 @@ end
 
 """
     nvt_monte_carlo(
+        mc_routine::MCRoutine,
         lattice::AbstractLattice,
         h::ClassicalHamiltonian,
         temperature::Float64,
@@ -54,6 +55,7 @@ Note: The Boltzmann constant is set to 8.617333262e-5 eV K\$^{-1}\$. Thus, the u
 should be in Kelvin, and the units of the energy should be in eV (defined in the Hamiltonian).
 
 # Arguments
+- `mc_routine::MCNewSample`: The Monte Carlo routine to use. For lattice sampling, use `MCNewSample`.
 - `lattice::AbstractLattice`: The initial lattice configuration.
 - `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
 - `temperature::Float64`: The temperature of the system.
@@ -67,6 +69,7 @@ should be in Kelvin, and the units of the energy should be in eV (defined in the
 - `accepted_steps::Int64`: The number of accepted steps.
 """
 function nvt_monte_carlo(
+    mc_routine::MCNewSample,
     lattice::AbstractLattice,
     h::ClassicalHamiltonian,
     temperature::Float64,
@@ -116,6 +119,7 @@ end
 
 """
     nvt_monte_carlo(
+        mc_routine::MCRoutine,
         walker::AtomWalker,
         pot::AbstractPotential,
         temperature::Float64,
@@ -130,6 +134,7 @@ Note: The Boltzmann constant is set to 8.617333262e-5 eV K\$^{-1}\$. Thus, the u
 should be in Kelvin, and the units of the energy should be in eV (defined in the Hamiltonian).
 
 # Arguments
+- `mc_routine::MCRoutine`: The Monte Carlo routine to use. For atomistic sampling, use `MCRandomWalkMaxE` or `MCMixedMoves`.
 - `walker::AtomWalker`: The initial atom walker configuration.
 - `pot::AbstractPotential`: The potential energy function for the atoms.
 - `temperature::Float64`: The temperature of the system.
@@ -143,6 +148,7 @@ should be in Kelvin, and the units of the energy should be in eV (defined in the
 - `configurations::Vector{typeof(walker)}`: The configurations of the system at each step.
 """
 function nvt_monte_carlo(
+    mc_routine::MCRandomWalkMaxE,
     walker::AtomWalker,
     pot::AbstractPotential,
     temperature::Float64,
@@ -184,8 +190,52 @@ function nvt_monte_carlo(
     return energies, configurations, accepted_steps
 end
 
+function nvt_monte_carlo(
+    mc_routine::MCMixedMoves,
+    walker::AtomWalker,
+    pot::AbstractPotential,
+    temperature::Float64,
+    num_steps::Int64,
+    step_size::Float64,
+    random_seed::Int64;
+    kb::Float64 = 8.617_333_262e-5  # eV K-1
+)
+    # Set the random seed
+    Random.seed!(random_seed)
+
+    e_unit = unit(walker.energy)
+    
+    energies = Vector{typeof(walker.energy)}(undef, num_steps)
+    configurations = Vector{typeof(walker)}(undef, num_steps)
+    accepted_steps = 0
+
+    current_walker = deepcopy(walker)
+    current_energy = interacting_energy(current_walker.configuration, pot, current_walker.list_num_par, current_walker.frozen) + current_walker.energy_frozen_part
+    
+    for i in 1:num_steps
+        proposed_walker = deepcopy(current_walker)
+        # move the atoms by 1% of the average cell size
+        _, _, proposed_walker = MC_mixed_moves!(1, proposed_walker, pot, step_size, Inf*e_unit, mc_routine.freq)
+        # Calculate the proposed energy
+        proposed_energy = interacting_energy(proposed_walker.configuration, pot, proposed_walker.list_num_par, proposed_walker.frozen) + proposed_walker.energy_frozen_part
+        # Metropolis-Hastings acceptance criterion
+        # kb = 8.617_333_262e-5  # eV K-1
+        # ΔE = proposed_energy - current_energy
+        if ΔE < 0*e_unit || rand() < exp(-ΔE.val / (kb * temperature))
+            current_walker.configuration = proposed_walker.configuration
+            current_energy = proposed_energy
+            accepted_steps += 1
+        end
+        energies[i] = current_energy
+        configurations[i] = current_walker
+    end
+
+    return energies, configurations, accepted_steps
+end
+
 """
     monte_carlo_sampling(
+        mc_routine::MCRoutine,
         lattice::AbstractLattice,
         h::ClassicalHamiltonian,
         mc_params::MetropolisMCParameters;
@@ -198,6 +248,7 @@ Note: The Boltzmann constant is set to 8.617333262e-5 eV K\$^{-1}\$. Thus, the u
 should be in Kelvin, and the units of the energy should be in eV (defined in the Hamiltonian).
 
 # Arguments
+- `mc_routine::MCRoutine`: The Monte Carlo routine to use. For lattice sampling, use `MCNewSample`.
 - `lattice::AbstractLattice`: The initial lattice configuration.
 - `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
 - `mc_params::MetropolisMCParameters`: The parameters for the Metropolis Monte Carlo algorithm.
@@ -210,6 +261,7 @@ should be in Kelvin, and the units of the energy should be in eV (defined in the
 - `acceptance_rates::Vector{Float64}`: The acceptance rates of the system at each temperature.
 """
 function monte_carlo_sampling(
+    mc_routine::MCRoutine,
     lattice::AbstractLattice,
     h::ClassicalHamiltonian,
     mc_params::MetropolisMCParameters;
@@ -226,6 +278,7 @@ function monte_carlo_sampling(
 
         # Equilibrate the lattice
         equilibration_energies, equilibration_configurations, equilibration_accepted_steps = nvt_monte_carlo(
+            mc_routine,
             lattice,
             h,
             temp,
@@ -243,6 +296,7 @@ function monte_carlo_sampling(
 
         # Sample the lattice
         sampling_energies, sampling_configurations, sampling_accepted_steps = nvt_monte_carlo(
+            mc_routine,
             equilibration_configurations[end],
             h,
             temp,
@@ -274,6 +328,7 @@ end
 
 """
     monte_carlo_sampling(
+        mc_routine::MCRoutine,
         at::AtomWalker,
         pot::AbstractPotential,
         mc_params::MetropolisMCParameters;
@@ -286,6 +341,7 @@ Note: The Boltzmann constant is set to 8.617333262e-5 eV K\$^{-1}\$. Thus, the u
 should be in Kelvin, and the units of the energy should be in eV.
 
 # Arguments
+- `mc_routine::MCRoutine`: The Monte Carlo routine to use. For atomistic sampling, use `MCRandomWalkMaxE` or `MCMixedMoves`.
 - `at::AtomWalker`: The initial atom walker configuration.
 - `pot::AbstractPotential`: The potential energy function.
 - `mc_params::MetropolisMCParameters`: The parameters for the Metropolis Monte Carlo algorithm.
@@ -297,6 +353,7 @@ should be in Kelvin, and the units of the energy should be in eV.
 - `acceptance_rates::Vector{Float64}`: The acceptance rates of the system at each temperature.
 """
 function monte_carlo_sampling(
+    mc_routine::MCRoutine,
     at::AtomWalker,
     pot::AbstractPotential,
     mc_params::MetropolisMCParameters;
@@ -313,6 +370,7 @@ function monte_carlo_sampling(
 
         # Equilibrate the lattice
         equilibration_energies, equilibration_configurations, equilibration_accepted_steps = nvt_monte_carlo(
+            mc_routine,
             at,
             pot,
             temp,
@@ -332,6 +390,7 @@ function monte_carlo_sampling(
 
         # Sample the lattice
         sampling_energies, sampling_configurations, sampling_accepted_steps = nvt_monte_carlo(
+            mc_routine,
             equilibration_configurations[end],
             pot,
             temp,

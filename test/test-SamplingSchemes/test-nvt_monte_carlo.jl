@@ -28,10 +28,12 @@
         
         ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
 
+        mc_routine = MCNewSample()
+
         @testset "Basic functionality" begin
-            
-            energies, configs, accepted = nvt_monte_carlo(lattice, ham, 300.0, 100, 42)
-            
+
+            energies, configs, accepted = nvt_monte_carlo(mc_routine, lattice, ham, 300.0, 100, 42)
+
             @test length(energies) == 100
             @test length(configs) == 100
             @test 0 ≤ accepted ≤ 100
@@ -39,19 +41,19 @@
         end
     
         @testset "Temperature effects" begin
-    
-            energies_cold, _, accepted_cold = nvt_monte_carlo(lattice, ham, 1.0, 50, 42)
-            energies_hot, _, accepted_hot = nvt_monte_carlo(lattice, ham, 1000.0, 50, 42)
-    
+
+            energies_cold, _, accepted_cold = nvt_monte_carlo(mc_routine, lattice, ham, 1.0, 50, 42)
+            energies_hot, _, accepted_hot = nvt_monte_carlo(mc_routine, lattice, ham, 1000.0, 50, 42)
+
             @test std(energies_cold) ≤ std(energies_hot)
             @test accepted_cold ≤ accepted_hot
         end
     
         @testset "Conservation & Reproducibility" begin
-    
-            energies1, configs1, accepted1 = nvt_monte_carlo(lattice, ham, 300.0, 50, 42)
-            energies2, configs2, accepted2 = nvt_monte_carlo(lattice, ham, 300.0, 50, 42)
-    
+
+            energies1, configs1, accepted1 = nvt_monte_carlo(mc_routine, lattice, ham, 300.0, 50, 42)
+            energies2, configs2, accepted2 = nvt_monte_carlo(mc_routine, lattice, ham, 300.0, 50, 42)
+
             @test all(sum(c.components[1]) == sum(lattice.components[1]) for c in configs1)
             @test energies1 == energies2
             @test accepted1 == accepted2
@@ -89,7 +91,9 @@ end
             accept_range=(0.5,0.5)
         )
 
-        mc_energies, mc_ls, mc_cvs, acceptance_rates = monte_carlo_sampling(at, lj, mc_params)
+        mc_routine = MCRandomWalkMaxE()
+
+        mc_energies, mc_ls, mc_cvs, acceptance_rates = monte_carlo_sampling(mc_routine, at, lj, mc_params)
 
         @test length(mc_energies) == length(temperatures)
         @test length(mc_ls.walkers) == length(temperatures)
@@ -111,8 +115,10 @@ end
 
         ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
 
+        mc_routine = MCNewSample()
+
         # Metropolis Monte Carlo
-        energies, configs, accepted = nvt_monte_carlo(lattice, ham, 300.0, 100, 42)
+        energies, configs, accepted = nvt_monte_carlo(mc_routine, lattice, ham, 300.0, 100, 42)
 
         @test length(energies) == 100
         @test length(configs) == 100
@@ -137,7 +143,7 @@ end
             accept_range=(0.3, 0.4)
         )
 
-        mc_energies, mc_configs, mc_cvs, acceptance_rates = monte_carlo_sampling(initial_lattice, ham, mc_params)
+        mc_energies, mc_configs, mc_cvs, acceptance_rates = monte_carlo_sampling(mc_routine, initial_lattice, ham, mc_params)
 
         @test length(mc_energies) == length(temperatures)
         @test length(mc_configs) == length(temperatures)

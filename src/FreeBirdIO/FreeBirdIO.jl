@@ -67,7 +67,7 @@ function convert_system_to_walker(at::FlexibleSystem, resume::Bool)
     e_frozen = (haskey(data, :energy_frozen_part) && resume) ? data[:energy_frozen_part]*u"eV" : 0.0u"eV"
     new_list = [Atom(atomic_symbol(i),position(i)) for i in at.particles]
     at = FastSystem(new_list, cell_vectors(at), periodicity(at))
-    return AtomWalker{C}(at; energy=energy, iter=iter, list_num_par=list_num_par, frozen=frozen, energy_frozen_part=e_frozen)
+    return AtomWalker{C}(at; energy=energy, iter=iter, list_num_par=list_num_par, frozen=[frozen...], energy_frozen_part=e_frozen)
 end
 
 """

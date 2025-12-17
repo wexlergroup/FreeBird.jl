@@ -419,7 +419,7 @@ function monte_carlo_sampling(
         @info "Temperature: $temp K, Energy: $E, Variance: $(round(E_var.val; sigdigits=4)), Cv: $(round(Cv.val; sigdigits=4)), Acceptance rate: $(round(acceptance_rate; sigdigits=4)), Step size: $(round(mc_params.step_size; sigdigits=4))"
     end
 
-    ls = AtomWalkers(configs, pot; assign_energy=false)
+    ls = AtomWalkers(configs, pot; assign_energy=true)
 
     return energies, ls, cvs, acceptance_rates
 end

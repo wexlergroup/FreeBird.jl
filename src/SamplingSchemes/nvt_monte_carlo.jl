@@ -220,7 +220,7 @@ function nvt_monte_carlo(
         proposed_energy = interacting_energy(proposed_walker.configuration, pot, proposed_walker.list_num_par, proposed_walker.frozen) + proposed_walker.energy_frozen_part
         # Metropolis-Hastings acceptance criterion
         # kb = 8.617_333_262e-5  # eV K-1
-        # ΔE = proposed_energy - current_energy
+        ΔE = proposed_energy - current_energy
         if ΔE < 0*e_unit || rand() < exp(-ΔE.val / (kb * temperature))
             current_walker.configuration = proposed_walker.configuration
             current_energy = proposed_energy

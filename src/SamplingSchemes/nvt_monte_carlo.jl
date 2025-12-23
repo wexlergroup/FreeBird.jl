@@ -213,9 +213,30 @@ function nvt_monte_carlo(
     current_energy = interacting_energy(current_walker.configuration, pot, current_walker.list_num_par, current_walker.frozen) + current_walker.energy_frozen_part
     
     for i in 1:num_steps
+        freq = [mc_routine.walks_freq, mc_routine.swaps_freq]
+        swap_prob = freq[2] / sum(freq)
         proposed_walker = deepcopy(current_walker)
-        # move the atoms by 1% of the average cell size
-        _, _, proposed_walker = MC_mixed_moves!(1, proposed_walker, pot, step_size, Inf*e_unit, [mc_routine.walks_freq, mc_routine.swaps_freq])
+        # Propose a move
+        if rand() > swap_prob
+            config = proposed_walker.configuration
+            free_index = free_par_index(proposed_walker)
+            i_at = rand(free_index)
+            # prewalk_energy = interacting_energy(config, pot, proposed_walker.list_num_par, proposed_walker.frozen)
+            pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
+            orig_pos = deepcopy(pos)
+            pos = single_atom_random_walk!(pos, step_size)
+            pos = periodic_boundary_wrap!(pos, config)
+            config.position[i_at] = pos
+        elseif rand() <= swap_prob
+            #println("Performing a swap move")
+            config = proposed_walker.configuration
+            free_comp = free_component_index(proposed_walker)
+            comp1, comp2 = sample(free_comp, 2, replace=true) # allow swapping within same component
+            (comp1 == comp2) && continue # skip the swap if both components are the same
+            ind1 = rand(comp1)
+            ind2 = rand(comp2)
+            two_atoms_swap!(proposed_walker, ind1, ind2)
+        end
         # Calculate the proposed energy
         proposed_energy = interacting_energy(proposed_walker.configuration, pot, proposed_walker.list_num_par, proposed_walker.frozen) + proposed_walker.energy_frozen_part
         # Metropolis-Hastings acceptance criterion

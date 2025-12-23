@@ -13,6 +13,7 @@ using Random
 using Statistics
 using AtomsBase
 using Distributions
+using StaticArrays
 
 using Distributed
 

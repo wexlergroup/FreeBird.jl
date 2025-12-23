@@ -24,6 +24,8 @@ export lattice_random_walk!
 export generate_random_new_lattice_sample!
 export MC_mixed_moves!
 
+export free_component_index, free_par_index
+
 include("helpers.jl")
 
 include("random_walks.jl")

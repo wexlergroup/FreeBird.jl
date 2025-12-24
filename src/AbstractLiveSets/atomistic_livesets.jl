@@ -136,6 +136,34 @@ struct LJAtomWalkers <: AtomWalkers
     end
 end
 
+AtomWalkers(walkers::Vector{AtomWalker{C}}, potential::Union{LJParameters, CompositeParameterSets{C, LJParameters}}; assign_energy=true, const_frozen_part=true) where C = LJAtomWalkers(walkers, potential; assign_energy=assign_energy, const_frozen_part=const_frozen_part)
+
+"""
+    struct MLIPAtomWalkers <: AtomWalkers
+The `MLIPAtomWalkers` struct represents a collection of atom walkers that interact with each other using a machine learning interatomic potential (MLIP).
+
+# Fields
+- `walkers::Vector{AtomWalker{C}}`: A vector of atom walkers, where `C` is the number of components.
+- `potential::PyMLPotential`: The machine learning interatomic potential wrapped in a `PyMLPotential`.
+
+# Constructor
+- `MLIPAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::PyMLPotential; assign_energy=true)`: 
+    Constructs a new `MLIPAtomWalkers` object with the given walkers and MLIP potential. If `assign_energy=true`,
+    the energy of each walker is assigned using the MLIP potential.
+"""
+struct MLIPAtomWalkers <: AtomWalkers
+    walkers::Vector{AtomWalker{C}} where C
+    potential::PyMLPotential
+    function MLIPAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::PyMLPotential; assign_energy=true) where {C}
+        if assign_energy
+            assign_energy!(walkers, pot)
+        end
+        return new(walkers, pot)
+    end
+end
+
+AtomWalkers(walkers::Vector{AtomWalker{C}}, potential::PyMLPotential; assign_energy=true) where C = MLIPAtomWalkers(walkers, potential; assign_energy=assign_energy)
+
 
 """
     struct LJSurfaceWalkers <: AtomWalkers
@@ -270,3 +298,5 @@ struct GuptaAtomWalkers <: AtomWalkers
         return new(walkers, gupta_potential)
     end
 end
+
+AtomWalkers(walkers::Vector{AtomWalker{C}}, potential::Union{GuptaParameters, CompositeParameterSets{C, GuptaParameters}}; assign_energy=true) where C = GuptaAtomWalkers(walkers, potential; assign_energy=assign_energy)

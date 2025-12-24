@@ -17,12 +17,14 @@ using ..AbstractWalkers
 using ..EnergyEval
 
 export periodic_boundary_wrap!
-export single_atom_random_walk!
+export single_atom_random_walk!, two_atoms_swap!
 export MC_random_walk!, MC_random_walk_2D!
 export MC_new_sample!, MC_rejection_sampling!, MC_random_swap!
 export lattice_random_walk!
 export generate_random_new_lattice_sample!
 export MC_mixed_moves!
+
+export free_component_index, free_par_index
 
 include("helpers.jl")
 

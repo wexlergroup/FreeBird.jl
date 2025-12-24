@@ -7,6 +7,7 @@ makedocs(;
             "FreeBird.jl" => "index.md",
             "Tutorials" => "tutorials.md",
             "Examples" => "examples.md",
+            "Interface with Python for MLIPs" => "MLIPs.md",
             "Modules and Documentation" => [
             "`AbstractLiveSets`" => "AbstractLiveSets.md",
             "`AbstractWalkers`" => "AbstractWalkers.md",

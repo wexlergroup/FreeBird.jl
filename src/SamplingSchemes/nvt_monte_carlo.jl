@@ -211,7 +211,8 @@ function nvt_monte_carlo(
 
     current_walker = deepcopy(walker)
     current_energy = interacting_energy(current_walker.configuration, pot, current_walker.list_num_par, current_walker.frozen) + current_walker.energy_frozen_part
-    
+    current_walker.energy = current_energy
+
     for i in 1:num_steps
         freq = [mc_routine.walks_freq, mc_routine.swaps_freq]
         swap_prob = freq[2] / sum(freq)
@@ -232,24 +233,28 @@ function nvt_monte_carlo(
             config = proposed_walker.configuration
             free_comp = free_component_index(proposed_walker)
             comp1, comp2 = sample(free_comp, 2, replace=true) # allow swapping within same component
-            (comp1 == comp2) && continue # skip the swap if both components are the same
+            # (comp1 == comp2) && continue # skip the swap if both components are the same
             ind1 = rand(comp1)
             ind2 = rand(comp2)
             two_atoms_swap!(proposed_walker, ind1, ind2)
         end
         # Calculate the proposed energy
         proposed_energy = interacting_energy(proposed_walker.configuration, pot, proposed_walker.list_num_par, proposed_walker.frozen) + proposed_walker.energy_frozen_part
+        proposed_walker.energy = proposed_energy
         # Metropolis-Hastings acceptance criterion
         # kb = 8.617_333_262e-5  # eV K-1
         ΔE = proposed_energy - current_energy
         if ΔE < 0*e_unit || rand() < exp(-ΔE.val / (kb * temperature))
-            current_walker.configuration = proposed_walker.configuration
+            current_walker = proposed_walker
             current_energy = proposed_energy
             accepted_steps += 1
         end
         energies[i] = current_energy
         configurations[i] = current_walker
+        # println(configurations[i])
     end
+
+    # println(configurations)
 
     return energies, configurations, accepted_steps
 end

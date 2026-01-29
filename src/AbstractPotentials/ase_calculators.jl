@@ -92,3 +92,19 @@ function chgnet_model(arg...; kwargs...)
     return PyMLPotential(ASEcalculator(calc))
 end
 
+"""
+    upet_model(arg...; kwargs...) <: PyMLPotential
+
+Loading UPET model Python module through ASE interface.
+See https://github.com/lab-cosmo/upet for the available arguments and usage.
+
+# Example
+```jldoctest
+julia> mlp = upet_model(model="pet-mad-s", version="1.0.2", device="cuda")
+```
+"""
+function upet_model(arg...; kwargs...)
+    upet = pyimport("upet.calculator")
+    upet_calc = upet.UPETCalculator(arg...; kwargs...)
+    return PyMLPotential(ASEcalculator(upet_calc))
+end

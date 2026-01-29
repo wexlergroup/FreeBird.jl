@@ -32,7 +32,7 @@ using ASEconvert
 using PythonCall
 
 export ASELennardJones, MACEPotential, OrbPotential, PyMLPotential
-export mace_model, orb_model, uma_model, chgnet_model
+export mace_model, orb_model, uma_model, chgnet_model, upet_model
 export pair_energy, two_body_energy, many_body_energy, total_energy
 
 """ 

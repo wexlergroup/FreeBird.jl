@@ -109,6 +109,23 @@ mlp = chgnet_model(model_name="r2scan", use_device="cuda")
 ```
 Here, we use the pre-trained `r2scan` model and enable CUDA. See [CHGNet documentation](https://chgnet.lbl.gov/) for more details on usage.
 
+## UPET models
+
+Again, you can point CondaPkg.jl to the local Conda environment where you have installed UPET.
+Alternatively, you can install the required packages within your Julia environment using CondaPkg.jl:
+```julia
+using CondaPkg
+# press the "]" key to enter Pkg mode
+pkg> conda pip_add upet
+```
+
+We can now load in the UPET model:
+
+```julia
+mlp = upet_model(model="pet-mad-s", version="1.0.2", device="cuda")
+```
+See [UPET documentation](https://github.com/lab-cosmo/upet) for more details on usage.
+
 ## Add other MLIPs
 
 In principle, you can use any ASE-compatible MLIP by creating a new `PyMLPotential` dispatch in the `FreeBird.AbstractPotentials` module.

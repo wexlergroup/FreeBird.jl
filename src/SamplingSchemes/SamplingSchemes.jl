@@ -13,6 +13,7 @@ using Random
 using Statistics
 using AtomsBase
 using Distributions
+using StaticArrays
 
 using Distributed
 
@@ -35,7 +36,7 @@ export MetropolisMCParameters
 # nested sampling related functions
 export sort_by_energy!, nested_sampling_step!
 export nested_sampling
-export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCNewSample, MCRejectionSampling, MCMixedMoves
+export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCNewSample, MCRejectionSampling, MCMixedMoves, MCMixedMovesParallel
 
 export MCRandomWalkMaxEParallel, MCRandomWalkCloneParallel, MCDistributed
 

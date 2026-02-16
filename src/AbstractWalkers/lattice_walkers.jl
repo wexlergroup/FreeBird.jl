@@ -93,6 +93,9 @@ Compute the positions of atoms in a 3D lattice.
 - `positions::Matrix{Float64}`: The positions of the atoms in the supercell.
 
 """
+
+get_positions(slab) = [pyconvert(Vector{Float64}, a.position) for a in slab]
+
 function lattice_positions(lattice_vectors::Matrix{Float64}, 
                            basis::Vector{Tuple{Float64, Float64, Float64}}, 
                            supercell_dimensions::Tuple{Int64, Int64, Int64},
@@ -125,11 +128,11 @@ function lattice_positions(lattice_vectors::Matrix{Float64},
 end
 
 function get_lattice_positions(lattice_vectors::Matrix{Float64}, supercell_dimensions::Tuple{Int64, Int64, Int64})
-    num_supercell_sites = supercell_dimensions[1] * supercell_dimensions[2] * supercell_dimensions[3]
+    num_supercell_sites = prod(supercell_dimensions)
 
     a1, a2, a3 = [lattice_vectors[:, i] for i in 1:3]
 
-    positions = zeros(Float64, num_supercell_sites, 3)
+    positions = Matrix{Float64}(undef, num_supercell_sites, 3)
 
     index = 1
 

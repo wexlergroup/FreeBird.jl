@@ -170,17 +170,18 @@ function nvt_monte_carlo(
     current_lattice = deepcopy(lattice)
     current_energy = interacting_energy(current_lattice.ase_lattice, calc).val
     
+    beta = 1.0 / (kb * temperature)
     for i in 1:num_steps
         # Propose new configuration
         proposed_lattice = deepcopy(current_lattice)
-        proposed_lattice.ase_lattice = py_copy.deepcopy(current_lattice.ase_lattice)  # ← CHANGED
+        proposed_lattice.ase_lattice = py_copy.deepcopy(current_lattice.ase_lattice)
         
         lattice_random_walk!(proposed_lattice)
         proposed_energy = interacting_energy(proposed_lattice.ase_lattice, calc).val
         
         # Metropolis-Hastings acceptance
         ΔE = proposed_energy - current_energy
-        if ΔE < 0 || rand() < exp(-ΔE / (kb * temperature))
+        if ΔE < 0 || rand() < exp(-ΔE * beta)
             current_lattice = proposed_lattice
             current_energy = proposed_energy
             accepted_steps += 1
@@ -188,7 +189,7 @@ function nvt_monte_carlo(
         
         # Store configuration
         saved_lattice = deepcopy(current_lattice)
-        saved_lattice.ase_lattice = py_copy.deepcopy(current_lattice.ase_lattice)  # ← CHANGED
+        saved_lattice.ase_lattice = py_copy.deepcopy(current_lattice.ase_lattice)
         
         energies[i] = current_energy
         configurations[i] = saved_lattice

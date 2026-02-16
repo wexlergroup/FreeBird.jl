@@ -550,7 +550,7 @@ Perform a Monte Carlo random walk on the single-component square atomic lattice 
 """
 function lattice_random_walk!(lattice::AtomicLattice)
     hop_from = rand(lattice.adsorbate_indices)
-    hop_from_pos = pyconvert(Tuple, ads_lattice.ase_lattice[hop_from].position)
+    hop_from_pos = pyconvert(Tuple, lattice.ase_lattice[hop_from].position)
     hop_to = rand(1:size(lattice.all_sites, 1))
     if (hop_from_pos[1], hop_from_pos[2]) != lattice.all_sites[hop_to]
         new_ads_pos =  (lattice.all_sites[hop_to][1], lattice.all_sites[hop_to][2], 1.0)

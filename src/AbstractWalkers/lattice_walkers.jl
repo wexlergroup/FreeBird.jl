@@ -124,6 +124,221 @@ function lattice_positions(lattice_vectors::Matrix{Float64},
     return positions
 end
 
+function get_lattice_positions(lattice_vectors::Matrix{Float64}, supercell_dimensions::Tuple{Int64, Int64, Int64})
+    num_supercell_sites = supercell_dimensions[1] * supercell_dimensions[2] * supercell_dimensions[3]
+
+    a1, a2, a3 = [lattice_vectors[:, i] for i in 1:3]
+
+    positions = zeros(Float64, num_supercell_sites, 3)
+
+    index = 1
+
+    for k in 1:supercell_dimensions[3]
+        for j in 1:supercell_dimensions[2]
+            for i in 1:supercell_dimensions[1]
+                x = (i - 1) * a1[1] + (j - 1) * a2[1] + (k - 1) * a3[1]
+                y = (i - 1) * a1[2] + (j - 1) * a2[2] + (k - 1) * a3[2]
+                z = (i - 1) * a1[3] + (j - 1) * a2[3] + (k - 1) * a3[3]
+                positions[index, :] = [x, y, z]
+                index += 1
+            end
+        end
+    end
+    
+    return positions
+end
+
+function find_n_cutoff_radii(positions::Matrix{Float64}, num_nearest_neighbors::Int64)
+    x_dist = positions[2, 1] - positions[1, 1]
+    y_dist = positions[2, 2] - positions[1, 2]
+    first_nn = sqrt(x_dist^2 + y_dist^2)
+    cutoff_radii = vcat([first_nn], zeros(Float64, num_nearest_neighbors - 1))
+    for i in 2:num_nearest_neighbors
+        if iseven(i)
+            radii = (i / 2) * sqrt(2) * first_nn
+        else
+            radii = ((i + 1) / 2) * first_nn
+        end
+        cutoff_radii[i] = radii
+    end
+    return cutoff_radii
+end
+
+function compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, 
+                           positions::Matrix{Float64}, 
+                           periodicity::Tuple{Bool, Bool, Bool}, 
+                           cutoff_radii::Vector{Float64})
+    neighbors = Vector{Vector{Vector{Int}}}(undef, size(positions, 1))
+    num_atoms = size(positions, 1)
+    
+    # Extract lattice vectors
+    a1 = supercell_lattice_vectors[:, 1]
+    a2 = supercell_lattice_vectors[:, 2]
+    a3 = supercell_lattice_vectors[:, 3]
+    
+    # Handle 2D case: only invert the non-zero part
+    if !periodicity[3] && all(a3 .== 0)
+        # 2D system - construct 2x2 inverse for x,y only
+        lattice_2d = [a1[1:2] a2[1:2]]
+        inv_lattice_2d = inv(lattice_2d)
+        reciprocal_lattice_vectors = zeros(3, 3)
+        reciprocal_lattice_vectors[1:2, 1:2] = inv_lattice_2d
+    else
+        # 3D system
+        reciprocal_lattice_vectors = inv([a1 a2 a3])
+    end
+    
+    layers_of_neighbors = length(cutoff_radii)
+    
+    for i in 1:num_atoms
+        nth_neighbors = [Int[] for _ in 1:layers_of_neighbors]
+        pos_i = positions[i, :]
+        
+        for j in 1:num_atoms
+            if i != j
+                pos_j = positions[j, :]
+                dr = pos_j - pos_i
+                
+                # Apply minimum image convention
+                if periodicity[1] || periodicity[2]
+                    fractional_dr = reciprocal_lattice_vectors * dr
+                    for k in 1:3
+                        if periodicity[k]
+                            fractional_dr[k] -= round(fractional_dr[k])
+                        end
+                    end
+                    dr = supercell_lattice_vectors * fractional_dr
+                end
+                
+                distance = norm(dr)
+                
+                # Assign to neighbor shell
+                for layer in 1:layers_of_neighbors
+                    lower = layer == 1 ? 0.0 : cutoff_radii[layer - 1]
+                    upper = cutoff_radii[layer]
+                    if lower < distance <= upper
+                        push!(nth_neighbors[layer], j)
+                        break
+                    end
+                end
+            end
+        end
+        neighbors[i] = nth_neighbors
+    end
+    return neighbors
+end
+
+function get_ontop_sites(positions)
+    [(p[1], p[2]) for p in positions]
+end
+
+function get_bridge_sites(positions::Vector{Vector{Float64}}, cutoff)
+    cutoff2 = cutoff^2
+    n = length(positions)
+
+    sites = Vector{NTuple{2,Float64}}()
+
+    for i in 1:n
+        p1 = positions[i]
+
+        for j in i+1:n
+            p2 = positions[j]
+
+            dx = p1[1]-p2[1]
+            dy = p1[2]-p2[2]
+            dz = p1[3]-p2[3]
+
+            if dx*dx + dy*dy + dz*dz ≤ cutoff2
+                push!(sites,
+                      ((p1[1]+p2[1])/2,
+                       (p1[2]+p2[2])/2))
+            end
+        end
+    end
+
+    return sites
+end
+
+function get_hollow_sites(positions, nn, tol)
+    sites = Vector{NTuple{2,Float64}}()
+    for p in positions
+        right = nothing
+        up    = nothing
+
+        for q in positions
+            dx = q[1]-p[1]
+            dy = q[2]-p[2]
+            dz = q[3]-p[3]
+
+            d2 = dx*dx + dy*dy + dz*dz
+
+            if abs(d2 - nn^2) ≤ tol
+                if dx > tol && abs(dy) < tol
+                    right = q
+                elseif dy > tol && abs(dx) < tol
+                    up = q
+                end
+            end
+        end
+
+        if right !== nothing && up !== nothing
+            push!(sites,
+                  ((p[1]+right[1])/2,
+                   (p[2]+up[2])/2))
+        end
+    end
+
+    return sites
+end
+
+function find_fcc_lattice_sites(slab, nn, tol)
+    positions = get_positions(slab)
+    ontop   = get_ontop_sites(positions)
+    bridge  = get_bridge_sites(positions, nn)
+    hollow  = get_hollow_sites(positions, nn, tol)
+
+    return vcat(ontop, bridge, hollow)
+end
+
+function get_adsorbate_indicies(slab)
+    adsorbate_indices = [i for i in 0:length(slab) - 1 if pyconvert(Int64, slab[i].tag) == 0]
+    return adsorbate_indices
+end
+
+function get_adsorbate_positions(slab)
+    adsorbate_indices = get_adsorbate_indicies(slab)
+    adsorbate_positions = [slab[i].position for i in adsorbate_indices]
+    return adsorbate_positions
+end
+
+function add_adsorbates!(slab, adsorbate_atoms, type_of_sites; height, coverage, nn, tol)
+    positions = get_positions(slab)
+    all_sites = []
+    if "ontop" in type_of_sites
+        ontop = get_ontop_sites(positions)
+        all_sites = vcat(all_sites, ontop)
+    end
+    
+    if "bridge" in type_of_sites
+        bridge = get_bridge_sites(positions, nn)
+        all_sites = vcat(all_sites, bridge)
+    end
+    
+    if "hollow" in type_of_sites
+        hollow = get_hollow_sites(positions, nn, tol)
+        all_sites = vcat(all_sites, hollow)
+    end
+    n_ads = round(Int, coverage * length(all_sites))
+    chosen = shuffle!(all_sites)[1:n_ads]
+    adsorbate = adsorbate_atoms[1]
+    for (x, y) in chosen
+        ase.build.add_adsorbate(slab, adsorbate; height=height, position=(x, y))
+    end
+
+    adsorbate_indices = get_adsorbate_indicies(slab)
+    return slab, all_sites, adsorbate_indices
+end
+
 """
     abstract type LatticeGeometry
 
@@ -133,6 +348,7 @@ The `LatticeGeometry` abstract type represents the geometry of a lattice. It has
 - `TriangularLattice`: A triangular lattice.
 - `GenericLattice`: A generic lattice. Currently used for non-square and non-triangular lattices.
 """
+
 abstract type LatticeGeometry end
 
 abstract type SquareLattice <: LatticeGeometry end
@@ -241,6 +457,111 @@ mutable struct MLattice{C,G} <: AbstractLattice
         return new{C,G}(lattice_vectors, positions, basis, supercell_dimensions, periodicity, cutoff_radii, components, neighbors, adsorptions)
     end
 end
+
+
+"""
+    mutable struct AtomicLattice{C,G} <: AbstractLattice
+
+A mutable struct representing an atomic lattice with adsorbates using ASE (Atomic Simulation Environment).
+
+# Fields
+- `lattice_atom::String`: The chemical symbol of the lattice substrate atom.
+- `adsorbate_atoms::Vector{String}`: The chemical symbols of the adsorbate species.
+- `coverage::Float64`: The fractional coverage of adsorbates on the surface.
+- `supercell_dimensions::Tuple{Int64, Int64, Int64}`: The dimensions of the supercell.
+- `lattice_constant::Float64`: The lattice constant of the unit cell.
+- `periodicity::Tuple{Bool, Bool, Bool}`: The periodic boundary conditions in each dimension.
+- `lattice_positions::Matrix{Float64}`: The positions of the lattice points.
+- `num_nearest_neighbors::Int64`: The number of nearest neighbors to consider.
+- `neighbors::Vector{Vector{Vector{Int}}}`: The neighbor lists for each lattice point.
+- `type_of_sites::Vector{String}`: The types of adsorption sites (e.g., "ontop", "bridge", "hollow").
+- `ase_lattice::Py`: The ASE atoms object representing the complete system.
+- `adsorbate_indices::Vector{Int64}`: The indices of adsorbate atoms in the ASE structure.
+- `all_sites::Vector{Tuple{Float64, Float64}}`: The coordinates of all possible adsorption sites.
+
+# Constructor
+    AtomicLattice{C,G}(;
+        lattice_atom::String,
+        supercell_dimensions::Tuple{Int64, Int64, Int64},
+        lattice_constant::Float64,
+        periodicity::Tuple{Bool, Bool, Bool},
+        adsorbate_atoms::Vector{String}=[""],
+        coverage::Float64 = 0.5,
+        num_nearest_neighbors::Int64,
+        type_of_sites::Vector{String}
+    ) where {C,G}
+
+Creates an `AtomicLattice` instance with the specified parameters. The constructor performs the following steps:
+1. Validates that the number of adsorbate species matches the expected value `C`.
+2. Constructs an FCC(100) slab using ASE with the specified lattice atom and dimensions.
+3. Sets the periodic boundary conditions on the slab.
+4. Adds adsorbates to the surface at the specified sites with the given coverage.
+5. Computes the lattice positions and neighbor lists.
+
+Throws an `ArgumentError` if the number of adsorbate species does not match `C`.
+
+# Arguments
+- `lattice_atom::String`: Chemical symbol for the substrate (e.g., "Pt", "Cu").
+- `supercell_dimensions::Tuple{Int64, Int64, Int64}`: Size of supercell in (x, y, z) directions.
+- `lattice_constant::Float64`: Lattice constant in Ångströms.
+- `periodicity::Tuple{Bool, Bool, Bool}`: Periodic boundary conditions for each dimension.
+- `adsorbate_atoms::Vector{String}`: Chemical symbols of adsorbates (default: `[""]`).
+- `coverage::Float64`: Fractional surface coverage (default: `0.5`).
+- `num_nearest_neighbors::Int64`: Number of nearest neighbors for neighbor list construction.
+- `type_of_sites::Vector{String}`: Adsorption site types for each adsorbate species.
+
+# Returns
+- `AtomicLattice{C,G}`: An atomic lattice object with `C` adsorbate species and geometry type `G`.
+"""
+
+mutable struct AtomicLattice{C,G} <: AbstractLattice
+    lattice_atom::String
+    adsorbate_atoms::Vector{String}
+    coverage::Float64
+    supercell_dimensions::Tuple{Int64, Int64, Int64}
+    lattice_constant::Float64
+    periodicity::Tuple{Bool, Bool, Bool}
+    lattice_positions::Matrix{Float64}
+    num_nearest_neighbors::Int64
+    neighbors::Vector{Vector{Vector{Int}}}
+    type_of_sites::Vector{String}
+    ase_lattice::Py
+    adsorbate_indices::Vector{Int64}
+    all_sites::Vector{Tuple{Float64, Float64}}
+
+    function AtomicLattice{C,G}(;
+        lattice_atom::String,
+        supercell_dimensions::Tuple{Int64, Int64, Int64},
+        lattice_constant::Float64,
+        periodicity::Tuple{Bool, Bool, Bool},
+        adsorbate_atoms::Vector{String}=[""],
+        coverage::Float64 = 0.5,
+        num_nearest_neighbors::Int64,
+        type_of_sites::Vector{String}
+    ) where {C,G}
+
+        num_adsorbates = length(adsorbate_atoms)
+
+        if num_adsorbates != C
+            throw(ArgumentError("For a $C-adsorbate system, got $num_adsorbates adsorbates"))
+        end
+
+        slab = ase.build.fcc100(lattice_atom, supercell_dimensions, a=lattice_constant)
+        slab.set_pbc(periodicity)
+        
+        if !isempty(adsorbate_atoms)
+            ase_lattice, all_sites, adsorbate_indices = add_adsorbates!(slab, adsorbate_atoms, type_of_sites; height=1.0, coverage=coverage, nn=2.791, tol=0.1)
+        end
+
+        lattice_vectors = [lattice_constant 0 0; 0 lattice_constant 0; 0 0 1]
+        lattice_positions = get_lattice_positions(lattice_vectors, supercell_dimensions)
+        cutoff_radii = find_n_cutoff_radii(lattice_positions, num_nearest_neighbors)
+        supercell_lattice_vectors = lattice_vectors * Diagonal([supercell_dimensions[1], supercell_dimensions[2], supercell_dimensions[3]])
+        neighbors = compute_neighbors(supercell_lattice_vectors, lattice_positions, periodicity, cutoff_radii)
+        return new{C,G}(lattice_atom, adsorbate_atoms, coverage, supercell_dimensions, lattice_constant, periodicity, lattice_positions, num_nearest_neighbors, neighbors, type_of_sites, ase_lattice, adsorbate_indices, all_sites)
+    end
+end
+
 
 """
     split_into_subarrays(arr::AbstractVector, N::Int)

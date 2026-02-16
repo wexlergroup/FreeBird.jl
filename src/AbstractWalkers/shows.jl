@@ -56,6 +56,23 @@ function Base.show(io::IO, lattice::MLattice{C,G}) where {C,G}
     end
 end
 
+function Base.show(io::IO, lattice::AtomicLattice)
+    println(io, typeof(lattice))
+    println(io, "    lattice_vectors      : ", lattice.lattice_atom)
+    println(io, "    positions            : ", length(lattice.lattice_positions[:,1]), " grid points")
+    println(io, "    supercell_dimensions : ", lattice.supercell_dimensions)
+    println(io, "    periodicity          : ", lattice.periodicity)
+    println(io, "    adsorbate_atoms      : ", lattice.adsorbate_atoms)
+    println(io, "    coverage             : ", lattice.coverage)
+    println(io, "    # nn                 : ", lattice.num_nearest_neighbors)
+    println()
+end
+
+
+function view(lattice::AtomicLattice)
+    ase.visualize.view(lattice.ase_lattice)
+end
+
 """
     merge_components(lattice::MLattice{C}) where C
     

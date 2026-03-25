@@ -39,48 +39,84 @@
 
     @testset "geometric cluster move tests" begin
 
-        @testset "reflection map is self-inverse" begin
-            Lx, Ly = 6, 6
+        @testset "reflection map is self-inverse (2D)" begin
+            Lx, Ly, Lz = 6, 6, 1
             for pivot_gx in [0, 1, 3, 5], pivot_gy in [0, 2, 4, 5]
-                for site in 1:(Lx * Ly)
-                    r = MonteCarloMoves._reflect_site(site, pivot_gx, pivot_gy, Lx, Ly)
-                    rr = MonteCarloMoves._reflect_site(r, pivot_gx, pivot_gy, Lx, Ly)
+                for site in 1:(Lx * Ly * Lz)
+                    r = MonteCarloMoves._reflect_site(site, pivot_gx, pivot_gy, Lx, Ly, Lz)
+                    rr = MonteCarloMoves._reflect_site(r, pivot_gx, pivot_gy, Lx, Ly, Lz)
                     @test rr == site
                 end
             end
         end
 
+        @testset "reflection map is self-inverse (3D)" begin
+            Lx, Ly, Lz = 4, 4, 3
+            for pivot_gx in [0, 1, 3], pivot_gy in [0, 2, 3]
+                for site in 1:(Lx * Ly * Lz)
+                    r = MonteCarloMoves._reflect_site(site, pivot_gx, pivot_gy, Lx, Ly, Lz)
+                    rr = MonteCarloMoves._reflect_site(r, pivot_gx, pivot_gy, Lx, Ly, Lz)
+                    @test rr == site
+                end
+            end
+        end
+
+        @testset "reflection preserves z-coordinate (3D)" begin
+            Lx, Ly, Lz = 4, 4, 3
+            for pivot_gx in [0, 1, 2], pivot_gy in [0, 1, 3]
+                for site in 1:(Lx * Ly * Lz)
+                    _, _, gz_orig = MonteCarloMoves._site_to_grid(site, Lx, Ly)
+                    r = MonteCarloMoves._reflect_site(site, pivot_gx, pivot_gy, Lx, Ly, Lz)
+                    _, _, gz_refl = MonteCarloMoves._site_to_grid(r, Lx, Ly)
+                    @test gz_refl == gz_orig
+                end
+            end
+        end
+
         @testset "reflection wraps correctly under PBC" begin
-            Lx, Ly = 4, 4
+            Lx, Ly, Lz = 4, 4, 1
             # Pivot at (0,0): R(1,0) -> (2*0 - 1 mod 4, 0) = (3, 0)
-            site_10 = MonteCarloMoves._grid_to_site(1, 0, Lx)  # site at grid (1,0)
-            reflected = MonteCarloMoves._reflect_site(site_10, 0, 0, Lx, Ly)
-            gx, gy = MonteCarloMoves._site_to_grid(reflected, Lx)
+            site_10 = MonteCarloMoves._grid_to_site(1, 0, 0, Lx, Ly)  # site at grid (1,0,0)
+            reflected = MonteCarloMoves._reflect_site(site_10, 0, 0, Lx, Ly, Lz)
+            gx, gy, gz = MonteCarloMoves._site_to_grid(reflected, Lx, Ly)
             @test gx == 3
             @test gy == 0
+            @test gz == 0
 
             # Pivot at (2,2): R(0,0) -> (4 mod 4, 4 mod 4) = (0, 0) — fixed point
-            site_00 = MonteCarloMoves._grid_to_site(0, 0, Lx)
-            reflected = MonteCarloMoves._reflect_site(site_00, 2, 2, Lx, Ly)
-            gx, gy = MonteCarloMoves._site_to_grid(reflected, Lx)
+            site_00 = MonteCarloMoves._grid_to_site(0, 0, 0, Lx, Ly)
+            reflected = MonteCarloMoves._reflect_site(site_00, 2, 2, Lx, Ly, Lz)
+            gx, gy, gz = MonteCarloMoves._site_to_grid(reflected, Lx, Ly)
             @test gx == 0
             @test gy == 0
 
             # Pivot at (1,1): R(3,3) -> (2-3 mod 4, 2-3 mod 4) = (3, 3) — check wrap
-            site_33 = MonteCarloMoves._grid_to_site(3, 3, Lx)
-            reflected = MonteCarloMoves._reflect_site(site_33, 1, 1, Lx, Ly)
-            gx, gy = MonteCarloMoves._site_to_grid(reflected, Lx)
+            site_33 = MonteCarloMoves._grid_to_site(3, 3, 0, Lx, Ly)
+            reflected = MonteCarloMoves._reflect_site(site_33, 1, 1, Lx, Ly, Lz)
+            gx, gy, gz = MonteCarloMoves._site_to_grid(reflected, Lx, Ly)
             @test gx == mod(2*1 - 3, 4)  # 3
             @test gy == mod(2*1 - 3, 4)  # 3
         end
 
-        @testset "site ↔ grid round-trip" begin
-            Lx, Ly = 5, 7
-            for site in 1:(Lx * Ly)
-                gx, gy = MonteCarloMoves._site_to_grid(site, Lx)
-                @test MonteCarloMoves._grid_to_site(gx, gy, Lx) == site
+        @testset "site ↔ grid round-trip (2D)" begin
+            Lx, Ly, Lz = 5, 7, 1
+            for site in 1:(Lx * Ly * Lz)
+                gx, gy, gz = MonteCarloMoves._site_to_grid(site, Lx, Ly)
+                @test MonteCarloMoves._grid_to_site(gx, gy, gz, Lx, Ly) == site
                 @test 0 <= gx < Lx
                 @test 0 <= gy < Ly
+                @test gz == 0
+            end
+        end
+
+        @testset "site ↔ grid round-trip (3D)" begin
+            Lx, Ly, Lz = 4, 4, 3
+            for site in 1:(Lx * Ly * Lz)
+                gx, gy, gz = MonteCarloMoves._site_to_grid(site, Lx, Ly)
+                @test MonteCarloMoves._grid_to_site(gx, gy, gz, Lx, Ly) == site
+                @test 0 <= gx < Lx
+                @test 0 <= gy < Ly
+                @test 0 <= gz < Lz
             end
         end
 
@@ -141,6 +177,37 @@
             geometric_cluster_swap!(ml, 0.4)
 
             @test ml.components == original_components
+        end
+
+        @testset "particle count preserved 3D (C=1)" begin
+            sl = SLattice{SquareLattice}(
+                supercell_dimensions=(4, 4, 3),
+                periodicity=(true, true, false),
+                components=[[1, 5, 20, 35]]
+            )
+            original_count = occupied_site_count(sl)
+            for _ in 1:50
+                geometric_cluster_swap!(sl, 0.3)
+                @test occupied_site_count(sl) == original_count
+            end
+        end
+
+        @testset "self-inverse for fixed cluster 3D" begin
+            using Random
+            sl = SLattice{SquareLattice}(
+                supercell_dimensions=(4, 4, 3),
+                periodicity=(true, true, false),
+                components=[[1, 5, 17, 33, 40]]
+            )
+            original_components = deepcopy(sl.components)
+
+            seed = 42
+            Random.seed!(seed)
+            geometric_cluster_swap!(sl, 0.3)
+            Random.seed!(seed)
+            geometric_cluster_swap!(sl, 0.3)
+
+            @test sl.components == original_components
         end
 
         @testset "cluster move can change configuration" begin

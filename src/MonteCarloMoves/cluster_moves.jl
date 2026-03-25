@@ -26,8 +26,8 @@ The parameter `p` controls the average cluster size: `p ≈ 0` gives single-site
 - Preserves per-component particle counts exactly.
 - The move is self-inverse for a fixed cluster: applying the same cluster swap twice
   restores the original configuration.
-- Currently restricted to `SquareLattice` with a single basis atom and
-  `supercell_dimensions[3] == 1`.
+- Supports 2D (`supercell_dimensions[3] == 1`) and 3D lattices. In 3D, the reflection
+  operates in the periodic xy-plane; the z-coordinate is preserved.
 
 # References
 - Heringa & Blöte, Phys. Rev. E 57, 4976 (1998) — geometric cluster MC framework.
@@ -36,9 +36,10 @@ The parameter `p` controls the average cluster size: `p ≈ 0` gives single-site
 function geometric_cluster_swap!(lattice::MLattice{C,SquareLattice}, p::Float64) where C
     Lx = lattice.supercell_dimensions[1]
     Ly = lattice.supercell_dimensions[2]
+    Lz = lattice.supercell_dimensions[3]
     n_sites = num_sites(lattice)
 
-    # Choose random pivot (grid coordinates, 0-indexed)
+    # Choose random pivot (grid coordinates, 0-indexed) in the periodic xy-plane
     pivot_gx = rand(0:Lx-1)
     pivot_gy = rand(0:Ly-1)
 
@@ -46,7 +47,7 @@ function geometric_cluster_swap!(lattice::MLattice{C,SquareLattice}, p::Float64)
     seed = rand(1:n_sites)
 
     # Build cluster via BFS with fixed growth probability
-    cluster = _build_geometric_cluster(lattice, seed, pivot_gx, pivot_gy, Lx, Ly, p)
+    cluster = _build_geometric_cluster(lattice, seed, pivot_gx, pivot_gy, Lx, Ly, Lz, p)
 
     # Swap occupation states for each (site, reflected_site) pair
     for (a, b) in cluster
@@ -64,42 +65,45 @@ end
 # --- Internal helpers (not exported) ---
 
 """
-    _site_to_grid(site::Int, Lx::Int) -> Tuple{Int,Int}
+    _site_to_grid(site::Int, Lx::Int, Ly::Int) -> Tuple{Int,Int,Int}
 
-Convert a 1-indexed site index to 0-indexed grid coordinates (gx, gy)
-for a single-basis square lattice with Lx sites along x.
+Convert a 1-indexed site index to 0-indexed 3D grid coordinates (gx, gy, gz)
+for a single-basis square lattice. Site ordering: x varies fastest, then y, then z.
 """
-@inline function _site_to_grid(site::Int, Lx::Int)
+@inline function _site_to_grid(site::Int, Lx::Int, Ly::Int)
     s = site - 1
-    gx = s % Lx
-    gy = s ÷ Lx
-    return (gx, gy)
+    gz = s ÷ (Lx * Ly)
+    rem_xy = s % (Lx * Ly)
+    gy = rem_xy ÷ Lx
+    gx = rem_xy % Lx
+    return (gx, gy, gz)
 end
 
 """
-    _grid_to_site(gx::Int, gy::Int, Lx::Int) -> Int
+    _grid_to_site(gx::Int, gy::Int, gz::Int, Lx::Int, Ly::Int) -> Int
 
-Convert 0-indexed grid coordinates to a 1-indexed site index.
+Convert 0-indexed 3D grid coordinates to a 1-indexed site index.
 """
-@inline function _grid_to_site(gx::Int, gy::Int, Lx::Int)
-    return gy * Lx + gx + 1
+@inline function _grid_to_site(gx::Int, gy::Int, gz::Int, Lx::Int, Ly::Int)
+    return gz * Lx * Ly + gy * Lx + gx + 1
 end
 
 """
-    _reflect_site(site::Int, pivot_gx::Int, pivot_gy::Int, Lx::Int, Ly::Int) -> Int
+    _reflect_site(site::Int, pivot_gx::Int, pivot_gy::Int, Lx::Int, Ly::Int, Lz::Int) -> Int
 
 Compute the point inversion of `site` through the pivot at grid coordinates
-`(pivot_gx, pivot_gy)` with periodic wrapping on an Lx × Ly lattice.
+`(pivot_gx, pivot_gy)` with periodic wrapping in x and y. The z-coordinate
+is preserved (no reflection in the non-periodic z direction).
 """
-@inline function _reflect_site(site::Int, pivot_gx::Int, pivot_gy::Int, Lx::Int, Ly::Int)
-    gx, gy = _site_to_grid(site, Lx)
+@inline function _reflect_site(site::Int, pivot_gx::Int, pivot_gy::Int, Lx::Int, Ly::Int, Lz::Int)
+    gx, gy, gz = _site_to_grid(site, Lx, Ly)
     rx = mod(2 * pivot_gx - gx, Lx)
     ry = mod(2 * pivot_gy - gy, Ly)
-    return _grid_to_site(rx, ry, Lx)
+    return _grid_to_site(rx, ry, gz, Lx, Ly)
 end
 
 """
-    _build_geometric_cluster(lattice, seed, pivot_gx, pivot_gy, Lx, Ly, p) -> Vector{Tuple{Int,Int}}
+    _build_geometric_cluster(lattice, seed, pivot_gx, pivot_gy, Lx, Ly, Lz, p) -> Vector{Tuple{Int,Int}}
 
 Grow a geometric cluster from `seed` using BFS with fixed growth probability `p`.
 Returns a vector of (site, reflected_site) pairs.
@@ -107,7 +111,7 @@ Returns a vector of (site, reflected_site) pairs.
 function _build_geometric_cluster(lattice::MLattice{C,SquareLattice},
                                   seed::Int,
                                   pivot_gx::Int, pivot_gy::Int,
-                                  Lx::Int, Ly::Int,
+                                  Lx::Int, Ly::Int, Lz::Int,
                                   p::Float64) where C
     visited = Set{Int}()
     stack = Int[seed]
@@ -119,7 +123,7 @@ function _build_geometric_cluster(lattice::MLattice{C,SquareLattice},
         s in visited && continue
 
         push!(visited, s)
-        r = _reflect_site(s, pivot_gx, pivot_gy, Lx, Ly)
+        r = _reflect_site(s, pivot_gx, pivot_gy, Lx, Ly, Lz)
         push!(visited, r)
         push!(cluster, (s, r))
 

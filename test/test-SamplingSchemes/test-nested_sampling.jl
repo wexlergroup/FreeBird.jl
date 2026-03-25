@@ -1,21 +1,21 @@
 @testset "nested_sampling.jl tests" begin
     @testset "NestedSamplingParameters struct tests" begin
         params = NestedSamplingParameters(
-            1000,    # mc_steps
-            0.1,     # initial_step_size
-            0.1,     # step_size
-            0.01,    # step_size_lo
-            1.0,     # step_size_up
-            (0.5,0.5),  # acceptance ratio range
-            0,       # fail_count
-            100,     # allowed_fail_count
-            1e-12,   # energy_perturbation
-            1234,    # random_seed
-            0.3,     # cluster_p
-            0.0,     # cluster_accepted
-            0.0      # cluster_total
+            mc_steps=1000,
+            initial_step_size=0.1,
+            step_size=0.1,
+            step_size_lo=0.01,
+            step_size_up=1.0,
+            accept_range=(0.5,0.5),
+            fail_count=0,
+            allowed_fail_count=100,
+            energy_perturbation=1e-12,
+            random_seed=1234,
+            cluster_p=0.3,
+            cluster_accepted=0.0,
+            cluster_total=0.0,
         )
-        
+
         @test params isa SamplingSchemes.SamplingParameters
         @test params.mc_steps == 1000
         @test params.initial_step_size == 0.1
@@ -199,21 +199,21 @@
             liveset_surf = LJSurfaceWalkers(walkers, ljs, surface; assign_energy=true)
             
             ns_params = NestedSamplingParameters(
-                1000,    # mc_steps
-                0.1,     # initial_step_size
-                0.1,     # step_size
-                0.01,    # step_size_lo
-                1.0,     # step_size_up
-                (0.5,0.5),  # acceptance ratio range
-                0,       # fail_count
-                100,     # allowed_fail_count
-                1e-12,   # energy_perturbation
-                1234,    # random_seed
-                0.3,     # cluster_p
-                0.0,     # cluster_accepted
-                0.0      # cluster_total
+                mc_steps=1000,
+                initial_step_size=0.1,
+                step_size=0.1,
+                step_size_lo=0.01,
+                step_size_up=1.0,
+                accept_range=(0.5,0.5),
+                fail_count=0,
+                allowed_fail_count=100,
+                energy_perturbation=1e-12,
+                random_seed=1234,
+                cluster_p=0.3,
+                cluster_accepted=0.0,
+                cluster_total=0.0,
             )
-            
+
             for liveset in [liveset_at, liveset_surf]
                 @testset "MCRandomWalkMaxE" begin
                     mc_routine = MCRandomWalkMaxE()
@@ -388,19 +388,19 @@
     @testset "adjust_step_size function tests" begin
 
         ns_params = NestedSamplingParameters(
-                1000,    # mc_steps
-                0.1,     # initial_step_size
-                0.1,     # step_size
-                0.01,    # step_size_lo
-                1.0,     # step_size_up
-                (0.5,0.5),  # acceptance ratio range
-                0,       # fail_count
-                100,     # allowed_fail_count
-                1e-12,   # energy_perturbation
-                1234,    # random_seed
-                0.3,     # cluster_p
-                0.0,     # cluster_accepted
-                0.0      # cluster_total
+                mc_steps=1000,
+                initial_step_size=0.1,
+                step_size=0.1,
+                step_size_lo=0.01,
+                step_size_up=1.0,
+                accept_range=(0.5,0.5),
+                fail_count=0,
+                allowed_fail_count=100,
+                energy_perturbation=1e-12,
+                random_seed=1234,
+                cluster_p=0.3,
+                cluster_accepted=0.0,
+                cluster_total=0.0,
             )
 
         @testset "Step size increases" begin
@@ -459,21 +459,21 @@
             liveset = LJAtomWalkers(walkers, lj)
             
             ns_params = NestedSamplingParameters(
-                1000,    # mc_steps
-                0.1,     # initial_step_size
-                0.1,     # step_size
-                0.01,    # step_size_lo
-                1.0,     # step_size_up
-                (0.5,0.5),  # acceptance ratio range
-                0,       # fail_count
-                100,     # allowed_fail_count
-                1e-12,   # energy_perturbation
-                1234,    # random_seed
-                0.3,     # cluster_p
-                0.0,     # cluster_accepted
-                0.0      # cluster_total
+                mc_steps=1000,
+                initial_step_size=0.1,
+                step_size=0.1,
+                step_size_lo=0.01,
+                step_size_up=1.0,
+                accept_range=(0.5,0.5),
+                fail_count=0,
+                allowed_fail_count=100,
+                energy_perturbation=1e-12,
+                random_seed=1234,
+                cluster_p=0.3,
+                cluster_accepted=0.0,
+                cluster_total=0.0,
             )
-            
+
             save_strategy = SaveEveryN(
                 df_filename = "test_df.csv",
                 wk_filename = "test.traj.extxyz",
@@ -775,23 +775,29 @@
             ns_params.cluster_p = 0.5
 
             # Rate below target → p decreases
-            SamplingSchemes.adjust_cluster_p(ns_params, 0.1; target=0.3)
+            SamplingSchemes.adjust_cluster_p(ns_params, 0.1, 1; target=0.3)
             @test ns_params.cluster_p ≈ 0.5 * 0.9
 
             # Rate above target → p increases
             ns_params.cluster_p = 0.5
-            SamplingSchemes.adjust_cluster_p(ns_params, 0.5; target=0.3)
+            SamplingSchemes.adjust_cluster_p(ns_params, 0.5, 2; target=0.3)
             @test ns_params.cluster_p ≈ 0.5 * 1.1
 
             # Clamping lower bound
             ns_params.cluster_p = 0.011
-            SamplingSchemes.adjust_cluster_p(ns_params, 0.0; target=0.3)
+            SamplingSchemes.adjust_cluster_p(ns_params, 0.0, 3; target=0.3)
             @test ns_params.cluster_p == 0.01
 
             # Clamping upper bound
             ns_params.cluster_p = 0.95
-            SamplingSchemes.adjust_cluster_p(ns_params, 0.5; target=0.3)
+            SamplingSchemes.adjust_cluster_p(ns_params, 0.5, 4; target=0.3)
             @test ns_params.cluster_p == 1.0
+
+            # Verify history was recorded
+            @test length(ns_params.cluster_p_history) == 4
+            @test length(ns_params.cluster_accept_history) == 4
+            @test ns_params.cluster_adjust_iterations == [1, 2, 3, 4]
+            @test ns_params.cluster_accept_history == [0.1, 0.5, 0.0, 0.5]
         end
     end
 end

@@ -23,26 +23,34 @@ function adjust_step_size(params::SamplingParameters, rate::Float64; range::Tupl
 end
 
 """
-    adjust_cluster_p(params::SamplingParameters, rate::Float64; target::Float64=0.3)
+    adjust_cluster_p(params::SamplingParameters, rate::Float64, iteration::Int; target::Float64=0.3)
 
 Adjusts the cluster growth probability based on the acceptance rate.
 Uses a simple multiplicative rule: `p *= 0.9` if rate is below target,
 `p *= 1.1` if rate is at or above target, clamped to `[0.01, 1.0]`.
 
+Also logs the adjusted `cluster_p`, acceptance rate, and NS iteration index
+to `params.cluster_p_history`, `params.cluster_accept_history`, and
+`params.cluster_adjust_iterations` for post-run diagnostics.
+
 # Arguments
 - `params::SamplingParameters`: The parameters containing `cluster_p`.
 - `rate::Float64`: The cluster move acceptance rate for the current window.
+- `iteration::Int`: The current NS iteration index.
 - `target::Float64`: The target acceptance rate (default 0.3).
 
 # Returns
 - `params::SamplingParameters`: The updated parameters with adjusted cluster_p.
 """
-function adjust_cluster_p(params::SamplingParameters, rate::Float64; target::Float64=0.3)
+function adjust_cluster_p(params::SamplingParameters, rate::Float64, iteration::Int; target::Float64=0.3)
     if rate < target
         params.cluster_p *= 0.9
     else
         params.cluster_p *= 1.1
     end
     params.cluster_p = clamp(params.cluster_p, 0.01, 1.0)
+    push!(params.cluster_p_history, params.cluster_p)
+    push!(params.cluster_accept_history, rate)
+    push!(params.cluster_adjust_iterations, iteration)
     return params
 end

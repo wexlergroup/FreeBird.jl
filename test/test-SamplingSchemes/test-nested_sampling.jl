@@ -10,7 +10,10 @@
             0,       # fail_count
             100,     # allowed_fail_count
             1e-12,   # energy_perturbation
-            1234     # random_seed
+            1234,    # random_seed
+            0.3,     # cluster_p
+            0.0,     # cluster_accepted
+            0.0      # cluster_total
         )
         
         @test params isa SamplingSchemes.SamplingParameters
@@ -43,9 +46,12 @@
         @test params.allowed_fail_count == 100
         @test params.energy_perturbation == 1e-12
         @test params.random_seed == 1234
+        @test params.cluster_p == 0.3
+        @test params.cluster_accepted == 0.0
+        @test params.cluster_total == 0.0
 
     end
-    
+
 
     @testset "LatticeNestedSamplingParameters struct tests" begin
         params = LatticeNestedSamplingParameters(
@@ -74,6 +80,7 @@
         @test params.fail_count == 0
         @test params.allowed_fail_count == 10
         @test params.random_seed == 1234
+        @test params.cluster_p == 0.3
 
     end
     
@@ -201,7 +208,10 @@
                 0,       # fail_count
                 100,     # allowed_fail_count
                 1e-12,   # energy_perturbation
-                1234     # random_seed
+                1234,    # random_seed
+                0.3,     # cluster_p
+                0.0,     # cluster_accepted
+                0.0      # cluster_total
             )
             
             for liveset in [liveset_at, liveset_surf]
@@ -387,7 +397,10 @@
                 0,       # fail_count
                 100,     # allowed_fail_count
                 1e-12,   # energy_perturbation
-                1234     # random_seed
+                1234,    # random_seed
+                0.3,     # cluster_p
+                0.0,     # cluster_accepted
+                0.0      # cluster_total
             )
 
         @testset "Step size increases" begin
@@ -455,7 +468,10 @@
                 0,       # fail_count
                 100,     # allowed_fail_count
                 1e-12,   # energy_perturbation
-                1234     # random_seed
+                1234,    # random_seed
+                0.3,     # cluster_p
+                0.0,     # cluster_accepted
+                0.0      # cluster_total
             )
             
             save_strategy = SaveEveryN(
@@ -617,6 +633,165 @@
             if isfile("test.ls")
                 rm("test.ls", force=true)
             end
+        end
+    end
+
+
+    @testset "MCMixedMoves cluster move integration" begin
+
+        @testset "MCMixedMoves backward compatibility" begin
+            mc = MCMixedMoves(5, 1)
+            @test mc.walks_freq == 5
+            @test mc.swaps_freq == 1
+            @test mc.clusters_freq == 0
+            @test mc.initial_cluster_p == 0.3
+            @test mc.target_cluster_accept == 0.3
+            @test mc.cluster_adjust_interval == 50
+            @test mc isa MCRoutine
+        end
+
+        @testset "MCMixedMoves keyword constructor" begin
+            mc = MCMixedMoves(walks_freq=1, clusters_freq=2, initial_cluster_p=0.5)
+            @test mc.walks_freq == 1
+            @test mc.swaps_freq == 0
+            @test mc.clusters_freq == 2
+            @test mc.initial_cluster_p == 0.5
+        end
+
+        # Shared lattice setup for the remaining tests
+        square_lattice = MLattice{1,SquareLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)],
+            supercell_dimensions=(4, 4, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1, 1.5],
+            components=:equal,
+            adsorptions=:full
+        )
+        ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+
+        @testset "nested_sampling_step! with MCMixedMoves on LatticeGasWalkers" begin
+            walkers = [LatticeWalker(deepcopy(square_lattice), energy=5.0u"eV", iter=0) for _ in 1:5]
+            liveset = LatticeGasWalkers(walkers, ham)
+
+            ns_params = LatticeNestedSamplingParameters(mc_steps=20)
+            mc_routine = MCMixedMoves(walks_freq=1, swaps_freq=0, clusters_freq=2,
+                                      initial_cluster_p=0.3, target_cluster_accept=0.3,
+                                      cluster_adjust_interval=3)
+            ns_params.cluster_p = mc_routine.initial_cluster_p
+
+            e_type = typeof(walkers[1].energy)
+            iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+
+            @test iter isa Union{Missing,Int}
+            @test emax isa Union{Missing,e_type}
+            @test length(updated_liveset.walkers) == 5
+            @test updated_params.fail_count >= 0
+        end
+
+        @testset "NS loop runs with MCMixedMoves on LatticeGasWalkers" begin
+            walkers = [LatticeWalker(deepcopy(square_lattice), energy=5.0u"eV", iter=0) for _ in 1:5]
+            liveset = LatticeGasWalkers(walkers, ham)
+
+            ns_params = LatticeNestedSamplingParameters(mc_steps=50)
+            mc_routine = MCMixedMoves(walks_freq=1, swaps_freq=0, clusters_freq=2,
+                                      initial_cluster_p=0.3, target_cluster_accept=0.3,
+                                      cluster_adjust_interval=3)
+            save_strategy = SaveEveryN("test_mm_df.csv", "test_mm.traj", "test_mm.ls", 100, 100, 100)
+
+            df, updated_liveset, updated_params = nested_sampling(
+                liveset, ns_params, Int64(10), mc_routine, save_strategy)
+
+            @test df isa DataFrame
+            @test length(updated_liveset.walkers) == 5
+            @test all(walker -> walker isa LatticeWalker, updated_liveset.walkers)
+
+            rm("test_mm_df.csv", force=true)
+            rm("test_mm.traj", force=true)
+            rm("test_mm.ls", force=true)
+        end
+
+        @testset "Adaptive cluster_p tuning" begin
+            walkers = [LatticeWalker(deepcopy(square_lattice), energy=5.0u"eV", iter=0) for _ in 1:5]
+            liveset = LatticeGasWalkers(walkers, ham)
+
+            ns_params = LatticeNestedSamplingParameters(mc_steps=50)
+            mc_routine = MCMixedMoves(walks_freq=0, swaps_freq=0, clusters_freq=1,
+                                      initial_cluster_p=0.3, target_cluster_accept=0.3,
+                                      cluster_adjust_interval=2)
+            save_strategy = SaveEveryN("test_ap.csv", "test_ap.traj", "test_ap.ls", 1000, 1000, 1000)
+
+            _, _, updated_params = nested_sampling(
+                liveset, ns_params, Int64(20), mc_routine, save_strategy)
+
+            # p should have been adjusted at least once
+            @test updated_params.cluster_p != mc_routine.initial_cluster_p
+            @test 0.01 <= updated_params.cluster_p <= 1.0
+
+            rm("test_ap.csv", force=true)
+            rm("test_ap.traj", force=true)
+            rm("test_ap.ls", force=true)
+        end
+
+        @testset "Particle counts preserved through NS step" begin
+            walkers = [LatticeWalker(deepcopy(square_lattice), energy=5.0u"eV", iter=0) for _ in 1:5]
+            liveset = LatticeGasWalkers(walkers, ham)
+
+            ns_params = LatticeNestedSamplingParameters(mc_steps=20)
+            mc_routine = MCMixedMoves(walks_freq=1, swaps_freq=0, clusters_freq=2,
+                                      initial_cluster_p=0.3)
+            ns_params.cluster_p = mc_routine.initial_cluster_p
+
+            original_counts = [occupied_site_count(w.configuration) for w in liveset.walkers]
+            nested_sampling_step!(liveset, ns_params, mc_routine)
+            new_counts = [occupied_site_count(w.configuration) for w in liveset.walkers]
+
+            for (oc, nc) in zip(original_counts, new_counts)
+                @test oc == nc
+            end
+        end
+
+        @testset "Energy ordering maintained after NS step" begin
+            walkers = [LatticeWalker(deepcopy(square_lattice), energy=5.0u"eV", iter=0) for _ in 1:5]
+            liveset = LatticeGasWalkers(walkers, ham)
+
+            ns_params = LatticeNestedSamplingParameters(mc_steps=30)
+            mc_routine = MCMixedMoves(walks_freq=1, swaps_freq=0, clusters_freq=2,
+                                      initial_cluster_p=0.3)
+            ns_params.cluster_p = mc_routine.initial_cluster_p
+
+            sort_by_energy!(liveset)
+            emax_before = liveset.walkers[1].energy
+
+            nested_sampling_step!(liveset, ns_params, mc_routine)
+            sort_by_energy!(liveset)
+
+            # After step, worst energy should be <= previous worst
+            @test liveset.walkers[1].energy <= emax_before
+        end
+
+        @testset "adjust_cluster_p" begin
+            ns_params = LatticeNestedSamplingParameters()
+            ns_params.cluster_p = 0.5
+
+            # Rate below target → p decreases
+            SamplingSchemes.adjust_cluster_p(ns_params, 0.1; target=0.3)
+            @test ns_params.cluster_p ≈ 0.5 * 0.9
+
+            # Rate above target → p increases
+            ns_params.cluster_p = 0.5
+            SamplingSchemes.adjust_cluster_p(ns_params, 0.5; target=0.3)
+            @test ns_params.cluster_p ≈ 0.5 * 1.1
+
+            # Clamping lower bound
+            ns_params.cluster_p = 0.011
+            SamplingSchemes.adjust_cluster_p(ns_params, 0.0; target=0.3)
+            @test ns_params.cluster_p == 0.01
+
+            # Clamping upper bound
+            ns_params.cluster_p = 0.95
+            SamplingSchemes.adjust_cluster_p(ns_params, 0.5; target=0.3)
+            @test ns_params.cluster_p == 1.0
         end
     end
 end

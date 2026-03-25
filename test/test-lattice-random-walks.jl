@@ -36,4 +36,130 @@
         @test new_ml.components[2][1] == 1
         @test new_ml.components[2][2] == 0
     end
+
+    @testset "geometric cluster move tests" begin
+
+        @testset "reflection map is self-inverse" begin
+            Lx, Ly = 6, 6
+            for pivot_gx in [0, 1, 3, 5], pivot_gy in [0, 2, 4, 5]
+                for site in 1:(Lx * Ly)
+                    r = MonteCarloMoves._reflect_site(site, pivot_gx, pivot_gy, Lx, Ly)
+                    rr = MonteCarloMoves._reflect_site(r, pivot_gx, pivot_gy, Lx, Ly)
+                    @test rr == site
+                end
+            end
+        end
+
+        @testset "reflection wraps correctly under PBC" begin
+            Lx, Ly = 4, 4
+            # Pivot at (0,0): R(1,0) -> (2*0 - 1 mod 4, 0) = (3, 0)
+            site_10 = MonteCarloMoves._grid_to_site(1, 0, Lx)  # site at grid (1,0)
+            reflected = MonteCarloMoves._reflect_site(site_10, 0, 0, Lx, Ly)
+            gx, gy = MonteCarloMoves._site_to_grid(reflected, Lx)
+            @test gx == 3
+            @test gy == 0
+
+            # Pivot at (2,2): R(0,0) -> (4 mod 4, 4 mod 4) = (0, 0) — fixed point
+            site_00 = MonteCarloMoves._grid_to_site(0, 0, Lx)
+            reflected = MonteCarloMoves._reflect_site(site_00, 2, 2, Lx, Ly)
+            gx, gy = MonteCarloMoves._site_to_grid(reflected, Lx)
+            @test gx == 0
+            @test gy == 0
+
+            # Pivot at (1,1): R(3,3) -> (2-3 mod 4, 2-3 mod 4) = (3, 3) — check wrap
+            site_33 = MonteCarloMoves._grid_to_site(3, 3, Lx)
+            reflected = MonteCarloMoves._reflect_site(site_33, 1, 1, Lx, Ly)
+            gx, gy = MonteCarloMoves._site_to_grid(reflected, Lx)
+            @test gx == mod(2*1 - 3, 4)  # 3
+            @test gy == mod(2*1 - 3, 4)  # 3
+        end
+
+        @testset "site ↔ grid round-trip" begin
+            Lx, Ly = 5, 7
+            for site in 1:(Lx * Ly)
+                gx, gy = MonteCarloMoves._site_to_grid(site, Lx)
+                @test MonteCarloMoves._grid_to_site(gx, gy, Lx) == site
+                @test 0 <= gx < Lx
+                @test 0 <= gy < Ly
+            end
+        end
+
+        @testset "particle count preserved (C=1)" begin
+            sl = SLattice{SquareLattice}(
+                supercell_dimensions=(8, 8, 1),
+                components=[[1, 2, 3, 10, 15, 20, 30, 40, 50, 60]]
+            )
+            original_count = occupied_site_count(sl)
+            for _ in 1:50
+                geometric_cluster_swap!(sl, 0.3)
+                @test occupied_site_count(sl) == original_count
+            end
+        end
+
+        @testset "particle count preserved (C=2)" begin
+            ml = MLattice{2,SquareLattice}(
+                supercell_dimensions=(6, 6, 1),
+                components=[[1, 3, 5, 7, 9, 11], [2, 4, 6, 8, 10, 12]]
+            )
+            original_counts = occupied_site_count(ml)
+            for _ in 1:50
+                geometric_cluster_swap!(ml, 0.4)
+                @test occupied_site_count(ml) == original_counts
+            end
+        end
+
+        @testset "self-inverse for fixed cluster" begin
+            using Random
+            sl = SLattice{SquareLattice}(
+                supercell_dimensions=(8, 8, 1),
+                components=[[1, 5, 10, 20, 30, 40, 50, 60]]
+            )
+            original_components = deepcopy(sl.components)
+
+            # Apply with seeded RNG, then apply again with same seed
+            seed = 42
+            Random.seed!(seed)
+            geometric_cluster_swap!(sl, 0.3)
+            Random.seed!(seed)
+            geometric_cluster_swap!(sl, 0.3)
+
+            @test sl.components == original_components
+        end
+
+        @testset "self-inverse for fixed cluster (C=2)" begin
+            using Random
+            ml = MLattice{2,SquareLattice}(
+                supercell_dimensions=(6, 6, 1),
+                components=[[1, 3, 5, 7, 9], [2, 4, 6, 8, 10]]
+            )
+            original_components = deepcopy(ml.components)
+
+            seed = 123
+            Random.seed!(seed)
+            geometric_cluster_swap!(ml, 0.4)
+            Random.seed!(seed)
+            geometric_cluster_swap!(ml, 0.4)
+
+            @test ml.components == original_components
+        end
+
+        @testset "cluster move can change configuration" begin
+            sl = SLattice{SquareLattice}(
+                supercell_dimensions=(8, 8, 1),
+                components=[[1, 2, 3, 4, 5, 6, 7, 8]]
+            )
+            original_components = deepcopy(sl.components)
+            changed = false
+            for _ in 1:100
+                test_sl = deepcopy(sl)
+                geometric_cluster_swap!(test_sl, 0.5)
+                if test_sl.components != original_components
+                    changed = true
+                    break
+                end
+            end
+            @test changed
+        end
+
+    end
 end

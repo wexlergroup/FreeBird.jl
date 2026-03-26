@@ -786,7 +786,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                   mu::Float64;
                                   p_move::Float64=0.5,
                                   p_insert::Float64=0.25,
-                                  energy_perturb::Float64=0.0)
+                                  energy_perturb::Float64=0.0,
+                                  n_max::Int=typemax(Int))
     if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
         throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
     end
@@ -795,6 +796,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
     accept_this_walker = false
     p_delete = 1.0 - p_move - p_insert
     n_sites = num_sites(lattice.configuration)
+    n_cap = min(n_sites, n_max)
     omega_max_u = omega_max * unit(lattice.energy)
 
     for _ in 1:n_steps
@@ -808,7 +810,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             move_type = :move
         elseif r < p_move + p_insert
             # Insertion
-            if n >= n_sites || p_insert <= 0.0
+            if n >= n_cap || p_insert <= 0.0
                 continue
             end
             success, proposed_lattice = lattice_insert_particle!(proposed_lattice)

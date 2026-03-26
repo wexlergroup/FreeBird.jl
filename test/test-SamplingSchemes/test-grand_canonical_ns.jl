@@ -25,6 +25,7 @@
         @test gc_params.fail_count == 0
         @test gc_params.allowed_fail_count == 10
         @test gc_params.init_occupation_p == 0.5
+        @test gc_params.n_max == typemax(Int64)
  
         gc_params2 = GrandCanonicalNestedSamplingParameters(
             mc_steps=200, chemical_potential=-0.05,
@@ -32,7 +33,11 @@
         @test gc_params2.mc_steps == 200
         @test gc_params2.chemical_potential == -0.05
         @test gc_params2.init_occupation_p == 0.3
- 
+        @test gc_params2.n_max == typemax(Int64)
+
+        gc_params3 = GrandCanonicalNestedSamplingParameters(n_max=Int64(5))
+        @test gc_params3.n_max == 5
+
         # Test mutability
         gc_params.fail_count = 5
         @test gc_params.fail_count == 5
@@ -328,5 +333,35 @@
         rm("test_val.csv", force=true)
         rm("test_val.traj", force=true)
         rm("test_val.ls", force=true)
+    end
+
+    # ================================================================
+    @testset "n_max enforcement" begin
+        n_max_val = Int64(5)
+        walkers_nm = [LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV", iter=0) for _ in 1:10]
+        liveset_nm = LatticeGasWalkers(walkers_nm, ham; assign_energy=false)
+
+        gc_params_nm = GrandCanonicalNestedSamplingParameters(
+            mc_steps=50, chemical_potential=-0.05,
+            init_occupation_p=0.5, n_max=n_max_val)
+        mc_routine_nm = MCGrandCanonicalMoves()
+        save_nm = SaveEveryN("test_nmax_df.csv", "test_nmax.traj", "test_nmax.ls", 10000, 10000, 10000)
+
+        df_nm, updated_liveset_nm, _ = grand_canonical_nested_sampling(
+            liveset_nm, gc_params_nm, Int64(50), mc_routine_nm, save_nm)
+
+        # After initialization, all walkers must respect n_max
+        for w in updated_liveset_nm.walkers
+            @test sum(w.configuration.components[1]) <= n_max_val
+        end
+
+        # All recorded samples must respect n_max
+        if nrow(df_nm) > 0
+            @test all(df_nm.num_particles .<= n_max_val)
+        end
+
+        rm("test_nmax_df.csv", force=true)
+        rm("test_nmax.traj", force=true)
+        rm("test_nmax.ls", force=true)
     end
 end

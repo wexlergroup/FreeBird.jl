@@ -307,15 +307,19 @@ mutable struct GrandCanonicalNestedSamplingParameters <: SamplingParameters
     fail_count::Int64
     allowed_fail_count::Int64
     init_occupation_p::Float64
+    n_max::Int64
 end
 
 """
     GrandCanonicalNestedSamplingParameters(;
         mc_steps=100, chemical_potential=0.0, energy_perturbation=1e-12,
         random_seed=1234, fail_count=0, allowed_fail_count=10,
-        init_occupation_p=0.5)
+        init_occupation_p=0.5, n_max=typemax(Int64))
 
 Convenience constructor for `GrandCanonicalNestedSamplingParameters`.
+
+The `n_max` parameter sets an upper bound on the number of particles per walker.
+Insertions are rejected when N ≥ n_max. Default is `typemax(Int64)` (no cap).
 """
 function GrandCanonicalNestedSamplingParameters(;
     mc_steps::Int64=100,
@@ -325,11 +329,12 @@ function GrandCanonicalNestedSamplingParameters(;
     fail_count::Int64=0,
     allowed_fail_count::Int64=10,
     init_occupation_p::Float64=0.5,
+    n_max::Int64=typemax(Int64),
 )
     GrandCanonicalNestedSamplingParameters(
         mc_steps, chemical_potential, energy_perturbation,
         random_seed, fail_count, allowed_fail_count,
-        init_occupation_p,
+        init_occupation_p, n_max,
     )
 end
 
@@ -1057,8 +1062,18 @@ Each site is occupied independently with probability `gc_params.init_occupation_
 """
 function _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonicalNestedSamplingParameters)
     h = liveset.hamiltonian
+    n_max = gc_params.n_max
     for walker in liveset.walkers
         random_microstate!(walker.configuration; p=gc_params.init_occupation_p)
+        # Enforce n_max: if too many particles, randomly delete until N ≤ n_max
+        n_occ = sum(walker.configuration.components[1])
+        if n_occ > n_max
+            occupied = findall(walker.configuration.components[1])
+            shuffle!(occupied)
+            for i in 1:(n_occ - n_max)
+                walker.configuration.components[1][occupied[i]] = false
+            end
+        end
         assign_energy!(walker, h; perturb_energy=gc_params.energy_perturbation)
     end
     return liveset
@@ -1115,7 +1130,8 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     accept, rate, to_walk = MC_grand_canonical_walk!(
         gc_params.mc_steps, to_walk, h, omega_max_val, mu;
         p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
-        energy_perturb=gc_params.energy_perturbation)
+        energy_perturb=gc_params.energy_perturbation,
+        n_max=gc_params.n_max)
 
     if accept
         push!(ats, to_walk)

@@ -8,5 +8,7 @@
     include("test-nvt_monte_carlo.jl")
     # test Wang-Landau
     include("test-wang_landau.jl")
+    # test grand-canonical nested sampling
+    include("test-grand_canonical_ns.jl")
 
 end

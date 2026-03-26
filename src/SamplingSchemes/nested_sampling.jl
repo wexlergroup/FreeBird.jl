@@ -263,21 +263,52 @@ struct MCRejectionSampling <: MCRoutine end
     struct MCGrandCanonicalMoves <: MCRoutine
 
 A type for generating a new walker using grand-canonical MCMC moves that mix
-fixed-N local swaps with single-site particle insertion and deletion.
+fixed-N moves (local swaps and/or geometric cluster moves) with single-site
+particle insertion and deletion.
 
 # Fields
-- `p_move::Float64`: Probability of a fixed-N swap move per MCMC step (default 0.5).
+- `p_move::Float64`: Probability of a fixed-N move per MCMC step (default 0.5).
 - `p_insert::Float64`: Probability of a particle insertion per step (default 0.25).
   The deletion probability is `1 - p_move - p_insert`.
+- `clusters_freq::Int`: Relative weight of cluster moves within the fixed-N branch (default 0 = disabled).
+- `swaps_freq::Int`: Relative weight of local swaps within the fixed-N branch (default 1).
+- `initial_cluster_p::Float64`: Starting growth probability for geometric cluster moves (default 0.3).
+- `target_cluster_accept::Float64`: Target acceptance rate for adaptive cluster p tuning (default 0.3).
+- `cluster_adjust_interval::Int`: Number of NS iterations between cluster p adjustments (default 50).
+- `cluster_p_floor::Float64`: Lower bound for adaptive cluster p (default 0.01).
+- `cluster_p_ceiling::Float64`: Upper bound for adaptive cluster p (default 1.0).
+
+When `clusters_freq == 0` (the default), the fixed-N branch uses only local swaps
+(`lattice_random_walk!`), preserving backward compatibility with existing scripts.
+When `clusters_freq > 0`, the fixed-N branch mixes geometric cluster moves with
+local swaps according to the `clusters_freq:swaps_freq` ratio.
 """
 struct MCGrandCanonicalMoves <: MCRoutine
     p_move::Float64
     p_insert::Float64
-    function MCGrandCanonicalMoves(; p_move::Float64=0.5, p_insert::Float64=0.25)
+    clusters_freq::Int
+    swaps_freq::Int
+    initial_cluster_p::Float64
+    target_cluster_accept::Float64
+    cluster_adjust_interval::Int
+    cluster_p_floor::Float64
+    cluster_p_ceiling::Float64
+    function MCGrandCanonicalMoves(;
+            p_move::Float64=0.5,
+            p_insert::Float64=0.25,
+            clusters_freq::Int=0,
+            swaps_freq::Int=1,
+            initial_cluster_p::Float64=0.3,
+            target_cluster_accept::Float64=0.3,
+            cluster_adjust_interval::Int=50,
+            cluster_p_floor::Float64=0.01,
+            cluster_p_ceiling::Float64=1.0)
         if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
             throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
         end
-        new(p_move, p_insert)
+        new(p_move, p_insert, clusters_freq, swaps_freq,
+            initial_cluster_p, target_cluster_accept, cluster_adjust_interval,
+            cluster_p_floor, cluster_p_ceiling)
     end
 end
 
@@ -298,6 +329,13 @@ for thermodynamic reweighting.
 - `fail_count::Int64`: Consecutive failed replacements.
 - `allowed_fail_count::Int64`: Maximum consecutive failures before warning.
 - `init_occupation_p::Float64`: Per-site occupation probability for initial walkers.
+- `n_max::Int64`: Upper bound on particle count per walker.
+- `cluster_p::Float64`: Current cluster growth probability (mutable runtime state).
+- `cluster_accepted::Float64`: Accepted cluster moves in current adjustment window.
+- `cluster_total::Float64`: Total cluster moves attempted in current adjustment window.
+- `cluster_p_history::Vector{Float64}`: Trajectory of cluster_p after each adjustment.
+- `cluster_accept_history::Vector{Float64}`: Acceptance rate at each adjustment.
+- `cluster_adjust_iterations::Vector{Int}`: NS iteration index at each adjustment.
 """
 mutable struct GrandCanonicalNestedSamplingParameters <: SamplingParameters
     mc_steps::Int64
@@ -308,18 +346,31 @@ mutable struct GrandCanonicalNestedSamplingParameters <: SamplingParameters
     allowed_fail_count::Int64
     init_occupation_p::Float64
     n_max::Int64
+    cluster_p::Float64
+    cluster_accepted::Float64
+    cluster_total::Float64
+    cluster_p_history::Vector{Float64}
+    cluster_accept_history::Vector{Float64}
+    cluster_adjust_iterations::Vector{Int}
 end
 
 """
     GrandCanonicalNestedSamplingParameters(;
         mc_steps=100, chemical_potential=0.0, energy_perturbation=1e-12,
         random_seed=1234, fail_count=0, allowed_fail_count=10,
-        init_occupation_p=0.5, n_max=typemax(Int64))
+        init_occupation_p=0.5, n_max=typemax(Int64),
+        cluster_p=0.3, cluster_accepted=0.0, cluster_total=0.0,
+        cluster_p_history=Float64[], cluster_accept_history=Float64[],
+        cluster_adjust_iterations=Int[])
 
 Convenience constructor for `GrandCanonicalNestedSamplingParameters`.
 
 The `n_max` parameter sets an upper bound on the number of particles per walker.
 Insertions are rejected when N ≥ n_max. Default is `typemax(Int64)` (no cap).
+
+The `cluster_*` fields are mutable runtime state for adaptive cluster move tuning.
+They are initialized from the static configuration on `MCGrandCanonicalMoves` at
+the start of `grand_canonical_nested_sampling` when `clusters_freq > 0`.
 """
 function GrandCanonicalNestedSamplingParameters(;
     mc_steps::Int64=100,
@@ -330,11 +381,19 @@ function GrandCanonicalNestedSamplingParameters(;
     allowed_fail_count::Int64=10,
     init_occupation_p::Float64=0.5,
     n_max::Int64=typemax(Int64),
+    cluster_p::Float64=0.3,
+    cluster_accepted::Float64=0.0,
+    cluster_total::Float64=0.0,
+    cluster_p_history::Vector{Float64}=Float64[],
+    cluster_accept_history::Vector{Float64}=Float64[],
+    cluster_adjust_iterations::Vector{Int}=Int[],
 )
     GrandCanonicalNestedSamplingParameters(
         mc_steps, chemical_potential, energy_perturbation,
         random_seed, fail_count, allowed_fail_count,
         init_occupation_p, n_max,
+        cluster_p, cluster_accepted, cluster_total,
+        cluster_p_history, cluster_accept_history, cluster_adjust_iterations,
     )
 end
 
@@ -1127,11 +1186,14 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     to_walk = deepcopy(ats[parent_idx])
 
     # Decorrelate via GC MCMC
-    accept, rate, to_walk = MC_grand_canonical_walk!(
+    accept, rate, to_walk, cl_accepted, cl_total = MC_grand_canonical_walk!(
         gc_params.mc_steps, to_walk, h, omega_max_val, mu;
         p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
         energy_perturb=gc_params.energy_perturbation,
-        n_max=gc_params.n_max)
+        n_max=gc_params.n_max,
+        clusters_freq=mc_routine.clusters_freq,
+        swaps_freq=mc_routine.swaps_freq,
+        cluster_p=gc_params.cluster_p)
 
     if accept
         push!(ats, to_walk)
@@ -1144,6 +1206,22 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         energy_worst = missing
         n_worst = missing
         gc_params.fail_count += 1
+    end
+
+    # Accumulate cluster acceptance stats and adapt cluster_p
+    if cl_total > 0
+        gc_params.cluster_accepted += cl_accepted
+        gc_params.cluster_total += cl_total
+        if mc_routine.cluster_adjust_interval > 0 &&
+           gc_params.cluster_total >= mc_routine.cluster_adjust_interval
+            window_rate = gc_params.cluster_accepted / max(gc_params.cluster_total, 1.0)
+            adjust_cluster_p(gc_params, window_rate, ns_iteration;
+                             target=mc_routine.target_cluster_accept,
+                             floor=mc_routine.cluster_p_floor,
+                             ceiling=mc_routine.cluster_p_ceiling)
+            gc_params.cluster_accepted = 0.0
+            gc_params.cluster_total = 0.0
+        end
     end
 
     return iter, omega_worst, energy_worst, n_worst, liveset, gc_params
@@ -1180,6 +1258,16 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
                                          save_strategy::DataSavingStrategy)
     # Initialize walkers with random microstates
     _init_gc_walkers!(liveset, gc_params)
+
+    # Initialize cluster_p and reset counters from MCGrandCanonicalMoves if applicable
+    if mc_routine.clusters_freq > 0
+        gc_params.cluster_p = mc_routine.initial_cluster_p
+        gc_params.cluster_accepted = 0.0
+        gc_params.cluster_total = 0.0
+        empty!(gc_params.cluster_p_history)
+        empty!(gc_params.cluster_accept_history)
+        empty!(gc_params.cluster_adjust_iterations)
+    end
 
     df = DataFrame(iter=Int[], omega=Float64[], energy=Float64[], num_particles=Int[])
 

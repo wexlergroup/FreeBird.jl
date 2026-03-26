@@ -41,6 +41,18 @@
         # Test mutability
         gc_params.fail_count = 5
         @test gc_params.fail_count == 5
+
+        # Cluster field defaults
+        @test gc_params.cluster_p == 0.3
+        @test gc_params.cluster_accepted == 0.0
+        @test gc_params.cluster_total == 0.0
+        @test gc_params.cluster_p_history == Float64[]
+        @test gc_params.cluster_accept_history == Float64[]
+        @test gc_params.cluster_adjust_iterations == Int[]
+
+        # Cluster field mutability
+        gc_params.cluster_p = 0.5
+        @test gc_params.cluster_p == 0.5
     end
  
     # ================================================================
@@ -53,7 +65,23 @@
         mc2 = MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3)
         @test mc2.p_move == 0.4
         @test mc2.p_insert == 0.3
- 
+
+        # Cluster field defaults
+        @test mc.clusters_freq == 0
+        @test mc.swaps_freq == 1
+        @test mc.initial_cluster_p == 0.3
+        @test mc.target_cluster_accept == 0.3
+        @test mc.cluster_adjust_interval == 50
+        @test mc.cluster_p_floor == 0.01
+        @test mc.cluster_p_ceiling == 1.0
+
+        # Cluster-enabled construction
+        mc3 = MCGrandCanonicalMoves(p_move=0.5, p_insert=0.25,
+            clusters_freq=3, swaps_freq=1, initial_cluster_p=0.5)
+        @test mc3.clusters_freq == 3
+        @test mc3.swaps_freq == 1
+        @test mc3.initial_cluster_p == 0.5
+
         # Invalid probabilities
         @test_throws ArgumentError MCGrandCanonicalMoves(p_move=0.8, p_insert=0.3)
         @test_throws ArgumentError MCGrandCanonicalMoves(p_move=-0.1, p_insert=0.3)
@@ -138,14 +166,17 @@
         n_init = sum(walker.configuration.components[1])
         omega_max = walker.energy.val - mu * n_init + 1.0  # generous upper bound
  
-        accept, rate, updated_walker = MC_grand_canonical_walk!(
+        accept, rate, updated_walker, cl_acc, cl_tot = MC_grand_canonical_walk!(
             100, walker, ham, omega_max, mu;
             p_move=0.5, p_insert=0.25, energy_perturb=0.0)
- 
+
         @test accept isa Bool
         @test 0.0 <= rate <= 1.0
         @test updated_walker isa LatticeWalker{1}
- 
+        # No cluster moves when clusters_freq=0 (default)
+        @test cl_acc == 0
+        @test cl_tot == 0
+
         # Energy should be consistent with the configuration
         expected_energy = interacting_energy(updated_walker.configuration, ham)
         @test updated_walker.energy ≈ expected_energy
@@ -159,7 +190,34 @@
         @test_throws ArgumentError MC_grand_canonical_walk!(
             10, walker, ham, omega_max, mu; p_move=0.8, p_insert=0.3)
     end
- 
+
+    # ================================================================
+    @testset "MC_grand_canonical_walk! with cluster moves" begin
+        walker = LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV", iter=0)
+        assign_energy!(walker, ham)
+
+        mu = -0.05
+        n_init = sum(walker.configuration.components[1])
+        omega_max = walker.energy.val - mu * n_init + 1.0
+
+        accept, rate, updated_walker, cl_acc, cl_tot = MC_grand_canonical_walk!(
+            200, walker, ham, omega_max, mu;
+            p_move=0.5, p_insert=0.25, energy_perturb=0.0,
+            clusters_freq=1, swaps_freq=1, cluster_p=0.3)
+
+        @test accept isa Bool
+        @test 0.0 <= rate <= 1.0
+        @test updated_walker isa LatticeWalker{1}
+        # Should have attempted some cluster moves
+        @test cl_tot > 0
+        @test cl_acc >= 0
+        @test cl_acc <= cl_tot
+
+        # Energy should be consistent
+        expected_energy = interacting_energy(updated_walker.configuration, ham)
+        @test updated_walker.energy ≈ expected_energy
+    end
+
     # ================================================================
     @testset "nested_sampling_step! for GC" begin
         walkers = [LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV", iter=0) for _ in 1:5]
@@ -363,5 +421,112 @@
         rm("test_nmax_df.csv", force=true)
         rm("test_nmax.traj", force=true)
         rm("test_nmax.ls", force=true)
+    end
+
+    # ================================================================
+    @testset "GC-NS with cluster moves: basic functionality" begin
+        walkers_cl = [LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV", iter=0) for _ in 1:10]
+        liveset_cl = LatticeGasWalkers(walkers_cl, ham; assign_energy=false)
+
+        gc_params_cl = GrandCanonicalNestedSamplingParameters(
+            mc_steps=50, chemical_potential=-0.05)
+        mc_routine_cl = MCGrandCanonicalMoves(
+            p_move=0.5, p_insert=0.25,
+            clusters_freq=1, swaps_freq=1, initial_cluster_p=0.3,
+            cluster_adjust_interval=20)
+        save_cl = SaveEveryN("test_gc_cl_df.csv", "test_gc_cl.traj", "test_gc_cl.ls", 10000, 10000, 10000)
+
+        df_cl, updated_liveset_cl, updated_params_cl = grand_canonical_nested_sampling(
+            liveset_cl, gc_params_cl, Int64(50), mc_routine_cl, save_cl)
+
+        @test df_cl isa DataFrame
+        @test names(df_cl) == ["iter", "omega", "energy", "num_particles"]
+        @test nrow(df_cl) > 0
+        @test length(updated_liveset_cl.walkers) == 10
+
+        # Cluster adaptation should have been active
+        @test length(updated_params_cl.cluster_p_history) >= 0
+        # cluster_p should be within bounds
+        @test updated_params_cl.cluster_p >= mc_routine_cl.cluster_p_floor
+        @test updated_params_cl.cluster_p <= mc_routine_cl.cluster_p_ceiling
+
+        rm("test_gc_cl_df.csv", force=true)
+        rm("test_gc_cl.traj", force=true)
+        rm("test_gc_cl.ls", force=true)
+    end
+
+    # ================================================================
+    @testset "GC-NS with cluster moves: validation against exact enumeration" begin
+        # Reuse the 4x4 lattice and Hamiltonian from Study B
+        L = 4
+        lattice_template_cl = MLattice{1,SquareLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)],
+            supercell_dimensions=(L, L, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1, 1.5],
+            components=[[false for _ in 1:L*L]],
+            adsorptions=:full
+        )
+        ham_cl = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+        n_sites_cl = L * L
+
+        mu_cl = -0.05
+        kb = 8.617333262e-5
+        T_cl = 300.0
+        beta_cl = 1.0 / (kb * T_cl)
+
+        # Exact enumeration
+        exact_z_cl = 0.0
+        exact_N_cl = 0.0
+        for mask in 0:(2^n_sites_cl - 1)
+            lat = deepcopy(lattice_template_cl)
+            for site in 1:n_sites_cl
+                lat.components[1][site] = ((mask >> (site - 1)) & 1) == 1
+            end
+            E_v = interacting_energy(lat, ham_cl).val
+            N_v = sum(lat.components[1])
+            omega_v = E_v - mu_cl * N_v
+            boltz = exp(-beta_cl * omega_v)
+            exact_z_cl += boltz
+            exact_N_cl += boltz * N_v
+        end
+        exact_mean_N_cl = exact_N_cl / exact_z_cl
+        exact_ln_z_cl = log(exact_z_cl)
+
+        # Run GC-NS with cluster moves
+        n_walkers_cl = 100
+        n_steps_cl = Int64(3000)
+        walkers_val_cl = [LatticeWalker(deepcopy(lattice_template_cl), energy=0.0u"eV", iter=0)
+                          for _ in 1:n_walkers_cl]
+        liveset_val_cl = LatticeGasWalkers(walkers_val_cl, ham_cl; assign_energy=false)
+
+        gc_params_val_cl = GrandCanonicalNestedSamplingParameters(
+            mc_steps=100, chemical_potential=mu_cl,
+            energy_perturbation=1e-12, init_occupation_p=0.5)
+        mc_routine_val_cl = MCGrandCanonicalMoves(
+            p_move=0.5, p_insert=0.25,
+            clusters_freq=3, swaps_freq=1, initial_cluster_p=0.3,
+            cluster_adjust_interval=50)
+        save_val_cl = SaveEveryN("test_val_cl.csv", "test_val_cl.traj", "test_val_cl.ls", 10000, 10000, 10000)
+
+        df_val_cl, _, params_val_cl = grand_canonical_nested_sampling(
+            liveset_val_cl, gc_params_val_cl, n_steps_cl, mc_routine_val_cl, save_val_cl)
+
+        @test nrow(df_val_cl) > 0
+
+        # Compute NS thermodynamic stats
+        mean_E_cl, Cv_cl, mean_N_ns_cl = gc_thermodynamic_stats(
+            df_val_cl, [beta_cl], n_walkers_cl, mu_cl)
+
+        # Compare ⟨N⟩ with exact (|error| < 0.5)
+        @test abs(mean_N_ns_cl[1] - exact_mean_N_cl) < 0.5
+
+        # Cluster adaptation should have fired
+        @test length(params_val_cl.cluster_p_history) > 0
+
+        rm("test_val_cl.csv", force=true)
+        rm("test_val_cl.traj", force=true)
+        rm("test_val_cl.ls", force=true)
     end
 end

@@ -33,12 +33,12 @@ export free_component_index, free_par_index
 
 include("helpers.jl")
 
+include("cluster_moves.jl")
+
 include("random_walks.jl")
 
 include("atomistic_swaps.jl")
 
 include("mixed_moves.jl")
-
-include("cluster_moves.jl")
 
 end # module MonteCarloMoves

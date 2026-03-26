@@ -749,13 +749,17 @@ end
                              h::ClassicalHamiltonian, omega_max::Float64,
                              mu::Float64;
                              p_move::Float64=0.5, p_insert::Float64=0.25,
-                             energy_perturb::Float64=0.0)
+                             energy_perturb::Float64=0.0, n_max::Int=typemax(Int),
+                             clusters_freq::Int=0, swaps_freq::Int=1,
+                             cluster_p::Float64=0.3)
 
 Perform grand-canonical MCMC on a single-component lattice, mixing fixed-N
-swap moves with single-site insertion and deletion.
+moves (local swaps and/or geometric cluster moves) with single-site insertion
+and deletion.
 
 Each step:
-- With probability `p_move`: propose a fixed-N local swap.
+- With probability `p_move`: propose a fixed-N move (local swap or cluster move,
+  selected by `swaps_freq:clusters_freq` ratio).
 - With probability `p_insert`: propose inserting one particle.
 - With probability `1 - p_move - p_insert`: propose deleting one particle.
 
@@ -763,6 +767,8 @@ Insert/delete proposals use a Metropolis correction to preserve the uniform
 prior over all microstates with Ω < Ω_max:
 - Insert ratio: `(p_delete / p_insert) * (M - N) / (N + 1)`
 - Delete ratio: `(p_insert / p_delete) * N / (M - N + 1)`
+
+Cluster moves are symmetric (no Metropolis correction), accepted if Ω < Ω_max.
 
 # Arguments
 - `n_steps::Int`: Number of MCMC steps.
@@ -773,11 +779,17 @@ prior over all microstates with Ω < Ω_max:
 - `p_move::Float64=0.5`: Probability of a fixed-N move.
 - `p_insert::Float64=0.25`: Probability of an insertion move.
 - `energy_perturb::Float64=0.0`: Energy perturbation for degeneracy breaking.
+- `n_max::Int=typemax(Int)`: Upper bound on particle count.
+- `clusters_freq::Int=0`: Relative weight of cluster moves within fixed-N branch (0 = disabled).
+- `swaps_freq::Int=1`: Relative weight of local swaps within fixed-N branch.
+- `cluster_p::Float64=0.3`: Current cluster growth probability.
 
 # Returns
 - `accept_this_walker::Bool`: Whether at least one move was accepted.
 - `accept_rate::Float64`: Fraction of accepted moves.
 - `lattice::LatticeWalker{1}`: The updated walker.
+- `cluster_accepted_count::Int`: Number of accepted cluster moves (for adaptive tuning).
+- `cluster_total_count::Int`: Number of attempted cluster moves (for adaptive tuning).
 """
 function MC_grand_canonical_walk!(n_steps::Int,
                                   lattice::LatticeWalker{1},
@@ -787,7 +799,10 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                   p_move::Float64=0.5,
                                   p_insert::Float64=0.25,
                                   energy_perturb::Float64=0.0,
-                                  n_max::Int=typemax(Int))
+                                  n_max::Int=typemax(Int),
+                                  clusters_freq::Int=0,
+                                  swaps_freq::Int=1,
+                                  cluster_p::Float64=0.3)
     if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
         throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
     end
@@ -799,15 +814,30 @@ function MC_grand_canonical_walk!(n_steps::Int,
     n_cap = min(n_sites, n_max)
     omega_max_u = omega_max * unit(lattice.energy)
 
+    # Cluster move mixing: compute probability of cluster vs local swap within fixed-N branch
+    total_fixed_n_freq = clusters_freq + swaps_freq
+    p_cluster_in_move = total_fixed_n_freq > 0 ? clusters_freq / total_fixed_n_freq : 0.0
+
+    cluster_accepted_count = 0
+    cluster_total_count = 0
+
     for _ in 1:n_steps
         r = rand()
         proposed_lattice = deepcopy(lattice.configuration)
         n = sum(proposed_lattice.components[1])
 
         if r < p_move
-            # Fixed-N local swap
-            lattice_random_walk!(proposed_lattice)
-            move_type = :move
+            # Fixed-N branch: choose cluster or local swap
+            if p_cluster_in_move > 0.0 && rand() < p_cluster_in_move
+                # Geometric cluster move
+                geometric_cluster_swap!(proposed_lattice, cluster_p)
+                move_type = :cluster
+                cluster_total_count += 1
+            else
+                # Local swap
+                lattice_random_walk!(proposed_lattice)
+                move_type = :move
+            end
         elseif r < p_move + p_insert
             # Insertion
             if n >= n_cap || p_insert <= 0.0
@@ -840,6 +870,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
         end
 
         # Metropolis correction for insert/delete detailed balance
+        # Cluster and local swap moves are symmetric — no correction needed
         accept = true
         if move_type == :insert
             ratio = (p_delete / p_insert) * (n_sites - n) / (n + 1)
@@ -858,8 +889,12 @@ function MC_grand_canonical_walk!(n_steps::Int,
             lattice.energy = proposed_energy
             n_accept += 1
             accept_this_walker = true
+            if move_type == :cluster
+                cluster_accepted_count += 1
+            end
         end
     end
 
-    return accept_this_walker, n_accept / max(n_steps, 1), lattice
+    return accept_this_walker, n_accept / max(n_steps, 1), lattice,
+           cluster_accepted_count, cluster_total_count
 end

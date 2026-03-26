@@ -198,6 +198,8 @@ For lattice systems, `walks_freq` and `clusters_freq` control the ratio of local
 - `initial_cluster_p::Float64`: Starting growth probability for cluster moves (default 0.3).
 - `target_cluster_accept::Float64`: Target acceptance rate for adaptive cluster p tuning (default 0.3).
 - `cluster_adjust_interval::Int`: Number of NS iterations between cluster p adjustments (default 50).
+- `cluster_p_floor::Float64`: Lower bound for adaptive cluster p (default 0.01).
+- `cluster_p_ceiling::Float64`: Upper bound for adaptive cluster p (default 1.0).
 """
 mutable struct MCMixedMoves <: MCRoutine
     walks_freq::Int
@@ -206,11 +208,13 @@ mutable struct MCMixedMoves <: MCRoutine
     initial_cluster_p::Float64
     target_cluster_accept::Float64
     cluster_adjust_interval::Int
+    cluster_p_floor::Float64
+    cluster_p_ceiling::Float64
 end
 
 # Backward-compatible constructor: MCMixedMoves(5, 1)
 function MCMixedMoves(walks_freq::Int, swaps_freq::Int)
-    MCMixedMoves(walks_freq, swaps_freq, 0, 0.3, 0.3, 50)
+    MCMixedMoves(walks_freq, swaps_freq, 0, 0.3, 0.3, 50, 0.01, 1.0)
 end
 
 # Keyword constructor for lattice use
@@ -221,9 +225,12 @@ function MCMixedMoves(;
     initial_cluster_p::Float64=0.3,
     target_cluster_accept::Float64=0.3,
     cluster_adjust_interval::Int=50,
+    cluster_p_floor::Float64=0.01,
+    cluster_p_ceiling::Float64=1.0,
 )
     MCMixedMoves(walks_freq, swaps_freq, clusters_freq,
-                 initial_cluster_p, target_cluster_accept, cluster_adjust_interval)
+                 initial_cluster_p, target_cluster_accept, cluster_adjust_interval,
+                 cluster_p_floor, cluster_p_ceiling)
 end
 
 """
@@ -738,7 +745,9 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
            ns_params.cluster_total >= mc_routine.cluster_adjust_interval * n_cluster
             window_rate = ns_params.cluster_accepted / max(ns_params.cluster_total, 1.0)
             adjust_cluster_p(ns_params, window_rate, ns_iteration;
-                             target=mc_routine.target_cluster_accept)
+                             target=mc_routine.target_cluster_accept,
+                             floor=mc_routine.cluster_p_floor,
+                             ceiling=mc_routine.cluster_p_ceiling)
             ns_params.cluster_accepted = 0.0
             ns_params.cluster_total = 0.0
         end

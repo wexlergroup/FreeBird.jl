@@ -622,3 +622,49 @@ function swap_occupied_sites_across_components!(lattice::MLattice{C,G},
     end
     return lattice
 end
+
+
+"""
+    MC_cluster_walk!(n_steps::Int, lattice::LatticeWalker{C}, h::ClassicalHamiltonian, emax::Float64, cluster_p::Float64; energy_perturb::Float64=0.0)
+
+Perform a sequence of geometric cluster moves on the lattice system, accepting each if `E < emax`.
+
+# Arguments
+- `n_steps::Int`: The number of cluster move attempts to perform.
+- `lattice::LatticeWalker{C}`: The walker to perform cluster moves on.
+- `h::ClassicalHamiltonian`: The lattice Hamiltonian.
+- `emax::Float64`: The maximum energy allowed for accepting a move (dimensionless).
+- `cluster_p::Float64`: The growth probability for BFS cluster construction.
+- `energy_perturb::Float64=0.0`: Energy perturbation to break degeneracies.
+
+# Returns
+- `accept_this_walker::Bool`: Whether at least one move was accepted.
+- `accept_rate::Float64`: The fraction of accepted moves.
+- `lattice::LatticeWalker`: The updated walker.
+"""
+function MC_cluster_walk!(n_steps::Int,
+                          lattice::LatticeWalker{C},
+                          h::ClassicalHamiltonian,
+                          emax::Float64,
+                          cluster_p::Float64;
+                          energy_perturb::Float64=0.0) where C
+    n_accept = 0
+    accept_this_walker = false
+    emax_u = emax * unit(lattice.energy)
+
+    for _ in 1:n_steps
+        proposed_lattice = deepcopy(lattice.configuration)
+        geometric_cluster_swap!(proposed_lattice, cluster_p)
+
+        perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
+        proposed_energy = interacting_energy(proposed_lattice, h) + perturbation_energy
+
+        if proposed_energy < emax_u
+            lattice.configuration = proposed_lattice
+            lattice.energy = proposed_energy
+            n_accept += 1
+            accept_this_walker = true
+        end
+    end
+    return accept_this_walker, n_accept / max(n_steps, 1), lattice
+end

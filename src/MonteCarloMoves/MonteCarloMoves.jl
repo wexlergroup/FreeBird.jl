@@ -23,6 +23,8 @@ export MC_new_sample!, MC_rejection_sampling!, MC_random_swap!
 export lattice_random_walk!
 export generate_random_new_lattice_sample!
 export MC_mixed_moves!
+export MC_cluster_walk!
+export geometric_cluster_swap!
 
 export free_component_index, free_par_index
 
@@ -33,5 +35,7 @@ include("random_walks.jl")
 include("atomistic_swaps.jl")
 
 include("mixed_moves.jl")
+
+include("cluster_moves.jl")
 
 end # module MonteCarloMoves

@@ -4,7 +4,7 @@
 The `NestedSamplingParameters` struct represents the parameters used in the nested sampling scheme.
 
 # Fields
-- `mc_steps::Int64`: The number of total Monte Carlo moves to perform. For a parallel MC routine, this number will be distributed among workers. 
+- `mc_steps::Int64`: The number of total Monte Carlo moves to perform. For a parallel MC routine, this number will be distributed among workers.
 If `mc_steps` is not divisible by the number of workers, the actual number of MC moves per worker will be `ceil(mc_steps / nworkers())`.
 - `initial_step_size::Float64`: The initial step size, which is the fallback step size if MC routine fails to accept a move.
 - `step_size::Float64`: The on-the-fly step size used in the sampling process.
@@ -16,6 +16,12 @@ e.g. (0.25, 0.75) means that the step size will decrease if the acceptance rate 
 - `allowed_fail_count::Int64`: The maximum number of failed MC moves allowed before resetting the step size.
 - `energy_perturbation::Float64`: The perturbation value used to adjust the energy of the walkers.
 - `random_seed::Int64`: The seed for the random number generator.
+- `cluster_p::Float64`: Current cluster growth probability for geometric cluster moves (mutable runtime state).
+- `cluster_accepted::Float64`: Accepted cluster moves in the current adjustment window.
+- `cluster_total::Float64`: Total cluster moves attempted in the current adjustment window.
+- `cluster_p_history::Vector{Float64}`: Trajectory of cluster_p values after each adaptive adjustment.
+- `cluster_accept_history::Vector{Float64}`: Acceptance rate at each adaptive adjustment.
+- `cluster_adjust_iterations::Vector{Int}`: NS iteration index at each adaptive adjustment.
 """
 mutable struct NestedSamplingParameters <: SamplingParameters
     mc_steps::Int64
@@ -28,6 +34,12 @@ mutable struct NestedSamplingParameters <: SamplingParameters
     allowed_fail_count::Int64
     energy_perturbation::Float64
     random_seed::Int64
+    cluster_p::Float64
+    cluster_accepted::Float64
+    cluster_total::Float64
+    cluster_p_history::Vector{Float64}
+    cluster_accept_history::Vector{Float64}
+    cluster_adjust_iterations::Vector{Int}
 end
 
 function NestedSamplingParameters(;
@@ -41,8 +53,14 @@ function NestedSamplingParameters(;
             allowed_fail_count::Int64=100,
             energy_perturbation::Float64=1e-12,
             random_seed::Int64=1234,
+            cluster_p::Float64=0.3,
+            cluster_accepted::Float64=0.0,
+            cluster_total::Float64=0.0,
+            cluster_p_history::Vector{Float64}=Float64[],
+            cluster_accept_history::Vector{Float64}=Float64[],
+            cluster_adjust_iterations::Vector{Int}=Int[],
             )
-    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, accept_range, fail_count, allowed_fail_count, energy_perturbation, random_seed)  
+    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, accept_range, fail_count, allowed_fail_count, energy_perturbation, random_seed, cluster_p, cluster_accepted, cluster_total, cluster_p_history, cluster_accept_history, cluster_adjust_iterations)
 end
 
 """
@@ -52,6 +70,7 @@ end
             fail_count::Int64=0,
             allowed_fail_count::Int64=10,
             random_seed::Int64=1234,
+            cluster_p::Float64=0.3,
             )
 A convenience constructor for `NestedSamplingParameters` with default values suitable for lattice systems.
 """
@@ -61,8 +80,9 @@ function LatticeNestedSamplingParameters(;
             fail_count::Int64=0,
             allowed_fail_count::Int64=10,
             random_seed::Int64=1234,
+            cluster_p::Float64=0.3,
             )
-    NestedSamplingParameters(mc_steps=mc_steps, fail_count=fail_count, allowed_fail_count=allowed_fail_count, energy_perturbation=energy_perturbation, random_seed=random_seed)
+    NestedSamplingParameters(mc_steps=mc_steps, fail_count=fail_count, allowed_fail_count=allowed_fail_count, energy_perturbation=energy_perturbation, random_seed=random_seed, cluster_p=cluster_p)
 end
 
 
@@ -165,19 +185,52 @@ A type for generating a new walker from a random configuration. Currently, it is
 """
 struct MCNewSample <: MCRoutine end
 
-""" 
+"""
     struct MCMixedMoves <: MCRoutine
-A type for generating a new walker by performing random walks and swapping atoms. Currently, it is intended to use this routine for
-multi-component systems. The actual number of random walks and swaps to perform is determined by the weights of the fields `walks_freq` and `swaps_freq`.
-For example, if `walks_freq=4` and `swaps_freq=1`, then the probability of performing a random walk is 4/5, and the probability of performing a swap is 1/5.
+A type for generating a new walker by performing a mix of random walks, atom swaps, and/or geometric cluster moves.
+For atomistic systems, the `walks_freq` and `swaps_freq` fields control the ratio of random walks to atom swaps.
+For lattice systems, `walks_freq` and `clusters_freq` control the ratio of local swap moves to geometric cluster moves.
 
 # Fields
-- `walks_freq::Int`: The frequency of random walks to perform.
-- `swaps_freq::Int`: The frequency of atom swaps to perform.
+- `walks_freq::Int`: The frequency of random walks (atomistic) or local swaps (lattice) to perform.
+- `swaps_freq::Int`: The frequency of atom swaps to perform (atomistic only).
+- `clusters_freq::Int`: The frequency of geometric cluster moves to perform (lattice only, default 0).
+- `initial_cluster_p::Float64`: Starting growth probability for cluster moves (default 0.3).
+- `target_cluster_accept::Float64`: Target acceptance rate for adaptive cluster p tuning (default 0.3).
+- `cluster_adjust_interval::Int`: Number of NS iterations between cluster p adjustments (default 50).
+- `cluster_p_floor::Float64`: Lower bound for adaptive cluster p (default 0.01).
+- `cluster_p_ceiling::Float64`: Upper bound for adaptive cluster p (default 1.0).
 """
 mutable struct MCMixedMoves <: MCRoutine
     walks_freq::Int
     swaps_freq::Int
+    clusters_freq::Int
+    initial_cluster_p::Float64
+    target_cluster_accept::Float64
+    cluster_adjust_interval::Int
+    cluster_p_floor::Float64
+    cluster_p_ceiling::Float64
+end
+
+# Backward-compatible constructor: MCMixedMoves(5, 1)
+function MCMixedMoves(walks_freq::Int, swaps_freq::Int)
+    MCMixedMoves(walks_freq, swaps_freq, 0, 0.3, 0.3, 50, 0.01, 1.0)
+end
+
+# Keyword constructor for lattice use
+function MCMixedMoves(;
+    walks_freq::Int=1,
+    swaps_freq::Int=0,
+    clusters_freq::Int=1,
+    initial_cluster_p::Float64=0.3,
+    target_cluster_accept::Float64=0.3,
+    cluster_adjust_interval::Int=50,
+    cluster_p_floor::Float64=0.01,
+    cluster_p_ceiling::Float64=1.0,
+)
+    MCMixedMoves(walks_freq, swaps_freq, clusters_freq,
+                 initial_cluster_p, target_cluster_accept, cluster_adjust_interval,
+                 cluster_p_floor, cluster_p_ceiling)
 end
 
 """
@@ -262,7 +315,7 @@ Perform a single step of the nested sampling algorithm using the Monte Carlo ran
 - `liveset`: The updated set of atom walkers.
 - `ns_params`: The updated nested sampling parameters.
 """
-function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine)
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine; ns_iteration::Int=0)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.potential
@@ -313,7 +366,7 @@ Perform a single step of the nested sampling algorithm using the parallel Monte 
 - `liveset`: The updated set of atom walkers.
 - `ns_params`: The updated nested sampling parameters.
 """
-function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCDistributed)
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCDistributed; ns_iteration::Int=0)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.potential
@@ -377,7 +430,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     return iter, emax[mc_routine.n_cull], liveset, ns_params
 end
 
-function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutineParallel)
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutineParallel; ns_iteration::Int=0)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.potential
@@ -429,7 +482,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     return iter, emax[end], liveset, ns_params
 end
 
-function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutineParallel)
+function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutineParallel; ns_iteration::Int=0)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.potential
@@ -481,7 +534,7 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSampl
     return iter, emax[end], liveset, ns_params
 end
 
-function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine)
+function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine; ns_iteration::Int=0)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.potential
@@ -536,7 +589,7 @@ Returns
 Note
 - To invoke the parallel version of this routine, use `MCMixedMovesParallel` as the `mc_routine` argument.
 """
-function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCMixedMoves)
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCMixedMoves; ns_iteration::Int=0)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.potential
@@ -564,7 +617,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     return iter, emax, liveset, ns_params
 end
 
-function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCMixedMovesParallel)
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCMixedMovesParallel; ns_iteration::Int=0)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.potential
@@ -617,11 +670,98 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
 end
 
 """
+    nested_sampling_step!(liveset::LatticeGasWalkers, ns_params::NestedSamplingParameters, mc_routine::MCMixedMoves)
+
+Perform a single step of the nested sampling algorithm using a mix of geometric cluster moves and local swap moves.
+
+The total `mc_steps` from `ns_params` are split between cluster moves and local swaps according to `clusters_freq` and
+`walks_freq` in the `mc_routine`. Cluster moves use `geometric_cluster_swap!` with growth probability `ns_params.cluster_p`,
+which is adaptively tuned to maintain `mc_routine.target_cluster_accept`. Local swaps use the standard `lattice_random_walk!`.
+
+## Arguments
+- `liveset::LatticeGasWalkers`: The liveset of lattice gas walkers.
+- `ns_params::NestedSamplingParameters`: The parameters for nested sampling.
+- `mc_routine::MCMixedMoves`: The mixed moves routine with cluster and local swap frequencies.
+
+## Returns
+- `iter`: The iteration number of the liveset after the step.
+- `emax`: The maximum energy of the liveset after the step.
+- `liveset::LatticeGasWalkers`: The updated liveset.
+- `ns_params::NestedSamplingParameters`: The updated parameters.
+"""
+function nested_sampling_step!(liveset::LatticeGasWalkers,
+                               ns_params::NestedSamplingParameters,
+                               mc_routine::MCMixedMoves;
+                               ns_iteration::Int=0)
+    sort_by_energy!(liveset)
+    ats = liveset.walkers
+    h = liveset.hamiltonian
+    iter::Union{Missing,Int} = missing
+    emax::Union{Missing,Float64} = liveset.walkers[1].energy.val
+
+    # Clone a random non-worst walker
+    to_walk = deepcopy(rand(ats[2:end]))
+
+    # Compute move counts from frequencies
+    total_freq = mc_routine.walks_freq + mc_routine.clusters_freq
+    n_local = round(Int, ns_params.mc_steps * mc_routine.walks_freq / max(total_freq, 1))
+    n_cluster = ns_params.mc_steps - n_local
+
+    # Apply cluster moves
+    cluster_accepted = false
+    cluster_rate = 0.0
+    if n_cluster > 0
+        cluster_accepted, cluster_rate, to_walk = MC_cluster_walk!(
+            n_cluster, to_walk, h, emax, ns_params.cluster_p;
+            energy_perturb=ns_params.energy_perturbation)
+    end
+
+    # Apply local swap moves
+    local_accepted = false
+    local_rate = 0.0
+    if n_local > 0
+        local_accepted, local_rate, to_walk = MC_random_walk!(
+            n_local, to_walk, h, emax;
+            energy_perturb=ns_params.energy_perturbation)
+    end
+
+    accept = cluster_accepted || local_accepted
+    if accept
+        push!(ats, to_walk)
+        popfirst!(ats)
+        update_iter!(liveset)
+        ns_params.fail_count = 0
+        iter = liveset.walkers[1].iter
+    else
+        emax = missing
+        ns_params.fail_count += 1
+    end
+
+    # Accumulate cluster acceptance stats for adaptive tuning
+    if n_cluster > 0
+        ns_params.cluster_accepted += cluster_rate * n_cluster
+        ns_params.cluster_total += n_cluster
+        if mc_routine.cluster_adjust_interval > 0 &&
+           ns_params.cluster_total >= mc_routine.cluster_adjust_interval * n_cluster
+            window_rate = ns_params.cluster_accepted / max(ns_params.cluster_total, 1.0)
+            adjust_cluster_p(ns_params, window_rate, ns_iteration;
+                             target=mc_routine.target_cluster_accept,
+                             floor=mc_routine.cluster_p_floor,
+                             ceiling=mc_routine.cluster_p_ceiling)
+            ns_params.cluster_accepted = 0.0
+            ns_params.cluster_total = 0.0
+        end
+    end
+
+    return iter, emax * unit(liveset.walkers[1].energy), liveset, ns_params
+end
+
+"""
     nested_sampling_step!(liveset::LatticeGasWalkers, ns_params::LatticeNestedSamplingParameters, mc_routine::MCRoutine)
 
 Perform a single step of the nested sampling algorithm.
 
-This function takes a `liveset` of lattice gas walkers, `ns_params` containing the parameters for nested sampling, and `mc_routine` representing the Monte Carlo 
+This function takes a `liveset` of lattice gas walkers, `ns_params` containing the parameters for nested sampling, and `mc_routine` representing the Monte Carlo
 routine for generating new samples. It performs a single step of the nested sampling algorithm by updating the liveset with a new walker.
 
 ## Arguments
@@ -633,9 +773,10 @@ routine for generating new samples. It performs a single step of the nested samp
 - `iter`: The iteration number of the liveset after the step.
 - `emax`: The maximum energy of the liveset after the step.
 """
-function nested_sampling_step!(liveset::LatticeGasWalkers, 
-                               ns_params::NestedSamplingParameters, 
-                               mc_routine::MCRoutine)
+function nested_sampling_step!(liveset::LatticeGasWalkers,
+                               ns_params::NestedSamplingParameters,
+                               mc_routine::MCRoutine;
+                               ns_iteration::Int=0)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     h = liveset.hamiltonian
@@ -684,9 +825,10 @@ This function takes a `liveset` of lattice gas walkers, `ns_params` containing t
 - `liveset::LatticeGasWalkers`: The updated liveset after the step.
 - `ns_params::LatticeNestedSamplingParameters`: The updated nested sampling parameters after the step.
 """
-function nested_sampling_step!(liveset::LatticeGasWalkers, 
-                               ns_params::NestedSamplingParameters, 
-                               mc_routine::MCNewSample)
+function nested_sampling_step!(liveset::LatticeGasWalkers,
+                               ns_params::NestedSamplingParameters,
+                               mc_routine::MCNewSample;
+                               ns_iteration::Int=0)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     h = liveset.hamiltonian
@@ -714,9 +856,10 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
 end
 
 
-function nested_sampling_step!(liveset::LatticeGasWalkers, 
-                               ns_params::NestedSamplingParameters, 
-                               mc_routine::MCRejectionSampling)
+function nested_sampling_step!(liveset::LatticeGasWalkers,
+                               ns_params::NestedSamplingParameters,
+                               mc_routine::MCRejectionSampling;
+                               ns_iteration::Int=0)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     h = liveset.hamiltonian
@@ -766,11 +909,20 @@ function nested_sampling(liveset::AbstractLiveSet,
                                 n_steps::Int64, 
                                 mc_routine::MCRoutine,
                                 save_strategy::DataSavingStrategy)
+    # Initialize cluster_p and reset counters from MCMixedMoves if applicable
+    if mc_routine isa MCMixedMoves && mc_routine.clusters_freq > 0
+        ns_params.cluster_p = mc_routine.initial_cluster_p
+        ns_params.cluster_accepted = 0.0
+        ns_params.cluster_total = 0.0
+        empty!(ns_params.cluster_p_history)
+        empty!(ns_params.cluster_accept_history)
+        empty!(ns_params.cluster_adjust_iterations)
+    end
     df = DataFrame(iter=Int[], emax=Float64[])
     for i in 1:n_steps
         print_info = i % save_strategy.n_info == 0
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
-        iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine)
+        iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine; ns_iteration=i)
         @debug "n_step $i, iter: $iter, emax: $emax"
         if ns_params.fail_count >= ns_params.allowed_fail_count
             @warn "Failed to accept MC move $(ns_params.allowed_fail_count) times in a row. Reset step size!"

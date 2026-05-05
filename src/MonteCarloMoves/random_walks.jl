@@ -898,3 +898,151 @@ function MC_grand_canonical_walk!(n_steps::Int,
     return accept_this_walker, n_accept / max(n_steps, 1), lattice,
            cluster_accepted_count, cluster_total_count
 end
+
+
+# ======================================================================
+# U-sorted, ideal-gas-reference grand-canonical move primitive
+# ======================================================================
+
+"""
+    MC_ideal_gas_reference_walk!(n_steps::Int, lattice::LatticeWalker{1},
+                                 h::ClassicalHamiltonian, u_max::Float64,
+                                 z0::Float64;
+                                 p_flip::Float64=0.5,
+                                 swaps_freq::Int=1, clusters_freq::Int=0,
+                                 cluster_p::Float64=0.3,
+                                 n_max::Int=typemax(Int),
+                                 energy_perturb::Float64=0.0)
+
+Perform U-sorted, ideal-gas-reference grand-canonical MCMC on a
+single-component lattice walker. The chain is constrained to the
+energy shell ``\\{\\sigma : U(\\sigma) < U_{\\max}\\}`` and targets the
+restricted prior ``\\pi_0(\\sigma) \\propto z_0^{N(\\sigma)} \\cdot \\chi[U(\\sigma) < U_{\\max}]``.
+
+Each step proposes either a single-site flip (with probability `p_flip`)
+or a fixed-N move (probability ``1 - p_{\\mathrm{flip}}``); the fixed-N
+branch chooses cluster vs. local swap by `clusters_freq:swaps_freq`.
+
+Acceptance rules (each proposal must clear all gates; ``\\Delta N = \\pm 1``
+for a flip):
+- **Energy ceiling:** ``U_{\\mathrm{new}} < U_{\\max}`` (with the
+  energy-perturbation tie-breaker absorbed into ``U``).
+- **Single-site flip:** Metropolis ratio
+  ``\\min(1, z_0^{\\Delta N})`` against the prior. Proposal is symmetric
+  (uniformly random site).
+- **Local swap (`lattice_random_walk!`) and geometric cluster swap:**
+  ``\\Delta N = 0`` and proposal is symmetric, so no Metropolis correction
+  beyond the energy ceiling.
+
+# Arguments
+- `n_steps::Int`: Number of MCMC steps to attempt.
+- `lattice::LatticeWalker{1}`: The walker to update in place.
+- `h::ClassicalHamiltonian`: The lattice Hamiltonian.
+- `u_max::Float64`: Upper bound on the potential energy (unitless, in the
+  Hamiltonian's energy units).
+- `z0::Float64`: Reference fugacity, ``z_0 > 0``.
+
+# Keyword arguments
+- `p_flip::Float64=0.5`: Probability of a single-site flip per step.
+- `swaps_freq::Int=1`, `clusters_freq::Int=0`: Relative weights inside
+  the fixed-N branch.
+- `cluster_p::Float64=0.3`: Cluster growth probability passed to
+  [`geometric_cluster_swap!`](@ref).
+- `n_max::Int=typemax(Int)`: Per-walker cap on particle count. A flip
+  that would exceed this cap is silently rejected (counts toward
+  `n_steps` as a no-op).
+- `energy_perturb::Float64=0.0`: Magnitude of the uniform random
+  energy perturbation used for degeneracy breaking.
+
+# Returns
+- `accept_this_walker::Bool`: Whether at least one move was accepted.
+- `accept_rate::Float64`: Fraction of accepted moves over `n_steps`.
+- `lattice::LatticeWalker{1}`: The mutated walker.
+- `cluster_accepted_count::Int`: Cluster moves accepted (for adaptive `cluster_p` tuning).
+- `cluster_total_count::Int`: Cluster moves attempted (for adaptive `cluster_p` tuning).
+"""
+function MC_ideal_gas_reference_walk!(n_steps::Int,
+                                       lattice::LatticeWalker{1},
+                                       h::ClassicalHamiltonian,
+                                       u_max::Float64,
+                                       z0::Float64;
+                                       p_flip::Float64=0.5,
+                                       swaps_freq::Int=1,
+                                       clusters_freq::Int=0,
+                                       cluster_p::Float64=0.3,
+                                       n_max::Int=typemax(Int),
+                                       energy_perturb::Float64=0.0)
+    if !(0.0 <= p_flip <= 1.0)
+        throw(ArgumentError("p_flip must be in [0,1], got $p_flip"))
+    end
+    if z0 <= 0.0
+        throw(ArgumentError("z0 must be positive, got $z0"))
+    end
+    if swaps_freq < 0 || clusters_freq < 0
+        throw(ArgumentError("swaps_freq and clusters_freq must be non-negative"))
+    end
+    if p_flip < 1.0 && swaps_freq + clusters_freq <= 0
+        throw(ArgumentError("If p_flip < 1, swaps_freq + clusters_freq must be > 0"))
+    end
+
+    n_accept = 0
+    accept_this_walker = false
+    n_sites = num_sites(lattice.configuration)
+    n_cap = min(n_sites, n_max)
+    u_max_u = u_max * unit(lattice.energy)
+
+    total_fixed_n_freq = swaps_freq + clusters_freq
+    p_cluster_in_fixed_n = total_fixed_n_freq > 0 ? clusters_freq / total_fixed_n_freq : 0.0
+
+    cluster_accepted_count = 0
+    cluster_total_count = 0
+
+    for _ in 1:n_steps
+        proposed_lattice = deepcopy(lattice.configuration)
+        n_curr = sum(proposed_lattice.components[1])
+
+        move_type = :unknown
+        metropolis_ratio = 1.0
+
+        if rand() < p_flip
+            site = rand(1:n_sites)
+            was_occupied = proposed_lattice.components[1][site]
+            dN = was_occupied ? -1 : +1
+            if n_curr + dN > n_cap
+                continue  # n_max cap; counts as a no-op
+            end
+            proposed_lattice.components[1][site] = !was_occupied
+            metropolis_ratio = z0 ^ dN
+            move_type = was_occupied ? :delete : :insert
+        elseif p_cluster_in_fixed_n > 0.0 && rand() < p_cluster_in_fixed_n
+            geometric_cluster_swap!(proposed_lattice, cluster_p)
+            move_type = :cluster
+            cluster_total_count += 1
+        else
+            lattice_random_walk!(proposed_lattice)
+            move_type = :swap
+        end
+
+        perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
+        proposed_energy = interacting_energy(proposed_lattice, h) + perturbation_energy
+
+        if proposed_energy >= u_max_u
+            continue
+        end
+
+        if metropolis_ratio < 1.0 && rand() >= metropolis_ratio
+            continue
+        end
+
+        lattice.configuration = proposed_lattice
+        lattice.energy = proposed_energy
+        n_accept += 1
+        accept_this_walker = true
+        if move_type == :cluster
+            cluster_accepted_count += 1
+        end
+    end
+
+    return accept_this_walker, n_accept / max(n_steps, 1), lattice,
+           cluster_accepted_count, cluster_total_count
+end

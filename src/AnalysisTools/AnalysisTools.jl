@@ -11,6 +11,8 @@ using CSV, Arrow
 export read_output
 export ωᵢ, partition_function, internal_energy, cv
 export gc_thermodynamic_stats
+export ideal_gas_reference_thermodynamic_stats
+export effective_sample_size_ideal_gas_reference
 
 """
     read_output(filename::String)
@@ -334,6 +336,307 @@ function gc_thermodynamic_stats(df::DataFrame,
     end
 
     return mean_Es, Cvs, mean_Ns
+end
+
+
+"""
+    ideal_gas_reference_thermodynamic_stats(β::Float64, μ::Float64,
+                                             ωi::Vector{Float64},
+                                             U::Vector{Float64},
+                                             N::AbstractVector{<:Integer};
+                                             z0::Float64,
+                                             kb::Float64=8.617333262e-5)
+
+Compute grand-canonical thermodynamic averages from a U-sorted,
+ideal-gas-reference nested sampling output, reweighted to a target
+``(\\mu, T)``.
+
+The samples were drawn against the prior ``\\pi_0(\\sigma) \\propto z_0^{N(\\sigma)}``.
+Reweighting to the target chemical potential ``\\mu`` and inverse temperature
+``\\beta = 1/(k_B T)`` uses importance weights ``(z/z_0)^{N_j}`` with
+``z = e^{\\beta\\mu}``. The log-Boltzmann weight per sample is
+
+```math
+\\log \\tilde w_j = \\log \\omega_j + N_j (\\beta \\mu - \\log z_0) - \\beta U_j.
+```
+
+Sums are evaluated via the log-sum-exp trick for numerical stability.
+The returned ``\\ln Z_{\\mathrm{relative}}`` is the log of the
+NS-estimated partition sum *relative to the prior normalization*; the
+absolute grand partition function on a lattice with ``M`` sites is
+``\\ln \\Xi(\\mu, T) = M \\ln(1 + z_0) + \\ln Z_{\\mathrm{relative}}``,
+generalizing the ``M \\ln 2`` offset of the Ω-sorted GCNS (which
+corresponds to ``z_0 = 1``).
+
+The grand-canonical heat capacity at constant ``\\mu`` is
+
+```math
+C_{V,\\mu} = k_B \\beta^2 \\big(\\mathrm{Var}(U) - \\mu \\,\\mathrm{Cov}(U, N)\\big).
+```
+
+# Arguments
+- `β::Float64`: Inverse temperature ``1/(k_B T)``.
+- `μ::Float64`: Target chemical potential.
+- `ωi::Vector{Float64}`: NS phase-space-volume weights per recorded sample.
+- `U::Vector{Float64}`: Potential energies per recorded sample.
+- `N::AbstractVector{<:Integer}`: Particle counts per recorded sample.
+- `z0::Float64`: Reference fugacity used during sampling.
+- `kb::Float64`: Boltzmann constant (default eV/K).
+
+# Returns
+- `(mean_E, mean_N, Cv_mu, ln_Z_relative)::NTuple{4,Float64}`.
+"""
+function ideal_gas_reference_thermodynamic_stats(β::Float64, μ::Float64,
+                                                  ωi::Vector{Float64},
+                                                  U::Vector{Float64},
+                                                  N::AbstractVector{<:Integer};
+                                                  z0::Float64,
+                                                  kb::Float64=8.617333262e-5)
+    n = length(ωi)
+    if n != length(U) || n != length(N)
+        throw(DimensionMismatch("All input vectors must have the same length"))
+    end
+    if z0 <= 0.0
+        throw(ArgumentError("z0 must be positive, got $z0"))
+    end
+    if n == 0
+        return NaN, NaN, NaN, NaN
+    end
+
+    log_z0 = log(z0)
+    log_terms = Vector{Float64}(undef, n)
+    for i in 1:n
+        log_terms[i] = log(ωi[i]) + N[i] * (β * μ - log_z0) - β * U[i]
+    end
+    max_log = maximum(log_terms)
+
+    z = 0.0
+    e_sum = 0.0
+    e2_sum = 0.0
+    n_sum = 0.0
+    en_sum = 0.0
+
+    for i in 1:n
+        w = exp(log_terms[i] - max_log)
+        z += w
+        e_sum += w * U[i]
+        e2_sum += w * U[i]^2
+        n_sum += w * N[i]
+        en_sum += w * U[i] * N[i]
+    end
+
+    if z == 0.0 || !isfinite(z)
+        return NaN, NaN, NaN, NaN
+    end
+
+    e_avg = e_sum / z
+    e2_avg = e2_sum / z
+    n_avg = n_sum / z
+    en_avg = en_sum / z
+
+    var_e = e2_avg - e_avg^2
+    cov_en = en_avg - e_avg * n_avg
+
+    Cv_mu = kb * β^2 * (var_e - μ * cov_en)
+    ln_Z_relative = max_log + log(z)
+
+    return e_avg, n_avg, Cv_mu, ln_Z_relative
+end
+
+"""
+    ideal_gas_reference_thermodynamic_stats(df::DataFrame,
+                                             μs::AbstractVector{<:Real},
+                                             Ts::AbstractVector{<:Real},
+                                             n_walkers::Int, z0::Float64;
+                                             n_cull::Int=1, ω0::Float64=1.0,
+                                             kb::Float64=8.617333262e-5)
+
+Sweep [`ideal_gas_reference_thermodynamic_stats`](@ref) over a 2D grid
+of ``(\\mu, T)`` from a U-sorted GCNS output DataFrame.
+
+The DataFrame must have columns `:iter`, `:emax`, and `:num_particles`.
+
+# Returns
+- `(; mean_E, mean_N, Cv_mu, ln_Z_relative)`: a NamedTuple of `length(μs) × length(Ts)` matrices.
+"""
+function ideal_gas_reference_thermodynamic_stats(df::DataFrame,
+                                                  μs::AbstractVector{<:Real},
+                                                  Ts::AbstractVector{<:Real},
+                                                  n_walkers::Int, z0::Float64;
+                                                  n_cull::Int=1, ω0::Float64=1.0,
+                                                  kb::Float64=8.617333262e-5)
+    ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
+    Us = Vector{Float64}(df.emax)
+    Ns = Vector{Int}(df.num_particles)
+
+    nμ = length(μs)
+    nT = length(Ts)
+    mean_E = Matrix{Float64}(undef, nμ, nT)
+    mean_N = Matrix{Float64}(undef, nμ, nT)
+    Cv_mu = Matrix{Float64}(undef, nμ, nT)
+    ln_Z_rel = Matrix{Float64}(undef, nμ, nT)
+
+    for j in 1:nT
+        β = 1.0 / (kb * Ts[j])
+        for i in 1:nμ
+            μ = Float64(μs[i])
+            mean_E[i,j], mean_N[i,j], Cv_mu[i,j], ln_Z_rel[i,j] =
+                ideal_gas_reference_thermodynamic_stats(
+                    β, μ, ωi, Us, Ns; z0=z0, kb=kb)
+        end
+    end
+
+    return (mean_E=mean_E, mean_N=mean_N, Cv_mu=Cv_mu, ln_Z_relative=ln_Z_rel)
+end
+
+"""
+    effective_sample_size_ideal_gas_reference(β::Float64, μ::Float64,
+                                               ωi::Vector{Float64},
+                                               U::Vector{Float64},
+                                               N::AbstractVector{<:Integer};
+                                               z0::Float64,
+                                               T::Float64,
+                                               T0::Union{Float64,Nothing}=nothing,
+                                               kb::Float64=8.617333262e-5)
+
+Compute the importance-sampling effective sample size for reweighting a
+U-sorted ideal-gas-reference NS run from its sampling distribution
+``(z_0, T_0)`` to a target ``(\\mu, T)``.
+
+Per Eq. 3 of the companion proposal,
+
+```math
+r_j(\\mu, T; T_0) = (z(\\mu,T)/z_0)^{N_j} \\exp\\!\\left[-\\tfrac{U_j}{k_B}\\!\\left(\\tfrac{1}{T}-\\tfrac{1}{T_0}\\right)\\right],
+\\quad
+N_{\\mathrm{eff}}(\\mu, T) = \\frac{(\\sum_j \\omega_j r_j)^2}{\\sum_j \\omega_j^2 r_j^2}.
+```
+
+When `T0 === nothing`, defaults to `T0 = T` (the importance weight then
+contains only the fugacity ratio ``(z/z_0)^N``, with no temperature
+reweighting). Computation uses log-sum-exp on the log-weights for
+numerical stability.
+
+# Arguments
+- `β::Float64`: Target inverse temperature ``1/(k_B T)``.
+- `μ::Float64`: Target chemical potential.
+- `ωi::Vector{Float64}`: NS phase-space-volume weights per recorded sample.
+- `U::Vector{Float64}`: Potential energies per recorded sample.
+- `N::AbstractVector{<:Integer}`: Particle counts per recorded sample.
+- `z0::Float64`: Reference fugacity used during sampling.
+- `T::Float64`: Target temperature (K), used only via `1/T - 1/T0`. Should
+  satisfy ``\\beta = 1/(k_B T)`` consistently with the first argument.
+- `T0::Union{Float64,Nothing}`: Sampling reference temperature. `nothing`
+  ⇒ defaults to `T`.
+- `kb::Float64`: Boltzmann constant (default eV/K).
+
+# Returns
+- `N_eff::Float64`. Returns `NaN` if the sample is empty or if denominators vanish.
+"""
+function effective_sample_size_ideal_gas_reference(β::Float64, μ::Float64,
+                                                    ωi::Vector{Float64},
+                                                    U::Vector{Float64},
+                                                    N::AbstractVector{<:Integer};
+                                                    z0::Float64,
+                                                    T::Float64,
+                                                    T0::Union{Float64,Nothing}=nothing,
+                                                    kb::Float64=8.617333262e-5)
+    n = length(ωi)
+    if n != length(U) || n != length(N)
+        throw(DimensionMismatch("All input vectors must have the same length"))
+    end
+    if z0 <= 0.0
+        throw(ArgumentError("z0 must be positive, got $z0"))
+    end
+    if T <= 0.0
+        throw(ArgumentError("T must be positive, got $T"))
+    end
+    if T0 !== nothing && T0 <= 0.0
+        throw(ArgumentError("T0 must be positive, got $T0"))
+    end
+    if n == 0
+        return NaN
+    end
+
+    T0_eff = T0 === nothing ? T : T0
+    log_z0 = log(z0)
+    log_z = β * μ
+    inv_kbT = 1.0 / (kb * T)
+    inv_kbT0 = 1.0 / (kb * T0_eff)
+    delta_inv_kbT = inv_kbT - inv_kbT0
+
+    # log r_j = N_j (log z - log z0) - U_j (1/(k_B T) - 1/(k_B T0))
+    log_terms = Vector{Float64}(undef, n)
+    for i in 1:n
+        log_terms[i] = N[i] * (log_z - log_z0) - U[i] * delta_inv_kbT
+    end
+
+    # Sum_j ω_j r_j and Sum_j ω_j^2 r_j^2 via log-sum-exp
+    log_num_terms = Vector{Float64}(undef, n)
+    log_den_terms = Vector{Float64}(undef, n)
+    for i in 1:n
+        log_num_terms[i] = log(ωi[i]) + log_terms[i]
+        log_den_terms[i] = 2 * log(ωi[i]) + 2 * log_terms[i]
+    end
+
+    max_num = maximum(log_num_terms)
+    max_den = maximum(log_den_terms)
+
+    s_num = 0.0
+    s_den = 0.0
+    for i in 1:n
+        s_num += exp(log_num_terms[i] - max_num)
+        s_den += exp(log_den_terms[i] - max_den)
+    end
+
+    if s_num == 0.0 || s_den == 0.0 || !isfinite(s_num) || !isfinite(s_den)
+        return NaN
+    end
+
+    log_neff = 2 * (max_num + log(s_num)) - (max_den + log(s_den))
+    return exp(log_neff)
+end
+
+"""
+    effective_sample_size_ideal_gas_reference(df::DataFrame,
+                                               μs::AbstractVector{<:Real},
+                                               Ts::AbstractVector{<:Real},
+                                               n_walkers::Int, z0::Float64;
+                                               T0::Union{Float64,Nothing}=nothing,
+                                               n_cull::Int=1, ω0::Float64=1.0,
+                                               kb::Float64=8.617333262e-5)
+
+Sweep [`effective_sample_size_ideal_gas_reference`](@ref) over a 2D grid
+of ``(\\mu, T)`` from a U-sorted GCNS output DataFrame.
+
+# Returns
+- `N_eff::Matrix{Float64}` of size `length(μs) × length(Ts)`.
+"""
+function effective_sample_size_ideal_gas_reference(df::DataFrame,
+                                                    μs::AbstractVector{<:Real},
+                                                    Ts::AbstractVector{<:Real},
+                                                    n_walkers::Int, z0::Float64;
+                                                    T0::Union{Float64,Nothing}=nothing,
+                                                    n_cull::Int=1, ω0::Float64=1.0,
+                                                    kb::Float64=8.617333262e-5)
+    ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
+    Us = Vector{Float64}(df.emax)
+    Ns = Vector{Int}(df.num_particles)
+
+    nμ = length(μs)
+    nT = length(Ts)
+    Neff = Matrix{Float64}(undef, nμ, nT)
+
+    for j in 1:nT
+        T = Float64(Ts[j])
+        β = 1.0 / (kb * T)
+        for i in 1:nμ
+            μ = Float64(μs[i])
+            Neff[i,j] = effective_sample_size_ideal_gas_reference(
+                β, μ, ωi, Us, Ns; z0=z0, T=T, T0=T0, kb=kb)
+        end
+    end
+
+    return Neff
 end
 
 

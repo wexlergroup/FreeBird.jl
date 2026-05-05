@@ -28,6 +28,7 @@ export geometric_cluster_swap!
 export random_microstate!
 export lattice_insert_particle!, lattice_delete_particle!
 export MC_grand_canonical_walk!
+export MC_ideal_gas_reference_walk!
 
 export free_component_index, free_par_index
 

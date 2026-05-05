@@ -40,10 +40,15 @@ export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCNewSample, MCRejectionS
 
 export MCRandomWalkMaxEParallel, MCRandomWalkCloneParallel, MCDistributed
 
-# grand-canonical nested sampling
+# grand-canonical nested sampling (Ω-sorted)
 export GrandCanonicalNestedSamplingParameters
 export MCGrandCanonicalMoves
 export grand_canonical_nested_sampling
+
+# grand-canonical nested sampling (U-sorted, ideal-gas-reference)
+export LatticeGCNSIdealGasReferenceParameters
+export MCIdealGasReferenceMoves
+export ideal_gas_reference_grand_canonical_nested_sampling
 
 # other sampling schemes
 export exact_enumeration
@@ -61,6 +66,8 @@ abstract type SamplingParameters end
 include("helpers.jl")
 
 include("nested_sampling.jl")
+
+include("gc_nested_sampling_ideal_gas.jl")
 
 include("exact_enumeration.jl")
 

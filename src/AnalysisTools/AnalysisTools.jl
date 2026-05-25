@@ -10,6 +10,7 @@ using CSV, Arrow
 
 export read_output
 export ωᵢ, partition_function, internal_energy, cv
+export gc_thermodynamic_stats
 
 """
     read_output(filename::String)
@@ -206,6 +207,133 @@ function cv(Ts::Vector{Float64}, dof::Int, energy_bins::Vector{Float64}, entropy
         Cv[i] = (E2_avg[i] .- E_avg[i].^2) ./ (kb * temp.^2) .+ dof*kb/2
     end
     return Cv
+end
+
+
+"""
+    gc_thermodynamic_stats(β::Float64, ωi::Vector{Float64},
+                           grand_energies::Vector{Float64},
+                           energies::Vector{Float64},
+                           numbers::Vector{Int},
+                           μ::Float64;
+                           kb::Float64=8.617333262e-5)
+
+Compute grand-canonical thermodynamic averages from nested sampling output.
+
+The log-sum-exp trick is used for numerical stability. The grand-canonical
+heat capacity at constant μ is:
+
+    C_{V,μ} = k_B β² [Var(E) − μ Cov(E, N)]
+
+# Arguments
+- `β::Float64`: Inverse temperature 1/(k_B T).
+- `ωi::Vector{Float64}`: Phase-space volume weights from NS.
+- `grand_energies::Vector{Float64}`: Ω_i = E_i − μ N_i values.
+- `energies::Vector{Float64}`: E_i values.
+- `numbers::Vector{Int}`: N_i values.
+- `μ::Float64`: Chemical potential.
+- `kb::Float64`: Boltzmann constant (default: eV/K).
+
+# Returns
+- `(⟨E⟩, C_{V,μ}, ⟨N⟩)`: Mean energy, GC heat capacity, mean particle number.
+"""
+function gc_thermodynamic_stats(β::Float64,
+                                 ωi::Vector{Float64},
+                                 grand_energies::Vector{Float64},
+                                 energies::Vector{Float64},
+                                 numbers::Vector{Int},
+                                 μ::Float64;
+                                 kb::Float64=8.617333262e-5)
+    n = length(ωi)
+    if n != length(grand_energies) || n != length(energies) || n != length(numbers)
+        throw(DimensionMismatch("All input vectors must have the same length"))
+    end
+    if n == 0
+        return NaN, NaN, NaN
+    end
+
+    # Log-sum-exp for numerical stability
+    log_terms = [log(ωi[i]) - β * grand_energies[i] for i in 1:n]
+    max_log = maximum(log_terms)
+
+    z = 0.0
+    u = 0.0   # ⟨E⟩
+    u2 = 0.0  # ⟨E²⟩
+    n_sum = 0.0  # ⟨N⟩
+    en_sum = 0.0 # ⟨EN⟩
+
+    for i in 1:n
+        w = exp(log_terms[i] - max_log)
+        z += w
+        u += w * energies[i]
+        u2 += w * energies[i]^2
+        n_sum += w * numbers[i]
+        en_sum += w * energies[i] * numbers[i]
+    end
+
+    if z == 0.0
+        return NaN, NaN, NaN
+    end
+
+    u /= z
+    u2 /= z
+    n_avg = n_sum / z
+    en_avg = en_sum / z
+
+    var_e = u2 - u^2
+    cov_en = en_avg - u * n_avg
+
+    cv = kb * β^2 * (var_e - μ * cov_en)
+
+    return u, cv, n_avg
+end
+
+"""
+    gc_thermodynamic_stats(df::DataFrame, βs::Vector{Float64},
+                           n_walkers::Int, μ::Float64;
+                           n_cull::Int=1, ω0::Float64=1.0,
+                           kb::Float64=8.617333262e-5)
+
+Compute grand-canonical thermodynamic stats from a GC-NS output DataFrame.
+
+The DataFrame must have columns `:iter`, `:omega`, `:energy`, `:num_particles`.
+Adds the live-walker contribution to the end of the recorded samples for correct
+normalization.
+
+# Arguments
+- `df::DataFrame`: GC-NS output with columns `[:iter, :omega, :energy, :num_particles]`.
+- `βs::Vector{Float64}`: Inverse temperatures at which to evaluate.
+- `n_walkers::Int`: Number of walkers used in the NS run.
+- `μ::Float64`: Chemical potential.
+- `n_cull::Int=1`: Number of walkers culled per iteration.
+- `ω0::Float64=1.0`: Initial phase-space volume.
+- `kb::Float64`: Boltzmann constant (default: eV/K).
+
+# Returns
+- `(mean_E, Cv, mean_N)`: Vectors of ⟨E⟩, C_{V,μ}, and ⟨N⟩ at each β.
+"""
+function gc_thermodynamic_stats(df::DataFrame,
+                                 βs::Vector{Float64},
+                                 n_walkers::Int,
+                                 μ::Float64;
+                                 n_cull::Int=1,
+                                 ω0::Float64=1.0,
+                                 kb::Float64=8.617333262e-5)
+    ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
+    grand_es = df.omega
+    Es = df.energy
+    Ns = df.num_particles
+
+    mean_Es = Vector{Float64}(undef, length(βs))
+    Cvs = Vector{Float64}(undef, length(βs))
+    mean_Ns = Vector{Float64}(undef, length(βs))
+
+    Threads.@threads for (i, b) in collect(enumerate(βs))
+        mean_Es[i], Cvs[i], mean_Ns[i] = gc_thermodynamic_stats(
+            b, ωi, grand_es, Es, Ns, μ; kb=kb)
+    end
+
+    return mean_Es, Cvs, mean_Ns
 end
 
 

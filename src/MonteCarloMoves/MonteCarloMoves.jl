@@ -25,17 +25,20 @@ export generate_random_new_lattice_sample!
 export MC_mixed_moves!
 export MC_cluster_walk!
 export geometric_cluster_swap!
+export random_microstate!
+export lattice_insert_particle!, lattice_delete_particle!
+export MC_grand_canonical_walk!
 
 export free_component_index, free_par_index
 
 include("helpers.jl")
+
+include("cluster_moves.jl")
 
 include("random_walks.jl")
 
 include("atomistic_swaps.jl")
 
 include("mixed_moves.jl")
-
-include("cluster_moves.jl")
 
 end # module MonteCarloMoves

@@ -40,6 +40,11 @@ export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCNewSample, MCRejectionS
 
 export MCRandomWalkMaxEParallel, MCRandomWalkCloneParallel, MCDistributed
 
+# grand-canonical nested sampling
+export GrandCanonicalNestedSamplingParameters
+export MCGrandCanonicalMoves
+export grand_canonical_nested_sampling
+
 # other sampling schemes
 export exact_enumeration
 export wang_landau

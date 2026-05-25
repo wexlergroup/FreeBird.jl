@@ -668,3 +668,233 @@ function MC_cluster_walk!(n_steps::Int,
     end
     return accept_this_walker, n_accept / max(n_steps, 1), lattice
 end
+
+
+# ======================================================================
+# Grand-canonical move primitives
+# ======================================================================
+
+"""
+    random_microstate!(lattice::SLattice; p::Float64=0.5)
+
+Set each site occupied independently with probability `p`, producing a
+variable-N configuration suitable for grand-canonical sampling.
+
+# Arguments
+- `lattice::SLattice`: The single-component lattice to randomize.
+- `p::Float64=0.5`: Per-site occupation probability.
+
+# Returns
+- `lattice::SLattice`: The mutated lattice with a random microstate.
+"""
+function random_microstate!(lattice::SLattice; p::Float64=0.5)
+    for i in eachindex(lattice.components[1])
+        lattice.components[1][i] = rand() < p
+    end
+    return lattice
+end
+
+"""
+    lattice_insert_particle!(lattice::SLattice)
+
+Insert a particle at a random empty site. Returns `true` if successful,
+`false` if the lattice is full.
+
+# Arguments
+- `lattice::SLattice`: The single-component lattice.
+
+# Returns
+- `success::Bool`: Whether a particle was inserted.
+- `lattice::SLattice`: The mutated lattice.
+"""
+function lattice_insert_particle!(lattice::SLattice)
+    n_sites = num_sites(lattice)
+    n_occ = sum(lattice.components[1])
+    if n_occ >= n_sites
+        return false, lattice
+    end
+    # Collect empty site indices
+    empty_sites = findall(.!lattice.components[1])
+    site = rand(empty_sites)
+    lattice.components[1][site] = true
+    return true, lattice
+end
+
+"""
+    lattice_delete_particle!(lattice::SLattice)
+
+Delete a particle from a random occupied site. Returns `true` if successful,
+`false` if the lattice is empty.
+
+# Arguments
+- `lattice::SLattice`: The single-component lattice.
+
+# Returns
+- `success::Bool`: Whether a particle was deleted.
+- `lattice::SLattice`: The mutated lattice.
+"""
+function lattice_delete_particle!(lattice::SLattice)
+    n_occ = sum(lattice.components[1])
+    if n_occ == 0
+        return false, lattice
+    end
+    occupied_sites = findall(lattice.components[1])
+    site = rand(occupied_sites)
+    lattice.components[1][site] = false
+    return true, lattice
+end
+
+"""
+    MC_grand_canonical_walk!(n_steps::Int, lattice::LatticeWalker{1},
+                             h::ClassicalHamiltonian, omega_max::Float64,
+                             mu::Float64;
+                             p_move::Float64=0.5, p_insert::Float64=0.25,
+                             energy_perturb::Float64=0.0, n_max::Int=typemax(Int),
+                             clusters_freq::Int=0, swaps_freq::Int=1,
+                             cluster_p::Float64=0.3)
+
+Perform grand-canonical MCMC on a single-component lattice, mixing fixed-N
+moves (local swaps and/or geometric cluster moves) with single-site insertion
+and deletion.
+
+Each step:
+- With probability `p_move`: propose a fixed-N move (local swap or cluster move,
+  selected by `swaps_freq:clusters_freq` ratio).
+- With probability `p_insert`: propose inserting one particle.
+- With probability `1 - p_move - p_insert`: propose deleting one particle.
+
+Insert/delete proposals use a Metropolis correction to preserve the uniform
+prior over all microstates with Ω < Ω_max:
+- Insert ratio: `(p_delete / p_insert) * (M - N) / (N + 1)`
+- Delete ratio: `(p_insert / p_delete) * N / (M - N + 1)`
+
+Cluster moves are symmetric (no Metropolis correction), accepted if Ω < Ω_max.
+
+# Arguments
+- `n_steps::Int`: Number of MCMC steps.
+- `lattice::LatticeWalker{1}`: The walker (single component).
+- `h::ClassicalHamiltonian`: The lattice Hamiltonian.
+- `omega_max::Float64`: Upper bound on grand potential Ω = E − μN (unitless).
+- `mu::Float64`: Chemical potential (unitless, in same energy units as Hamiltonian).
+- `p_move::Float64=0.5`: Probability of a fixed-N move.
+- `p_insert::Float64=0.25`: Probability of an insertion move.
+- `energy_perturb::Float64=0.0`: Energy perturbation for degeneracy breaking.
+- `n_max::Int=typemax(Int)`: Upper bound on particle count.
+- `clusters_freq::Int=0`: Relative weight of cluster moves within fixed-N branch (0 = disabled).
+- `swaps_freq::Int=1`: Relative weight of local swaps within fixed-N branch.
+- `cluster_p::Float64=0.3`: Current cluster growth probability.
+
+# Returns
+- `accept_this_walker::Bool`: Whether at least one move was accepted.
+- `accept_rate::Float64`: Fraction of accepted moves.
+- `lattice::LatticeWalker{1}`: The updated walker.
+- `cluster_accepted_count::Int`: Number of accepted cluster moves (for adaptive tuning).
+- `cluster_total_count::Int`: Number of attempted cluster moves (for adaptive tuning).
+"""
+function MC_grand_canonical_walk!(n_steps::Int,
+                                  lattice::LatticeWalker{1},
+                                  h::ClassicalHamiltonian,
+                                  omega_max::Float64,
+                                  mu::Float64;
+                                  p_move::Float64=0.5,
+                                  p_insert::Float64=0.25,
+                                  energy_perturb::Float64=0.0,
+                                  n_max::Int=typemax(Int),
+                                  clusters_freq::Int=0,
+                                  swaps_freq::Int=1,
+                                  cluster_p::Float64=0.3)
+    if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
+        throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
+    end
+
+    n_accept = 0
+    accept_this_walker = false
+    p_delete = 1.0 - p_move - p_insert
+    n_sites = num_sites(lattice.configuration)
+    n_cap = min(n_sites, n_max)
+    omega_max_u = omega_max * unit(lattice.energy)
+
+    # Cluster move mixing: compute probability of cluster vs local swap within fixed-N branch
+    total_fixed_n_freq = clusters_freq + swaps_freq
+    p_cluster_in_move = total_fixed_n_freq > 0 ? clusters_freq / total_fixed_n_freq : 0.0
+
+    cluster_accepted_count = 0
+    cluster_total_count = 0
+
+    for _ in 1:n_steps
+        r = rand()
+        proposed_lattice = deepcopy(lattice.configuration)
+        n = sum(proposed_lattice.components[1])
+
+        if r < p_move
+            # Fixed-N branch: choose cluster or local swap
+            if p_cluster_in_move > 0.0 && rand() < p_cluster_in_move
+                # Geometric cluster move
+                geometric_cluster_swap!(proposed_lattice, cluster_p)
+                move_type = :cluster
+                cluster_total_count += 1
+            else
+                # Local swap
+                lattice_random_walk!(proposed_lattice)
+                move_type = :move
+            end
+        elseif r < p_move + p_insert
+            # Insertion
+            if n >= n_cap || p_insert <= 0.0
+                continue
+            end
+            success, proposed_lattice = lattice_insert_particle!(proposed_lattice)
+            if !success
+                continue
+            end
+            move_type = :insert
+        else
+            # Deletion
+            if n == 0 || p_delete <= 0.0
+                continue
+            end
+            success, proposed_lattice = lattice_delete_particle!(proposed_lattice)
+            if !success
+                continue
+            end
+            move_type = :delete
+        end
+
+        perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
+        proposed_energy = interacting_energy(proposed_lattice, h) + perturbation_energy
+        n_new = sum(proposed_lattice.components[1])
+        proposed_omega = proposed_energy - mu * n_new * unit(lattice.energy)
+
+        if proposed_omega >= omega_max_u
+            continue
+        end
+
+        # Metropolis correction for insert/delete detailed balance
+        # Cluster and local swap moves are symmetric — no correction needed
+        accept = true
+        if move_type == :insert
+            ratio = (p_delete / p_insert) * (n_sites - n) / (n + 1)
+            if ratio < 1.0 && rand() >= ratio
+                accept = false
+            end
+        elseif move_type == :delete
+            ratio = (p_insert / p_delete) * n / (n_sites - n + 1)
+            if ratio < 1.0 && rand() >= ratio
+                accept = false
+            end
+        end
+
+        if accept
+            lattice.configuration = proposed_lattice
+            lattice.energy = proposed_energy
+            n_accept += 1
+            accept_this_walker = true
+            if move_type == :cluster
+                cluster_accepted_count += 1
+            end
+        end
+    end
+
+    return accept_this_walker, n_accept / max(n_steps, 1), lattice,
+           cluster_accepted_count, cluster_total_count
+end

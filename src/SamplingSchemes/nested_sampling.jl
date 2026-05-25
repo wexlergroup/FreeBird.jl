@@ -254,6 +254,149 @@ A type for generating a new walker by performing rejection sampling. Currently, 
 """
 struct MCRejectionSampling <: MCRoutine end
 
+
+# ======================================================================
+# Grand-canonical nested sampling types
+# ======================================================================
+
+"""
+    struct MCGrandCanonicalMoves <: MCRoutine
+
+A type for generating a new walker using grand-canonical MCMC moves that mix
+fixed-N moves (local swaps and/or geometric cluster moves) with single-site
+particle insertion and deletion.
+
+# Fields
+- `p_move::Float64`: Probability of a fixed-N move per MCMC step (default 0.5).
+- `p_insert::Float64`: Probability of a particle insertion per step (default 0.25).
+  The deletion probability is `1 - p_move - p_insert`.
+- `clusters_freq::Int`: Relative weight of cluster moves within the fixed-N branch (default 0 = disabled).
+- `swaps_freq::Int`: Relative weight of local swaps within the fixed-N branch (default 1).
+- `initial_cluster_p::Float64`: Starting growth probability for geometric cluster moves (default 0.3).
+- `target_cluster_accept::Float64`: Target acceptance rate for adaptive cluster p tuning (default 0.3).
+- `cluster_adjust_interval::Int`: Number of NS iterations between cluster p adjustments (default 50).
+- `cluster_p_floor::Float64`: Lower bound for adaptive cluster p (default 0.01).
+- `cluster_p_ceiling::Float64`: Upper bound for adaptive cluster p (default 1.0).
+
+When `clusters_freq == 0` (the default), the fixed-N branch uses only local swaps
+(`lattice_random_walk!`), preserving backward compatibility with existing scripts.
+When `clusters_freq > 0`, the fixed-N branch mixes geometric cluster moves with
+local swaps according to the `clusters_freq:swaps_freq` ratio.
+"""
+struct MCGrandCanonicalMoves <: MCRoutine
+    p_move::Float64
+    p_insert::Float64
+    clusters_freq::Int
+    swaps_freq::Int
+    initial_cluster_p::Float64
+    target_cluster_accept::Float64
+    cluster_adjust_interval::Int
+    cluster_p_floor::Float64
+    cluster_p_ceiling::Float64
+    function MCGrandCanonicalMoves(;
+            p_move::Float64=0.5,
+            p_insert::Float64=0.25,
+            clusters_freq::Int=0,
+            swaps_freq::Int=1,
+            initial_cluster_p::Float64=0.3,
+            target_cluster_accept::Float64=0.3,
+            cluster_adjust_interval::Int=50,
+            cluster_p_floor::Float64=0.01,
+            cluster_p_ceiling::Float64=1.0)
+        if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
+            throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
+        end
+        new(p_move, p_insert, clusters_freq, swaps_freq,
+            initial_cluster_p, target_cluster_accept, cluster_adjust_interval,
+            cluster_p_floor, cluster_p_ceiling)
+    end
+end
+
+"""
+    mutable struct GrandCanonicalNestedSamplingParameters <: SamplingParameters
+
+Parameters for grand-canonical nested sampling on lattice systems.
+
+The grand potential Ω = E − μN is used as the sorting quantity. Walkers have
+variable particle count N, and the NS loop records (Ω, E, N) per iteration
+for thermodynamic reweighting.
+
+# Fields
+- `mc_steps::Int64`: MCMC steps per replacement walker.
+- `chemical_potential::Float64`: Chemical potential μ (unitless, in energy units of the Hamiltonian).
+- `energy_perturbation::Float64`: Perturbation to break energy degeneracies.
+- `random_seed::Int64`: Seed for the random number generator.
+- `fail_count::Int64`: Consecutive failed replacements.
+- `allowed_fail_count::Int64`: Maximum consecutive failures before warning.
+- `init_occupation_p::Float64`: Per-site occupation probability for initial walkers.
+- `n_max::Int64`: Upper bound on particle count per walker.
+- `cluster_p::Float64`: Current cluster growth probability (mutable runtime state).
+- `cluster_accepted::Float64`: Accepted cluster moves in current adjustment window.
+- `cluster_total::Float64`: Total cluster moves attempted in current adjustment window.
+- `cluster_p_history::Vector{Float64}`: Trajectory of cluster_p after each adjustment.
+- `cluster_accept_history::Vector{Float64}`: Acceptance rate at each adjustment.
+- `cluster_adjust_iterations::Vector{Int}`: NS iteration index at each adjustment.
+"""
+mutable struct GrandCanonicalNestedSamplingParameters <: SamplingParameters
+    mc_steps::Int64
+    chemical_potential::Float64
+    energy_perturbation::Float64
+    random_seed::Int64
+    fail_count::Int64
+    allowed_fail_count::Int64
+    init_occupation_p::Float64
+    n_max::Int64
+    cluster_p::Float64
+    cluster_accepted::Float64
+    cluster_total::Float64
+    cluster_p_history::Vector{Float64}
+    cluster_accept_history::Vector{Float64}
+    cluster_adjust_iterations::Vector{Int}
+end
+
+"""
+    GrandCanonicalNestedSamplingParameters(;
+        mc_steps=100, chemical_potential=0.0, energy_perturbation=1e-12,
+        random_seed=1234, fail_count=0, allowed_fail_count=10,
+        init_occupation_p=0.5, n_max=typemax(Int64),
+        cluster_p=0.3, cluster_accepted=0.0, cluster_total=0.0,
+        cluster_p_history=Float64[], cluster_accept_history=Float64[],
+        cluster_adjust_iterations=Int[])
+
+Convenience constructor for `GrandCanonicalNestedSamplingParameters`.
+
+The `n_max` parameter sets an upper bound on the number of particles per walker.
+Insertions are rejected when N ≥ n_max. Default is `typemax(Int64)` (no cap).
+
+The `cluster_*` fields are mutable runtime state for adaptive cluster move tuning.
+They are initialized from the static configuration on `MCGrandCanonicalMoves` at
+the start of `grand_canonical_nested_sampling` when `clusters_freq > 0`.
+"""
+function GrandCanonicalNestedSamplingParameters(;
+    mc_steps::Int64=100,
+    chemical_potential::Float64=0.0,
+    energy_perturbation::Float64=1e-12,
+    random_seed::Int64=1234,
+    fail_count::Int64=0,
+    allowed_fail_count::Int64=10,
+    init_occupation_p::Float64=0.5,
+    n_max::Int64=typemax(Int64),
+    cluster_p::Float64=0.3,
+    cluster_accepted::Float64=0.0,
+    cluster_total::Float64=0.0,
+    cluster_p_history::Vector{Float64}=Float64[],
+    cluster_accept_history::Vector{Float64}=Float64[],
+    cluster_adjust_iterations::Vector{Int}=Int[],
+)
+    GrandCanonicalNestedSamplingParameters(
+        mc_steps, chemical_potential, energy_perturbation,
+        random_seed, fail_count, allowed_fail_count,
+        init_occupation_p, n_max,
+        cluster_p, cluster_accepted, cluster_total,
+        cluster_p_history, cluster_accept_history, cluster_adjust_iterations,
+    )
+end
+
 """
     sort_by_energy!(liveset::LJAtomWalkers)
 
@@ -954,4 +1097,207 @@ function print_message(i, iter, emax, step_size, print_info, liveset::AtomWalker
         @info "MC move failed, step: $(i), emax: $(liveset.walkers[1].energy.val), step_size: $(round(step_size; sigdigits=4))"
     end
 end
-    
+
+
+# ======================================================================
+# Grand-canonical nested sampling
+# ======================================================================
+
+"""
+    _grand_potential(walker::LatticeWalker{1}, mu::Float64) -> typeof(0.0u"eV")
+
+Compute Ω = E − μN for a single-component lattice walker.
+"""
+function _grand_potential(walker::LatticeWalker{1}, mu::Float64)
+    n = sum(walker.configuration.components[1])
+    return walker.energy - mu * n * unit(walker.energy)
+end
+
+"""
+    _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonicalNestedSamplingParameters)
+
+Initialize walkers with random microstates for grand-canonical NS.
+Each site is occupied independently with probability `gc_params.init_occupation_p`.
+"""
+function _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonicalNestedSamplingParameters)
+    h = liveset.hamiltonian
+    n_max = gc_params.n_max
+    for walker in liveset.walkers
+        random_microstate!(walker.configuration; p=gc_params.init_occupation_p)
+        # Enforce n_max: if too many particles, randomly delete until N ≤ n_max
+        n_occ = sum(walker.configuration.components[1])
+        if n_occ > n_max
+            occupied = findall(walker.configuration.components[1])
+            shuffle!(occupied)
+            for i in 1:(n_occ - n_max)
+                walker.configuration.components[1][occupied[i]] = false
+            end
+        end
+        assign_energy!(walker, h; perturb_energy=gc_params.energy_perturbation)
+    end
+    return liveset
+end
+
+"""
+    nested_sampling_step!(liveset::LatticeGasWalkers,
+                          gc_params::GrandCanonicalNestedSamplingParameters,
+                          mc_routine::MCGrandCanonicalMoves;
+                          ns_iteration::Int=0)
+
+Perform one step of grand-canonical nested sampling.
+
+Sorts walkers by Ω = E − μN, removes the worst (highest Ω), clones a parent
+with Ω < Ω_worst, and decorrelates the clone via grand-canonical MCMC.
+
+# Returns
+- `iter`: Iteration number (or `missing` if the step failed).
+- `omega_max`: The Ω value of the removed walker (with units).
+- `energy`: The E value of the removed walker.
+- `num_particles`: The N value of the removed walker.
+- `liveset`: The updated liveset.
+- `gc_params`: The updated parameters.
+"""
+function nested_sampling_step!(liveset::LatticeGasWalkers,
+                               gc_params::GrandCanonicalNestedSamplingParameters,
+                               mc_routine::MCGrandCanonicalMoves;
+                               ns_iteration::Int=0)
+    ats = liveset.walkers
+    h = liveset.hamiltonian
+    mu = gc_params.chemical_potential
+    n_walkers = length(ats)
+
+    # Sort by grand potential (descending — worst first)
+    sort!(ats, by = w -> _grand_potential(w, mu), rev=true)
+
+    iter::Union{Missing,Int} = missing
+    worst = ats[1]
+    omega_worst = _grand_potential(worst, mu)
+    energy_worst = worst.energy
+    n_worst = sum(worst.configuration.components[1])
+
+    # Select parent: prefer walkers strictly below omega_worst
+    omega_max_val = omega_worst.val  # unitless for the MC function
+    eligible = [k for k in 2:n_walkers if _grand_potential(ats[k], mu) < omega_worst]
+    if !isempty(eligible)
+        parent_idx = rand(eligible)
+    else
+        parent_idx = rand(2:n_walkers)
+    end
+    to_walk = deepcopy(ats[parent_idx])
+
+    # Decorrelate via GC MCMC
+    accept, rate, to_walk, cl_accepted, cl_total = MC_grand_canonical_walk!(
+        gc_params.mc_steps, to_walk, h, omega_max_val, mu;
+        p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
+        energy_perturb=gc_params.energy_perturbation,
+        n_max=gc_params.n_max,
+        clusters_freq=mc_routine.clusters_freq,
+        swaps_freq=mc_routine.swaps_freq,
+        cluster_p=gc_params.cluster_p)
+
+    if accept
+        push!(ats, to_walk)
+        popfirst!(ats)
+        update_iter!(liveset)
+        gc_params.fail_count = 0
+        iter = liveset.walkers[1].iter
+    else
+        omega_worst = missing
+        energy_worst = missing
+        n_worst = missing
+        gc_params.fail_count += 1
+    end
+
+    # Accumulate cluster acceptance stats and adapt cluster_p
+    if cl_total > 0
+        gc_params.cluster_accepted += cl_accepted
+        gc_params.cluster_total += cl_total
+        if mc_routine.cluster_adjust_interval > 0 &&
+           gc_params.cluster_total >= mc_routine.cluster_adjust_interval
+            window_rate = gc_params.cluster_accepted / max(gc_params.cluster_total, 1.0)
+            adjust_cluster_p(gc_params, window_rate, ns_iteration;
+                             target=mc_routine.target_cluster_accept,
+                             floor=mc_routine.cluster_p_floor,
+                             ceiling=mc_routine.cluster_p_ceiling)
+            gc_params.cluster_accepted = 0.0
+            gc_params.cluster_total = 0.0
+        end
+    end
+
+    return iter, omega_worst, energy_worst, n_worst, liveset, gc_params
+end
+
+"""
+    grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
+                                    gc_params::GrandCanonicalNestedSamplingParameters,
+                                    n_steps::Int64,
+                                    mc_routine::MCGrandCanonicalMoves,
+                                    save_strategy::DataSavingStrategy)
+
+Run the grand-canonical nested sampling loop.
+
+Initializes walkers with random microstates, then iterates: remove the
+highest-Ω walker, record (Ω, E, N), replace with a decorrelated clone.
+
+# Arguments
+- `liveset::LatticeGasWalkers`: The initial liveset (walkers will be re-initialized).
+- `gc_params::GrandCanonicalNestedSamplingParameters`: GC-NS parameters including μ.
+- `n_steps::Int64`: Number of NS iterations.
+- `mc_routine::MCGrandCanonicalMoves`: The GC move routine.
+- `save_strategy::DataSavingStrategy`: Strategy for periodic output.
+
+# Returns
+- `df::DataFrame`: Columns `[:iter, :omega, :energy, :num_particles]`.
+- `liveset::LatticeGasWalkers`: The final liveset (surviving walkers).
+- `gc_params::GrandCanonicalNestedSamplingParameters`: Updated parameters.
+"""
+function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
+                                         gc_params::GrandCanonicalNestedSamplingParameters,
+                                         n_steps::Int64,
+                                         mc_routine::MCGrandCanonicalMoves,
+                                         save_strategy::DataSavingStrategy)
+    # Initialize walkers with random microstates
+    _init_gc_walkers!(liveset, gc_params)
+
+    # Initialize cluster_p and reset counters from MCGrandCanonicalMoves if applicable
+    if mc_routine.clusters_freq > 0
+        gc_params.cluster_p = mc_routine.initial_cluster_p
+        gc_params.cluster_accepted = 0.0
+        gc_params.cluster_total = 0.0
+        empty!(gc_params.cluster_p_history)
+        empty!(gc_params.cluster_accept_history)
+        empty!(gc_params.cluster_adjust_iterations)
+    end
+
+    df = DataFrame(iter=Int[], omega=Float64[], energy=Float64[], num_particles=Int[])
+
+    for i in 1:n_steps
+        print_info = i % save_strategy.n_info == 0
+        write_walker_every_n(liveset.walkers[1], i, save_strategy)
+
+        iter, omega, energy, n_par, liveset, gc_params = nested_sampling_step!(
+            liveset, gc_params, mc_routine; ns_iteration=i)
+
+        @debug "GC-NS step $i, iter: $iter, omega: $omega, energy: $energy, N: $n_par"
+
+        if gc_params.fail_count >= gc_params.allowed_fail_count
+            @warn "GC-NS: Failed $(gc_params.allowed_fail_count) times in a row."
+            gc_params.fail_count = 0
+        end
+
+        if !(iter isa typeof(missing))
+            push!(df, (iter, omega.val, energy.val, n_par))
+        end
+
+        if print_info && !(iter isa typeof(missing))
+            @info "GC-NS iter: $(iter), Ω: $(omega), E: $(energy), N: $(n_par)"
+        elseif print_info && iter isa typeof(missing)
+            @info "GC-NS MC move failed, step: $(i)"
+        end
+
+        write_df_every_n(df, i, save_strategy)
+        write_ls_every_n(liveset, i, save_strategy)
+    end
+
+    return df, liveset, gc_params
+end

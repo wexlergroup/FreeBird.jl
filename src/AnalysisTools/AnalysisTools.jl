@@ -7,10 +7,12 @@ module AnalysisTools
 
 using DataFrames
 using CSV, Arrow
+using Unitful
 
 export read_output
 export ωᵢ, partition_function, internal_energy, cv
 export gc_thermodynamic_stats
+export gc_thermodynamic_stats_fixed_N
 
 """
     read_output(filename::String)
@@ -334,6 +336,158 @@ function gc_thermodynamic_stats(df::DataFrame,
     end
 
     return mean_Es, Cvs, mean_Ns
+end
+
+
+"""
+    _thermal_wavelength(atomic_mass::typeof(1.0u"u"), T::Unitful.Temperature) -> typeof(1.0u"Å")
+
+Compute the thermal de Broglie wavelength `Λ = h / sqrt(2π m k_B T)` in Å.
+Internal helper for `gc_thermodynamic_stats_fixed_N`.
+"""
+function _thermal_wavelength(atomic_mass::typeof(1.0u"u"), T::Unitful.Temperature)
+    return uconvert(u"Å", Unitful.h / sqrt(2π * atomic_mass * Unitful.k * T))
+end
+
+"""
+    _log_factorial(n::Integer) -> Float64
+
+Return `log(n!)` for small non-negative `n`, computed by summing `log(k)` to
+keep the result exact in floating point for `n` up to several dozen.
+"""
+function _log_factorial(n::Integer)
+    n < 0 && throw(ArgumentError("n must be non-negative"))
+    n == 0 && return 0.0
+    return sum(log, 1:n)
+end
+
+"""
+    gc_thermodynamic_stats_fixed_N(ns_outputs, N_values, V, atomic_mass, μ_grid, T_grid;
+                                   n_walkers=120, n_cull=1, ω0=1.0,
+                                   kb=8.617333262e-5)
+
+Compute grand-canonical thermodynamic averages from a stack of canonical
+nested-sampling outputs, one per fixed particle number `N`.
+
+For each `N`, the canonical NS evidence at inverse temperature `β` is
+
+```math
+Z_{\\mathrm{NS}}^{(N)}(\\beta) = \\sum_i \\omega_i \\exp(-\\beta E_i)
+```
+
+— the prior-volume-normalized configurational integral. The absolute
+configurational partition function is `Z_N^{config}(\\beta) = V^N \\cdot Z_{NS}^{(N)}(\\beta)`.
+The grand partition function is assembled as
+
+```math
+\\Xi(\\mu, T) = \\sum_N \\frac{(zV)^N}{N!}\\, Z_{\\mathrm{NS}}^{(N)}(\\beta),
+\\qquad z = \\frac{\\exp(\\beta\\mu)}{\\Lambda(T)^3}
+```
+
+with the thermal wavelength `Λ(T) = h / sqrt(2π m k_B T)` computed from `atomic_mass`.
+The sum runs over the supplied `N_values`, which must include `0` (the empty
+configuration, `Z_{NS}^{(0)} = 1`). Truncation error at the upper end of `N_values`
+is bounded by the tail of `(zV)^N / N!` for the largest `⟨N⟩` requested.
+
+A log-sum-exp pass is used both inside each per-N evidence and across the
+grand sum for numerical stability.
+
+# Arguments
+- `ns_outputs::AbstractVector{<:DataFrame}`: one canonical-NS output per `N`,
+  each with columns `[:iter, :emax]` (matching the schema produced by
+  `nested_sampling`).
+- `N_values::AbstractVector{<:Integer}`: particle counts corresponding to each
+  DataFrame. Must include `0`; `length(N_values) == length(ns_outputs)`.
+- `V::typeof(1.0u"Å^3")`: accessible configurational volume (explicit; for
+  surface systems this is *not* the simulation-box volume).
+- `atomic_mass::typeof(1.0u"u")`: per-atom mass for `Λ(T)`.
+- `μ_grid::AbstractVector{<:typeof(1.0u"eV")}`: chemical potentials.
+- `T_grid::AbstractVector{<:Unitful.Temperature}`: temperatures.
+
+# Keyword arguments
+- `n_walkers::Int=120`: number of NS walkers used to produce each DataFrame.
+  Must be uniform across `ns_outputs`.
+- `n_cull::Int=1`: NS culls per iteration.
+- `ω0::Float64=1.0`: initial prior weight, passed to `ωᵢ`.
+- `kb::Float64`: Boltzmann constant in eV/K.
+
+# Returns
+A `NamedTuple` `(Xi, mean_N, var_N, mean_U)`. Each field is a `Matrix{Float64}`
+of size `(length(μ_grid), length(T_grid))` indexed `[i_μ, i_T]`. `Xi` is the
+absolute grand partition function, `mean_N` is `⟨N⟩`, `var_N` is `⟨N²⟩ − ⟨N⟩²`,
+and `mean_U` is `⟨E⟩` (grand-canonical, in eV).
+"""
+function gc_thermodynamic_stats_fixed_N(
+    ns_outputs::AbstractVector{<:DataFrame},
+    N_values::AbstractVector{<:Integer},
+    V::typeof(1.0u"Å^3"),
+    atomic_mass::typeof(1.0u"u"),
+    μ_grid::AbstractVector{<:typeof(1.0u"eV")},
+    T_grid::AbstractVector{<:Unitful.Temperature};
+    n_walkers::Int=120,
+    n_cull::Int=1,
+    ω0::Float64=1.0,
+    kb::Float64=8.617333262e-5,
+)
+    if length(ns_outputs) != length(N_values)
+        throw(DimensionMismatch("ns_outputs and N_values must have the same length"))
+    end
+    if !(0 in N_values)
+        throw(ArgumentError("N_values must include 0 (the empty configuration)"))
+    end
+
+    N_int = collect(Int, N_values)
+    n_N = length(N_int)
+    n_mu = length(μ_grid)
+    n_T = length(T_grid)
+    V_val = ustrip(u"Å^3", V)
+
+    log_Z_NS = Matrix{Float64}(undef, n_N, n_T)
+    mean_E_N = Matrix{Float64}(undef, n_N, n_T)
+
+    for (i, df) in enumerate(ns_outputs)
+        ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
+        Es = df.emax
+        for (j, T) in enumerate(T_grid)
+            β = 1.0 / (kb * ustrip(u"K", T))
+            log_terms = log.(ωi) .- β .* Es
+            max_log = maximum(log_terms)
+            ws = exp.(log_terms .- max_log)
+            sum_w = sum(ws)
+            log_Z_NS[i, j] = max_log + log(sum_w)
+            mean_E_N[i, j] = sum(ws .* Es) / sum_w
+        end
+    end
+
+    log_fact = [_log_factorial(N) for N in N_int]
+
+    Xi = Matrix{Float64}(undef, n_mu, n_T)
+    mean_N = Matrix{Float64}(undef, n_mu, n_T)
+    var_N = Matrix{Float64}(undef, n_mu, n_T)
+    mean_U = Matrix{Float64}(undef, n_mu, n_T)
+
+    for (j, T) in enumerate(T_grid)
+        β = 1.0 / (kb * ustrip(u"K", T))
+        Λ_val = ustrip(u"Å", _thermal_wavelength(atomic_mass, T))
+        log_V_over_Λ3 = log(V_val) - 3 * log(Λ_val)
+        for (k, μ) in enumerate(μ_grid)
+            μ_val = ustrip(u"eV", μ)
+            log_zV = β * μ_val + log_V_over_Λ3
+
+            log_w = log_Z_NS[:, j] .+ N_int .* log_zV .- log_fact
+            max_log = maximum(log_w)
+            ws = exp.(log_w .- max_log)
+            sum_w = sum(ws)
+
+            Xi[k, j] = exp(max_log) * sum_w
+            mean_N[k, j] = sum(ws .* N_int) / sum_w
+            mean_N2 = sum(ws .* (N_int .^ 2)) / sum_w
+            var_N[k, j] = mean_N2 - mean_N[k, j]^2
+            mean_U[k, j] = sum(ws .* view(mean_E_N, :, j)) / sum_w
+        end
+    end
+
+    return (Xi=Xi, mean_N=mean_N, var_N=var_N, mean_U=mean_U)
 end
 
 

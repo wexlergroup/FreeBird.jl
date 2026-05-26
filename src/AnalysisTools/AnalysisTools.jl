@@ -364,7 +364,7 @@ end
 """
     gc_thermodynamic_stats_fixed_N(ns_outputs, N_values, V, atomic_mass, μ_grid, T_grid;
                                    n_walkers=120, n_cull=1, ω0=1.0,
-                                   kb=8.617333262e-5)
+                                   live_emax=nothing, kb=8.617333262e-5)
 
 Compute grand-canonical thermodynamic averages from a stack of canonical
 nested-sampling outputs, one per fixed particle number `N`.
@@ -385,17 +385,31 @@ The grand partition function is assembled as
 ```
 
 with the thermal wavelength `Λ(T) = h / sqrt(2π m k_B T)` computed from `atomic_mass`.
-The sum runs over the supplied `N_values`, which must include `0` (the empty
-configuration, `Z_{NS}^{(0)} = 1`). Truncation error at the upper end of `N_values`
-is bounded by the tail of `(zV)^N / N!` for the largest `⟨N⟩` requested.
+The sum runs over the supplied `N_values`, which must include `0`. The `N=0` sector
+is treated specially: `Z_{NS}^{(0)} = 1` by definition (the empty configuration has no
+spatial integral), so the corresponding DataFrame contents are ignored. Truncation
+error at the upper end of `N_values` is bounded by the tail of `(zV)^N / N!` for the
+largest `⟨N⟩` requested.
 
 A log-sum-exp pass is used both inside each per-N evidence and across the
 grand sum for numerical stability.
 
+## Live-set tail correction
+
+After a finite number of NS iterations `n_iters` the recorded weights `ωᵢ` carry
+only `1 − (K/(K+n_cull))^{n_iters}` of the prior volume (times `ω0`); the remainder
+sits in the `K` surviving live walkers. Supplying `live_emax` (one vector of K live
+walker energies per `N`) adds the live-set tail to each per-N evidence: each live
+walker contributes weight `ω0 · (K/(K+n_cull))^{n_iters} / K` at its current energy.
+When omitted, the live-set tail is neglected — for ratio observables (`⟨N⟩`, `⟨U⟩`)
+the resulting bias is small but visible at low T or shallow NS; for the absolute
+`Ξ` it appears as a uniform-in-N prefactor that does not cancel.
+
 # Arguments
 - `ns_outputs::AbstractVector{<:DataFrame}`: one canonical-NS output per `N`,
   each with columns `[:iter, :emax]` (matching the schema produced by
-  `nested_sampling`).
+  `nested_sampling`). The entry corresponding to `N=0` is ignored and may be
+  any DataFrame (e.g., `DataFrame(iter=Int[], emax=Float64[])`).
 - `N_values::AbstractVector{<:Integer}`: particle counts corresponding to each
   DataFrame. Must include `0`; `length(N_values) == length(ns_outputs)`.
 - `V::typeof(1.0u"Å^3")`: accessible configurational volume (explicit; for
@@ -409,6 +423,9 @@ grand sum for numerical stability.
   Must be uniform across `ns_outputs`.
 - `n_cull::Int=1`: NS culls per iteration.
 - `ω0::Float64=1.0`: initial prior weight, passed to `ωᵢ`.
+- `live_emax::Union{Nothing,AbstractVector{<:AbstractVector{<:Real}}}=nothing`:
+  when supplied, one vector of `K = n_walkers` live walker energies (in eV) per
+  `N`. The entry for `N=0` is ignored. See "Live-set tail correction" above.
 - `kb::Float64`: Boltzmann constant in eV/K.
 
 # Returns
@@ -427,6 +444,7 @@ function gc_thermodynamic_stats_fixed_N(
     n_walkers::Int=120,
     n_cull::Int=1,
     ω0::Float64=1.0,
+    live_emax::Union{Nothing,AbstractVector{<:AbstractVector{<:Real}}}=nothing,
     kb::Float64=8.617333262e-5,
 )
     if length(ns_outputs) != length(N_values)
@@ -434,6 +452,9 @@ function gc_thermodynamic_stats_fixed_N(
     end
     if !(0 in N_values)
         throw(ArgumentError("N_values must include 0 (the empty configuration)"))
+    end
+    if live_emax !== nothing && length(live_emax) != length(N_values)
+        throw(DimensionMismatch("live_emax and N_values must have the same length"))
     end
 
     N_int = collect(Int, N_values)
@@ -446,16 +467,38 @@ function gc_thermodynamic_stats_fixed_N(
     mean_E_N = Matrix{Float64}(undef, n_N, n_T)
 
     for (i, df) in enumerate(ns_outputs)
+        # The N = 0 sector is the empty configuration: Z_NS^{(0)} = 1 by
+        # definition. The corresponding DataFrame contents are ignored.
+        if N_int[i] == 0
+            log_Z_NS[i, :] .= 0.0
+            mean_E_N[i, :] .= 0.0
+            continue
+        end
+
         ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
-        Es = df.emax
+        Es = collect(Float64, df.emax)
+        n_iters = length(df.iter)
+        # Each live walker carries weight ω0 · (K/(K+n_cull))^n_iters / K,
+        # accounting for the prior volume that finite termination leaves in
+        # the live set.
+        log_tail = log(ω0) + n_iters * log(n_walkers / (n_walkers + n_cull)) -
+                   log(n_walkers)
         for (j, T) in enumerate(T_grid)
             β = 1.0 / (kb * ustrip(u"K", T))
-            log_terms = log.(ωi) .- β .* Es
+            if live_emax === nothing
+                log_terms = log.(ωi) .- β .* Es
+                Es_all = Es
+            else
+                Es_live = collect(Float64, live_emax[i])
+                log_terms = vcat(log.(ωi) .- β .* Es,
+                                 log_tail .- β .* Es_live)
+                Es_all = vcat(Es, Es_live)
+            end
             max_log = maximum(log_terms)
             ws = exp.(log_terms .- max_log)
             sum_w = sum(ws)
             log_Z_NS[i, j] = max_log + log(sum_w)
-            mean_E_N[i, j] = sum(ws .* Es) / sum_w
+            mean_E_N[i, j] = sum(ws .* Es_all) / sum_w
         end
     end
 

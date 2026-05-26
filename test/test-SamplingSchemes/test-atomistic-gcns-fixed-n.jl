@@ -390,3 +390,302 @@ end
         @test out.mean_U[2, 1] <= 1e-3
     end
 end
+
+
+@testset "Atomistic GC-NS, fixed-N construction (LJ on LJ(111) surface)" begin
+    using Random
+
+    # ===== Substrate: LJ(111) slab =======================================
+    # 2x2 in-plane rectangular supercell, 3 layers ABC stacking, all frozen.
+    # In-plane NN distance a = 2^(1/6) σ (the LJ minimum). The rectangular
+    # primitive cell on a (111) plane has dimensions (a, a√3) with 2 atoms
+    # per cell; ABC stacking places adjacent layers at the up- and down-
+    # triangle centroids of the layer below. Inter-layer spacing a√(2/3)
+    # is the FCC (111) value. Box-x is technically shorter than 2·cutoff
+    # (same convention as the 3D LJ fluid block above) so PBC self-image
+    # contributions are present but appear as a constant offset that both
+    # NS and NVT see identically — the cross-check remains valid.
+    σ_val = 2.5
+    ε_val = 0.01
+    a = 2^(1/6) * σ_val
+    Δz_layer = a * sqrt(2/3)
+    Lx = 2.0 * a
+    Ly = 2.0 * a * sqrt(3.0)
+    Lz = 22.0  # vacuum above 3-layer slab > 2·cutoff = 15 Å
+
+    # Layer-internal positions, given as fractions of the primitive
+    # rectangle (Lx/2, Ly/2): A = layer with 2 atoms at primitive corners;
+    # B and C are the up- and down-triangle centroids of A.
+    layer_offsets = [
+        [(0.0, 0.0), (0.5, 0.5)],         # A
+        [(0.5, 1.0/6.0), (0.0, 2.0/3.0)], # B
+        [(0.5, 5.0/6.0), (0.0, 1.0/3.0)], # C
+    ]
+
+    function _build_substrate_positions()
+        positions = Pair{Symbol, Vector{Float64}}[]
+        for (l, layer) in enumerate(layer_offsets)
+            z_frac = (l - 1) * Δz_layer / Lz
+            for (fx_prim, fy_prim) in layer
+                for ix in 0:1, iy in 0:1
+                    fx = (ix + fx_prim) / 2.0
+                    fy = (iy + fy_prim) / 2.0
+                    push!(positions, :Ar => [fx, fy, z_frac])
+                end
+            end
+        end
+        return positions
+    end
+
+    box = [[Lx * u"Å", 0u"Å", 0u"Å"],
+           [0u"Å", Ly * u"Å", 0u"Å"],
+           [0u"Å", 0u"Å", Lz * u"Å"]]
+    V_box = (Lx * Ly * Lz) * u"Å^3"
+    mass = 40.0u"u"
+
+    lj = LJParameters(epsilon=ε_val, sigma=σ_val, cutoff=3.0, shift=true)
+    # 2-component CPS for adsorbate × surface: [aa, as, ss] all identical.
+    ljs = CompositeParameterSets(2, [lj, lj, lj])
+
+    substrate_positions = _build_substrate_positions()
+    substrate_sys = FastSystem(periodic_system(substrate_positions, box, fractional=true))
+    surface = AtomWalker(substrate_sys; freeze_species=[:Ar])
+    surface.energy_frozen_part = interacting_energy(surface.configuration, lj)
+    E_surf_self = ustrip(u"eV", surface.energy_frozen_part)
+
+    T_val = 200.0u"K"
+    T_grid = [T_val]
+    kb = 8.617333262e-5
+    β = 1.0 / (kb * ustrip(u"K", T_val))
+
+    N_values = collect(0:4)
+    K = 48
+    mc_steps = 500
+    n_ns_steps = 800
+    n_equi = 2000
+    n_sample = 8000
+
+    # ----- Adsorbate placement: above hollow-ish xy sites, well above the
+    # top substrate layer (z = 2 Δz_layer + 1.5 σ).
+    top_z_frac = 2 * Δz_layer / Lz
+    init_z_frac = top_z_frac + (1.5 * σ_val) / Lz
+    hollow_sites = [(0.25, 0.25),
+                    (0.75, 0.25),
+                    (0.25, 0.75),
+                    (0.75, 0.75)]
+
+    function _place_n_adsorbates(N::Int)
+        positions = Pair{Symbol, Vector{Float64}}[]
+        for i in 1:N
+            fx, fy = hollow_sites[i]
+            fx += 0.02 * (rand() - 0.5)
+            fy += 0.02 * (rand() - 0.5)
+            fz = init_z_frac + 0.01 * (rand() - 0.5)
+            push!(positions, :Ar => [fx, fy, fz])
+        end
+        return positions
+    end
+
+    function _build_liveset_N(N::Int)
+        walkers = [AtomWalker(FastSystem(periodic_system(_place_n_adsorbates(N), box, fractional=true)))
+                   for _ in 1:K]
+        return LJSurfaceWalkers(walkers, ljs, surface)
+    end
+
+    function _run_ns_at_N_surface(N::Int, seed::Int)
+        Random.seed!(seed)
+        liveset = _build_liveset_N(N)
+        ns_params = NestedSamplingParameters(
+            mc_steps=mc_steps,
+            initial_step_size=0.3,
+            step_size=0.3,
+            step_size_lo=0.01,
+            step_size_up=2.0,
+            accept_range=(0.25, 0.75),
+            allowed_fail_count=1000,
+            energy_perturbation=1e-12,
+        )
+        save_strategy = SaveEveryN(
+            df_filename="_test_surf_ns_$(N).csv",
+            wk_filename="_test_surf_ns_$(N).traj.extxyz",
+            ls_filename="_test_surf_ns_$(N).ls.extxyz",
+            n_traj=100_000,
+            n_snap=100_000,
+            n_info=100_000,
+        )
+        df, final_liveset, _ = nested_sampling(
+            liveset, ns_params, n_ns_steps, MCRandomWalkClone(), save_strategy)
+        live_emax_N = [ustrip(u"eV", w.energy) for w in final_liveset.walkers]
+        rm("_test_surf_ns_$(N).csv", force=true)
+        rm("_test_surf_ns_$(N).traj.extxyz", force=true)
+        rm("_test_surf_ns_$(N).ls.extxyz", force=true)
+        return df, live_emax_N
+    end
+
+    # Bespoke NVT MC loop with surface support. The production
+    # `nvt_monte_carlo` does not yet take a surface argument; this mirrors
+    # the surface-aware `MC_random_walk!` from `MonteCarloMoves` but
+    # accepts on the Metropolis-Hastings ratio at temperature T.
+    function _run_nvt_at_N_surface(N::Int, seed::Int)
+        Random.seed!(seed)
+        sys = FastSystem(periodic_system(_place_n_adsorbates(N), box, fractional=true))
+        walker = AtomWalker(sys)
+        walker.energy = interacting_energy(
+            walker.configuration, ljs, walker.list_num_par, walker.frozen,
+            surface.configuration) + surface.energy_frozen_part
+
+        step_size = 0.3
+        kbT_eV = kb * ustrip(u"K", T_val)
+
+        function inner!(n_steps)
+            energies = Vector{Float64}(undef, n_steps)
+            for i in 1:n_steps
+                config = walker.configuration
+                free_index = FreeBird.MonteCarloMoves.free_par_index(walker)
+                if isempty(free_index)
+                    energies[i] = ustrip(u"eV", walker.energy)
+                    continue
+                end
+                i_at = rand(free_index)
+                prewalk = FreeBird.EnergyEval.single_site_energy(
+                    i_at, config, ljs, walker.list_num_par, surface.configuration)
+                pos = position(config, i_at)
+                orig = pos
+                pos = FreeBird.MonteCarloMoves.single_atom_random_walk!(pos, step_size)
+                pos = FreeBird.MonteCarloMoves.periodic_boundary_wrap!(pos, config)
+                config.position[i_at] = pos
+                postwalk = FreeBird.EnergyEval.single_site_energy(
+                    i_at, config, ljs, walker.list_num_par, surface.configuration)
+                ΔE = postwalk - prewalk
+                if ΔE < 0.0u"eV" || rand() < exp(-ustrip(u"eV", ΔE) / kbT_eV)
+                    walker.energy = walker.energy + ΔE
+                else
+                    config.position[i_at] = orig
+                end
+                energies[i] = ustrip(u"eV", walker.energy)
+            end
+            return energies
+        end
+
+        inner!(n_equi)
+        energies_sample = inner!(n_sample)
+        return mean(energies_sample)
+    end
+
+    # ===== Run NS at each N >= 1 ========================================
+    # N = 0 is handled by gc_thermodynamic_stats_fixed_N's special case.
+    # N = 1 is non-trivial here (single adsorbate sees the substrate's
+    # attractive potential), unlike the 3D LJ fluid block where N = 1 has
+    # E ≡ 0 and NS cannot make progress.
+    ns_outputs = Vector{DataFrame}(undef, length(N_values))
+    live_emax_all = Vector{Vector{Float64}}(undef, length(N_values))
+    ns_outputs[1] = DataFrame(iter=Int[], emax=Float64[])
+    live_emax_all[1] = Float64[]
+
+    for (idx, N) in enumerate(N_values)
+        N == 0 && continue
+        df, live_emax_N = _run_ns_at_N_surface(N, 3000 + N)
+        ns_outputs[idx] = df
+        live_emax_all[idx] = live_emax_N
+    end
+
+    @testset "NS run schema and basic shape" begin
+        for (idx, N) in enumerate(N_values)
+            N == 0 && continue
+            df = ns_outputs[idx]
+            @test names(df) == ["iter", "emax"]
+            @test nrow(df) >= 0.5 * n_ns_steps
+            @test length(live_emax_all[idx]) == K
+        end
+    end
+
+    # ===== Per-N ⟨U⟩: NS vs NVT cross-check =============================
+    # Compare on the adsorbate contribution ⟨U⟩ − E_surf_self, since the
+    # constant substrate self-energy dominates the absolute scale and would
+    # otherwise make rtol-based agreement trivially pass.
+    function _U_with_tail(df::DataFrame, live_emax_N::Vector{Float64})
+        ωi = ωᵢ(df.iter, K)
+        n_iters = length(df.iter)
+        tail_w = (K / (K + 1))^n_iters / K
+        ωi_full = vcat(ωi, fill(tail_w, K))
+        Es_full = vcat(collect(Float64, df.emax), live_emax_N)
+        return internal_energy(β, ωi_full, Es_full)
+    end
+
+    U_NVT_by_N = Dict{Int, Float64}()
+    for N in N_values
+        N == 0 && continue
+        U_NVT_by_N[N] = _run_nvt_at_N_surface(N, 4000 + N)
+    end
+
+    @testset "NS-vs-NVT ⟨U⟩_N agreement at T = 200 K" begin
+        # rtol/atol inherited from the 3D LJ fluid block: loose enough to
+        # absorb the documented small-K NS sampling bias in the
+        # supercritical-but-cold regime, tight enough to catch
+        # normalization, unit-conversion, or sign bugs in the per-N
+        # evidence assembly. Comparison is on the adsorbate part of ⟨U⟩
+        # (total minus the constant substrate self-energy), because the
+        # constant offset would otherwise dwarf any disagreement.
+        for (idx, N) in enumerate(N_values)
+            N == 0 && continue
+            U_NS_ads = _U_with_tail(ns_outputs[idx], live_emax_all[idx]) - E_surf_self
+            U_NVT_ads = U_NVT_by_N[N] - E_surf_self
+            @test isapprox(U_NS_ads, U_NVT_ads; rtol=0.60, atol=3e-3)
+            # Adsorbate part should be non-positive in the attractive
+            # regime (single Ar binds to the substrate at ~−3ε).
+            @test U_NS_ads <= 1e-4
+        end
+    end
+
+    @testset "Per-N ⟨U⟩ decreases (more negative) with N" begin
+        # Each adsorbate adds attractive surface and (for N ≥ 2)
+        # attractive lateral contributions. Allow 1 meV slack per step.
+        U_N_vec = Float64[]
+        push!(U_N_vec, 0.0)  # adsorbate contribution at N = 0 is 0
+        for (idx, N) in enumerate(N_values)
+            N == 0 && continue
+            push!(U_N_vec, _U_with_tail(ns_outputs[idx], live_emax_all[idx]) - E_surf_self)
+        end
+        for i in 2:length(U_N_vec)
+            @test U_N_vec[i] <= U_N_vec[i-1] + 1e-3
+        end
+    end
+
+    # ===== End-to-end Ξ(μ, T) via gc_thermodynamic_stats_fixed_N ========
+    # V passed is the simulation-box volume = NS prior volume per particle
+    # (NOT a slab or adsorption-region volume). The substrate's
+    # contribution to the configurational integral is fully captured by
+    # the Boltzmann factor exp(−βU) in the per-N NS evidence; no
+    # geometric V reduction is needed.
+    #
+    # μ window placed in the dilute-coverage regime. With ε = 0.01 eV
+    # and a single-adsorbate binding of roughly −3 ε at hollow sites, we
+    # expect ⟨N⟩ ~ 1–3 across the chosen μ pair.
+    μ_grid = [-0.235u"eV", -0.215u"eV"]
+
+    out = gc_thermodynamic_stats_fixed_N(
+        ns_outputs, N_values, V_box, mass, μ_grid, T_grid;
+        n_walkers=K, live_emax=live_emax_all)
+
+    @testset "End-to-end Ξ assembly: returns expected shape" begin
+        @test size(out.Xi) == (length(μ_grid), length(T_grid))
+        @test size(out.mean_N) == (length(μ_grid), length(T_grid))
+        @test size(out.var_N) == (length(μ_grid), length(T_grid))
+        @test size(out.mean_U) == (length(μ_grid), length(T_grid))
+        @test all(out.Xi .> 0)
+        @test all(out.mean_N .>= 0)
+        @test all(out.var_N .>= 0)
+    end
+
+    @testset "⟨N⟩ in sub-monolayer window for chosen μ" begin
+        # Monolayer capacity ≈ 8 hollow sites on the 2x2 (111) supercell;
+        # sub-monolayer means ⟨N⟩ well below 8.
+        @test 0.1 < out.mean_N[1, 1] < 4.5
+        @test 0.1 < out.mean_N[2, 1] < 4.5
+    end
+
+    @testset "Ξ and ⟨N⟩ monotone in μ at fixed T" begin
+        @test out.Xi[2, 1] > out.Xi[1, 1]
+        @test out.mean_N[2, 1] > out.mean_N[1, 1]
+    end
+end

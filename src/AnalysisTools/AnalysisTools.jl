@@ -412,8 +412,12 @@ the resulting bias is small but visible at low T or shallow NS; for the absolute
   any DataFrame (e.g., `DataFrame(iter=Int[], emax=Float64[])`).
 - `N_values::AbstractVector{<:Integer}`: particle counts corresponding to each
   DataFrame. Must include `0`; `length(N_values) == length(ns_outputs)`.
-- `V::typeof(1.0u"Å^3")`: accessible configurational volume (explicit; for
-  surface systems this is *not* the simulation-box volume).
+- `V::typeof(1.0u"Å^3")`: the simulation-box volume, i.e. the NS prior volume
+  per particle (NS samples positions uniformly over the box). This is what
+  closes `Z_N^{config} = V^N · Z_{NS}^{(N)}`, so it must *not* be reduced to an
+  accessible or adsorption-region sub-volume. For surface systems the
+  substrate's volume exclusion is captured by the Boltzmann factor inside
+  `Z_{NS}^{(N)}`, not by shrinking `V`.
 - `atomic_mass::typeof(1.0u"u")`: per-atom mass for `Λ(T)`.
 - `μ_grid::AbstractVector{<:typeof(1.0u"eV")}`: chemical potentials.
 - `T_grid::AbstractVector{<:Unitful.Temperature}`: temperatures.

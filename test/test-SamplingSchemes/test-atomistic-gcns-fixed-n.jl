@@ -179,9 +179,20 @@ end
         return positions
     end
 
+    # Uniform-prior NS initialization (i.i.d. random placement, overlaps
+    # rejected), as canonical NS requires. A fixed-site initial live set is not
+    # a prior draw and biases the NS evidence; see scripts/fixed_n_init_test.jl.
+    function _uniform_walker_N(N::Int)
+        while true
+            coor = [:Ar => [rand(), rand(), rand()] for _ in 1:N]
+            sys = FastSystem(periodic_system(coor, box, fractional=true))
+            E = ustrip(u"eV", interacting_energy(sys, lj))
+            (isfinite(E) && E < 100.0) && return AtomWalker(sys)
+        end
+    end
+
     function _build_liveset_N(N::Int)
-        walkers = [AtomWalker(FastSystem(periodic_system(_place_n_atoms(N), box, fractional=true)))
-                   for _ in 1:K]
+        walkers = [_uniform_walker_N(N) for _ in 1:K]
         return LJAtomWalkers(walkers, lj)
     end
 
@@ -296,24 +307,23 @@ end
     end
 
     @testset "NS-vs-NVT ⟨U⟩_N agreement at T = 200 K" begin
-        # The tolerance is deliberately loose. NS at small K with single-atom
-        # random walks systematically underestimates |⟨U⟩| for N ≥ 3 in this
-        # supercritical-but-cold regime (k_B T ≈ 1.7 ε): once the live set
-        # collapses near the well bottom, the empirical df.emax sequence is too
-        # coarse in the thermally relevant E band (a few k_B T above the
-        # minimum) to faithfully reproduce the canonical distribution. The
-        # observed bias is ~30–50 % at N = 3, 4, scaling with the number of
-        # interacting pairs. NVT MC at n_sample = 8000 is converged to
-        # micro-eV precision, so it is the trustworthy reference here.
+        # NS live sets are drawn from the uniform prior (i.i.d. random
+        # placement), as canonical NS requires; the earlier fixed-site init
+        # biased ⟨U⟩ low by ~40–50 %. With correct init the residual NS-vs-NVT
+        # difference is sampling noise at these deliberately cheap CI params
+        # (K = 48, n_ns = 800, one seed per N): deeper runs (K = 192,
+        # n_ns = 8000) agree with NVT and an independent importance-sampling
+        # anchor to ~0.1 % (see scripts/fixed_n_init_test.jl). NVT MC at
+        # n_sample = 8000 is the trustworthy reference here.
         #
-        # The test's purpose is to catch normalization / unit-conversion / sign
-        # bugs in the per-N evidence assembly (which would produce errors of
-        # 100 % or more), not to certify NS sampling quality.
+        # The bound below absorbs that cheap-params sampling noise (observed
+        # ≤ 26 % here) while still catching normalization / unit / sign bugs in
+        # the per-N evidence assembly (which produce > 100 % errors).
         for (idx, N) in enumerate(N_values)
             N == 0 && continue
             U_NS = _U_with_tail(ns_outputs[idx], live_emax_all[idx])
             U_NVT = U_NVT_by_N[N]
-            @test isapprox(U_NS, U_NVT; rtol=0.60, atol=3e-3)
+            @test isapprox(U_NS, U_NVT; rtol=0.40, atol=3e-3)
             # Sign check: NS and NVT must both be non-positive in the
             # attractive regime (this catches a wrong-sign error that the
             # loose isapprox would otherwise miss for U ≈ 0).
@@ -486,9 +496,20 @@ end
         return positions
     end
 
+    # Uniform-prior NS initialization over the full box (see the 3D LJ block).
+    # Adsorbates landing in/near the slab are rejected here / discarded by NS.
+    function _uniform_walker_N(N::Int)
+        while true
+            coor = [:Ar => [rand(), rand(), rand()] for _ in 1:N]
+            w = AtomWalker(FastSystem(periodic_system(coor, box, fractional=true)))
+            E_ads = ustrip(u"eV", interacting_energy(w.configuration, ljs,
+                        w.list_num_par, w.frozen, surface.configuration))
+            (isfinite(E_ads) && E_ads < 100.0) && return w
+        end
+    end
+
     function _build_liveset_N(N::Int)
-        walkers = [AtomWalker(FastSystem(periodic_system(_place_n_adsorbates(N), box, fractional=true)))
-                   for _ in 1:K]
+        walkers = [_uniform_walker_N(N) for _ in 1:K]
         return LJSurfaceWalkers(walkers, ljs, surface)
     end
 
@@ -619,18 +640,18 @@ end
     end
 
     @testset "NS-vs-NVT ⟨U⟩_N agreement at T = 200 K" begin
-        # rtol/atol inherited from the 3D LJ fluid block: loose enough to
-        # absorb the documented small-K NS sampling bias in the
-        # supercritical-but-cold regime, tight enough to catch
-        # normalization, unit-conversion, or sign bugs in the per-N
-        # evidence assembly. Comparison is on the adsorbate part of ⟨U⟩
-        # (total minus the constant substrate self-energy), because the
-        # constant offset would otherwise dwarf any disagreement.
+        # NS live sets are drawn from the uniform prior (see the 3D LJ block);
+        # with correct init the residual NS-vs-NVT difference is cheap-params
+        # sampling noise (one seed per N at K = 48, n_ns = 800), not a
+        # systematic bias. Comparison is on the adsorbate part of ⟨U⟩ (total
+        # minus the constant substrate self-energy), since the constant offset
+        # would otherwise dwarf any disagreement. The bound still catches
+        # normalization / unit / sign bugs (which produce > 100 % errors).
         for (idx, N) in enumerate(N_values)
             N == 0 && continue
             U_NS_ads = _U_with_tail(ns_outputs[idx], live_emax_all[idx]) - E_surf_self
             U_NVT_ads = U_NVT_by_N[N] - E_surf_self
-            @test isapprox(U_NS_ads, U_NVT_ads; rtol=0.60, atol=3e-3)
+            @test isapprox(U_NS_ads, U_NVT_ads; rtol=0.40, atol=3e-3)
             # Adsorbate part should be non-positive in the attractive
             # regime (single Ar binds to the substrate at ~−3ε).
             @test U_NS_ads <= 1e-4

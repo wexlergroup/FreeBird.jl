@@ -1,7 +1,7 @@
 name = "FreeBird"
 uuid = "b4936512-85e8-430f-a91d-7f510ed448a2"
-authors = ["Ray Yang <mingrui.yang@outlook.com> and contributors"]
 version = "0.3.0"
+authors = ["Ray Yang <mingrui.yang@outlook.com> and contributors"]
 
 [deps]
 ASEconvert = "3da9722f-58c2-4165-81be-b4d7253e8fd2"
@@ -40,7 +40,7 @@ Distributed = "1"
 Distributions = "0.25"
 Documenter = "1"
 DocumenterTools = "0.1"
-ExtXYZ = "0.2"
+ExtXYZ = "0.2, 0.4"
 Parameters = "0.12"
 PythonCall = "0.9.27"
 Reexport = "1"

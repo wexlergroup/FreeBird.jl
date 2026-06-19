@@ -83,4 +83,84 @@
         rm("test_output_df.csv")
         rm("test_output_df.arrow")
     end
+
+    @testset "microcanonical inflection-point analysis" begin
+        # Synthesize an NS ladder whose density of states has a prescribed caloric
+        # temperature β(E)=dS/dE: build g=exp(∫β), its normalized CDF G, and invert
+        # G at the NS prior volumes X_i=(K/(K+1))^i so emax(i)=G⁻¹(X_i).
+        function synth_ladder(βfun; Emin=0.0, Emax=10.0, K=200, n=4000, ng=20001)
+            Eg = collect(range(Emin, Emax; length=ng)); dE = Eg[2] - Eg[1]
+            βg = βfun.(Eg)
+            S = zeros(ng); for j in 2:ng; S[j] = S[j-1] + 0.5*(βg[j]+βg[j-1])*dE; end
+            g = exp.(S .- maximum(S))
+            G = zeros(ng); for j in 2:ng; G[j] = G[j-1] + 0.5*(g[j]+g[j-1])*dE; end
+            G ./= G[end]
+            c = K/(K+1); Es = Float64[]
+            for i in 1:n
+                Xi = c^i
+                if Xi <= G[1]; push!(Es, Eg[1]); continue; end
+                if Xi >= G[end]; push!(Es, Eg[end]); continue; end
+                jj = searchsortedfirst(G, Xi)
+                push!(Es, Eg[jj-1] + (Xi-G[jj-1])/(G[jj]-G[jj-1])*(Eg[jj]-Eg[jj-1]))
+            end
+            return DataFrame(iter = collect(1:n), emax = Es), K
+        end
+        Etr = 5.0; w = 0.8
+
+        @testset "entropy/β recovery, no spurious transition" begin
+            βfun(E) = 2.0 - 0.10*E - 0.005*E^2          # β>0, γ strictly monotonic
+            df, K = synth_ladder(βfun)
+            E, S = microcanonical_entropy(df, K)
+            @test issorted(E)
+            @test all(isfinite, S)
+            d = caloric_derivatives(df, K; max_order=2)
+            mid = findall(e -> 3.0 < e < 7.0, d.E)
+            @test !isempty(mid)
+            @test all(abs(d.β[i] - βfun(d.E[i])) < 0.15 for i in mid)   # β recovered
+            # no false positives in the resolved bulk (edges/low-T flattening excluded)
+            @test isempty(inflection_transitions(df, K; kb=1.0, energy_window=(2.0, 9.0)))
+        end
+
+        @testset "second-order transition (γ negative peak)" begin
+            βfun(E) = 2.0 - 0.15*E + 0.10*tanh((E-Etr)/w)   # C/w=0.125 < 0.15 (concave)
+            df, K = synth_ladder(βfun)
+            ts = inflection_transitions(df, K; kb=1.0, max_order=2)
+            @test !isempty(ts)
+            t = ts[argmin([abs(s.E_tr - Etr) for s in ts])]
+            @test abs(t.E_tr - Etr) < 1.0
+            @test t.order == 2
+            @test isapprox(t.T_tr, 1/βfun(Etr); rtol=0.25)              # T_tr ≈ 1/β(Etr)
+        end
+
+        @testset "first-order transition (β backbending)" begin
+            βfun(E) = 2.0 - 0.15*E + 0.40*tanh((E-Etr)/w)   # C/w=0.50 > 0.15 → backbend
+            df, K = synth_ladder(βfun)
+            ts = inflection_transitions(df, K; kb=1.0, max_order=2)
+            @test !isempty(ts)
+            t = ts[argmin([abs(s.E_tr - Etr) for s in ts])]
+            @test abs(t.E_tr - Etr) < 1.5
+            @test t.order == 1
+        end
+
+        @testset "transition_convergence" begin
+            βfun(E) = 2.0 - 0.15*E + 0.10*tanh((E-Etr)/w)
+            df1, _ = synth_ladder(βfun; K=150)
+            df2, _ = synth_ladder(βfun; K=300)
+            res = transition_convergence([df1, df2], [150, 300]; kb=1.0)
+            @test res isa Vector
+            @test all(r -> haskey(r, :converged) && haskey(r, :T_by_K) && length(r.T_by_K) == 2, res)
+            @test any(r -> r.converged, res)        # deterministic DOS → stable across K
+        end
+
+        @testset "argument validation" begin
+            df, K = synth_ladder(E -> 2.0 - 0.12*E)
+            @test_throws ArgumentError microcanonical_entropy(df, K; kind=:bogus)
+            @test_throws ArgumentError caloric_derivatives(df, K; max_order=5)
+            @test_throws ArgumentError inflection_transitions(df, K; max_order=0)
+            @test_throws ArgumentError inflection_transitions(df, K; ground_trim=0.6)
+            @test_throws ArgumentError transition_convergence([df], [K])
+            @test_throws DimensionMismatch transition_convergence([df, df], [K])
+            @test_throws ArgumentError microcanonical_entropy(DataFrame(iter=Int[], emax=Float64[]), K)
+        end
+    end
 end

@@ -12,6 +12,7 @@ export read_output
 export ωᵢ, partition_function, internal_energy, cv
 export gc_thermodynamic_stats
 export microcanonical_entropy, caloric_derivatives, inflection_transitions
+export transition_convergence
 
 """
     read_output(filename::String)

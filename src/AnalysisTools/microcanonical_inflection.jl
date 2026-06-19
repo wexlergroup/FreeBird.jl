@@ -288,3 +288,69 @@ function inflection_transitions(df::DataFrame, n_walkers::Int; n_cull::Int = 1,
              kind = any(s.order < t.order && s.E_tr < t.E_tr for s in found) ? :dependent : :independent,
              strength = t.strength) for t in found]
 end
+
+# closest same-order transition to `t` within `match_tol` (relative in T_tr); else nothing
+function _closest(transitions, t, match_tol::Float64)
+    best = nothing; bestd = Inf
+    for s in transitions
+        s.order == t.order || continue
+        d = abs(s.T_tr - t.T_tr)
+        if d <= match_tol * t.T_tr && d < bestd
+            best, bestd = s, d
+        end
+    end
+    return best
+end
+
+"""
+    transition_convergence(dfs, n_walkers; tol=0.1, match_tol=0.25, kwargs...)
+
+Assess walker-count (`K`) convergence of microcanonical inflection-point
+transitions. `dfs` is a collection of nested-sampling outputs at the walker counts
+`n_walkers` (any order; they are sorted ascending internally). `inflection_transitions`
+is run at each `K` and the results from the **largest `K`** are taken as the current
+best estimate, then traced down the `K`-ladder.
+
+This is the recommended way to use the inflection analysis: the γ (and higher)
+derivatives carry finite-`K` "staircase" granularity that does **not** average out
+over independent runs, so a transition should only be trusted once its temperature
+and order stop drifting as `K` increases. Near-ground transitions converge last.
+
+# Arguments
+- `tol`: relative `T_tr` drift between the two largest `K` below which a transition
+  is flagged `converged` (default 0.1).
+- `match_tol`: relative `T_tr` window for matching the same transition across `K`
+  (default 0.25).
+- `kwargs...`: forwarded to [`inflection_transitions`] (e.g. `max_order`, `prominence`,
+  `ground_trim`, `kb`).
+
+# Returns
+`Vector{NamedTuple}`, one per transition found at the largest `K`, with fields
+`T_tr`, `order`, `kind`, `converged::Bool`, `T_drift` (relative change from the
+second-largest `K`, `Inf` if it has no match there), `T_by_K` (the matched `T_tr`
+at each `K`, `missing` where unmatched), and `n_walkers` (the sorted `K` values).
+"""
+function transition_convergence(dfs, n_walkers; tol::Float64 = 0.1,
+                                match_tol::Float64 = 0.25, kwargs...)
+    length(dfs) == length(n_walkers) ||
+        throw(DimensionMismatch("dfs and n_walkers must have the same length"))
+    length(dfs) >= 2 ||
+        throw(ArgumentError("need at least two walker counts to assess convergence"))
+    perm = sortperm(collect(n_walkers))
+    dfv = collect(dfs)[perm]
+    Ks = collect(n_walkers)[perm]
+    per_K = [inflection_transitions(dfv[k], Ks[k]; kwargs...) for k in eachindex(dfv)]
+    ref = per_K[end]
+    out = NamedTuple[]
+    for t in ref
+        T_by_K = Union{Missing,Float64}[
+            (c = _closest(per_K[k], t, match_tol); c === nothing ? missing : c.T_tr)
+            for k in eachindex(per_K)]
+        prevc = _closest(per_K[end-1], t, match_tol)
+        drift = prevc === nothing ? Inf : abs(prevc.T_tr - t.T_tr) / t.T_tr
+        push!(out, (T_tr = t.T_tr, order = t.order, kind = t.kind,
+                    converged = drift <= tol, T_drift = drift,
+                    T_by_K = T_by_K, n_walkers = Ks))
+    end
+    return out
+end

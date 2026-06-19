@@ -65,11 +65,11 @@ function _microcanonical_core(df::DataFrame, n_walkers::Int; n_cull::Int = 1,
     W = min(W, (n - 3) ÷ 2)
     nodes = unique(round.(Int, range(W + 1, n - W; length = min(n_nodes, n - 2W))))
 
-    E = Float64[]; Svol = Float64[]; Scal = Float64[]; β = Float64[]
+    E = Float64[]; Svol = Float64[]; Scal = Float64[]; β = Float64[]; slope = Float64[]
     for idx in nodes
         _, ep, epp = _local_cubic(i, e, idx, W)        # dE/di, d²E/di²
         ep < 0 || continue                              # ladder must descend
-        push!(E, e[idx])
+        push!(E, e[idx]); push!(slope, ep)
         push!(Svol, cc * i[idx])                        # volume entropy ln G = ln X
         push!(Scal, cc * i[idx] - log(-ep))             # caloric entropy ln g (+const)
         push!(β, cc / ep - epp / ep^2)                  # β = dS/dE (caloric)
@@ -77,10 +77,10 @@ function _microcanonical_core(df::DataFrame, n_walkers::Int; n_cull::Int = 1,
     length(E) >= 5 || throw(ArgumentError("too few usable nodes; check the ladder/halfwidth"))
 
     o = sortperm(E)                                     # ascending in energy
-    E, Svol, Scal, β = E[o], Svol[o], Scal[o], β[o]
+    E, Svol, Scal, β, slope = E[o], Svol[o], Scal[o], β[o], slope[o]
     γ = max_order >= 2 ? _derivative(E, β) : Float64[]
     δ = max_order >= 3 ? _derivative(E, γ) : Float64[]
-    return (E = E, S_vol = Svol, S_caloric = Scal, β = β, γ = γ, δ = δ)
+    return (E = E, S_vol = Svol, S_caloric = Scal, β = β, γ = γ, δ = δ, slope = slope)
 end
 
 """
@@ -148,4 +148,143 @@ function caloric_derivatives(df::DataFrame, n_walkers::Int; n_cull::Int = 1,
     max_order == 1 && return (E = r.E, β = r.β)
     max_order == 2 && return (E = r.E, β = r.β, γ = r.γ)
     return (E = r.E, β = r.β, γ = r.γ, δ = r.δ)
+end
+
+# median / linear-interpolated quantile without a Statistics dependency
+function _median(v::AbstractVector)
+    s = sort(v); m = length(s)
+    m == 0 && return zero(eltype(s))
+    iseven(m) ? (s[m÷2] + s[m÷2+1]) / 2 : s[m÷2+1]
+end
+function _quantile(v::AbstractVector, q::Real)
+    s = sort(collect(v)); m = length(s)
+    m == 1 && return float(s[1])
+    h = (m - 1) * q + 1
+    lo = floor(Int, h); hi = min(lo + 1, m)
+    return s[lo] + (h - lo) * (s[hi] - s[lo])
+end
+
+# Local extrema of the order-n entropy derivative `Sn` carrying the Qi–Bachmann
+# transition signature: odd order → positive local minimum, even order → negative
+# local maximum. Prominence-filtered (relative to the interior range) and merged by
+# a minimum energy separation. Returns node indices into `E`/`Sn`.
+function _order_extrema(E::Vector{Float64}, Sn::Vector{Float64}, order::Int;
+                        prominence::Float64, edge::Int, min_sep::Float64)
+    n = length(Sn)
+    lo, hi = 1 + edge, n - edge
+    lo < hi || return Int[]
+    interior = view(Sn, lo:hi)
+    rng = _quantile(interior, 0.9) - _quantile(interior, 0.1)   # robust to divergence outliers
+    rng > 0 || return Int[]
+    thr = prominence * rng
+    odd = isodd(order)
+    cands = Tuple{Int,Float64}[]
+    for i in lo:hi
+        if odd                                            # positive local minimum
+            (Sn[i] < Sn[i-1] && Sn[i] <= Sn[i+1] && Sn[i] > 0) || continue
+            l = i; while l > 1 && Sn[l-1] >= Sn[i]; l -= 1; end
+            r = i; while r < n && Sn[r+1] >= Sn[i]; r += 1; end
+            prom = min(maximum(view(Sn, l:i)), maximum(view(Sn, i:r))) - Sn[i]
+        else                                              # negative local maximum
+            (Sn[i] > Sn[i-1] && Sn[i] >= Sn[i+1] && Sn[i] < 0) || continue
+            l = i; while l > 1 && Sn[l-1] <= Sn[i]; l -= 1; end
+            r = i; while r < n && Sn[r+1] <= Sn[i]; r += 1; end
+            prom = Sn[i] - max(minimum(view(Sn, l:i)), minimum(view(Sn, i:r)))
+        end
+        prom >= thr && push!(cands, (i, prom))
+    end
+    sort!(cands, by = c -> -c[2])
+    chosen = Int[]
+    for (i, _) in cands
+        all(abs(E[i] - E[j]) > min_sep for j in chosen) && push!(chosen, i)
+    end
+    return sort(chosen)
+end
+
+"""
+    inflection_transitions(df::DataFrame, n_walkers::Int;
+        n_cull=1, max_order=2, n_nodes=400, halfwidth=0,
+        kb=8.617333262e-5, prominence=0.05, edge=4,
+        min_separation=nothing, energy_window=nothing, beta_max=nothing)
+
+Identify and classify phase transitions in a nested-sampling output `df` by
+microcanonical inflection-point analysis (Schnabel et al. 2011; Qi & Bachmann
+2018). Returns one entry per transition, ordered by energy.
+
+A transition of order `n` is a "least-sensitive" inflection point of the entropy,
+detected as an extremum of the `n`-th derivative `Sⁿ(E)` with the Qi–Bachmann sign:
+**odd order → a positive local minimum** of `Sⁿ` (order 1 = β backbending,
+first-order), **even order → a negative local maximum** of `Sⁿ` (order 2 = γ peak,
+second-order). Orders `1…max_order` are searched. The transition temperature is
+`T_tr = 1/(kb·β(E_tr))`.
+
+# Arguments
+- `max_order`: highest transition order to search (1–3).
+- `kb`: Boltzmann constant; default `8.617333262e-5` eV/K gives `T_tr` in Kelvin
+  when `:emax` is in eV. Pass `kb=1.0` for the microcanonical temperature in energy
+  units (`kT`).
+- `prominence`: peak prominence threshold as a fraction of the (robust 10–90
+  percentile) derivative range (default 0.20). Raise it to keep only strong
+  transitions.
+- `ground_trim`: fraction of the energy span (above the ground state) to discard
+  before differentiating, removing the `β → ∞` divergence as `dE/di → 0` (default
+  0.05). γ/δ are recomputed on the trimmed window so transitions are not
+  contaminated by the divergence.
+- `edge`, `min_separation`, `energy_window`, `beta_max`: numerical controls;
+  `min_separation` defaults to 3% of the (trimmed) energy span, and `beta_max`
+  optionally adds an explicit β ceiling.
+- `n_cull`, `n_nodes`, `halfwidth`: as in [`caloric_derivatives`].
+
+# Returns
+`Vector{NamedTuple}` with fields `E_tr`, `T_tr`, `order::Int`, `kind`
+(`:independent` or `:dependent`), and `strength` (the `Sⁿ` extremum value).
+`kind` uses the Qi–Bachmann heuristic: a transition accompanied by a lower-order
+transition at lower energy is `:dependent`, otherwise `:independent`.
+
+!!! note
+    γ and higher derivatives are sensitive to NS statistics. The ladder roughness
+    is finite-walker granularity (it does **not** average out over seeds), so use
+    enough walkers `K`; verify with [`transition_convergence`](@ref). Heavy
+    smoothing (large `halfwidth`) on under-converged ladders biases `T_tr`.
+"""
+function inflection_transitions(df::DataFrame, n_walkers::Int; n_cull::Int = 1,
+        max_order::Int = 2, n_nodes::Int = 400, halfwidth::Int = 0,
+        kb::Float64 = 8.617333262e-5, prominence::Float64 = 0.20, edge::Int = 4,
+        ground_trim::Float64 = 0.05,
+        min_separation::Union{Nothing,Float64} = nothing,
+        energy_window::Union{Nothing,Tuple{<:Real,<:Real}} = nothing,
+        beta_max::Union{Nothing,Float64} = nothing)
+    1 <= max_order <= 3 || throw(ArgumentError("max_order must be 1, 2, or 3"))
+    0 <= ground_trim < 0.5 || throw(ArgumentError("ground_trim must be in [0, 0.5)"))
+    r = _microcanonical_core(df, n_walkers; n_cull = n_cull, n_nodes = n_nodes,
+                             halfwidth = halfwidth, max_order = 1)
+    E, β = r.E, r.β
+    # Trim the ground-state β divergence (the ladder flattens, dE/di → 0, β → ∞)
+    # BEFORE differentiating, so γ/δ near the transitions are not contaminated.
+    Emin, Emax = extrema(E)
+    Elo = Emin + ground_trim * (Emax - Emin)
+    keep = (β .> 0) .& (E .>= Elo)
+    beta_max === nothing || (keep = keep .& (β .< beta_max))
+    if energy_window !== nothing
+        keep = keep .& (E .>= energy_window[1]) .& (E .<= energy_window[2])
+    end
+    idx = findall(keep)
+    length(idx) >= 2edge + 5 || return NamedTuple[]
+    Ew, βw = E[idx], β[idx]
+    # derivatives recomputed on the windowed β (free of the ground divergence)
+    γw = max_order >= 2 ? _derivative(Ew, βw) : Float64[]
+    δw = max_order >= 3 ? _derivative(Ew, γw) : Float64[]
+    derivs = (βw, γw, δw)
+    msep = min_separation === nothing ? 0.03 * (maximum(Ew) - minimum(Ew)) : min_separation
+    found = NamedTuple[]
+    for n in 1:max_order
+        Sn = derivs[n]
+        for i in _order_extrema(Ew, Sn, n; prominence = prominence, edge = edge, min_sep = msep)
+            push!(found, (E_tr = Ew[i], T_tr = 1 / (kb * βw[i]), order = n, strength = Sn[i]))
+        end
+    end
+    sort!(found, by = t -> t.E_tr)
+    return [(E_tr = t.E_tr, T_tr = t.T_tr, order = t.order,
+             kind = any(s.order < t.order && s.E_tr < t.E_tr for s in found) ? :dependent : :independent,
+             strength = t.strength) for t in found]
 end

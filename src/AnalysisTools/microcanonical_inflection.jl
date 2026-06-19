@@ -127,12 +127,12 @@ Microcanonical entropy derivatives from a nested-sampling output `df`:
 ``β(E)=dS/dE`` (inverse caloric temperature; the microcanonical temperature is
 ``k_BT=1/β``), ``γ(E)=d^2S/dE^2``, and optionally ``δ(E)=d^3S/dE^3``.
 
-Derivatives are computed in iteration-index space (see [`microcanonical_entropy`])
+Derivatives are computed in iteration-index space (see [`microcanonical_entropy`](@ref))
 and then differentiated against energy with local cubic fits.
 
 # Arguments
 - `max_order`: highest derivative to return (1 → β only; 2 → β, γ; 3 → β, γ, δ).
-- `n_cull`, `n_nodes`, `halfwidth`: as in [`microcanonical_entropy`].
+- `n_cull`, `n_nodes`, `halfwidth`: as in [`microcanonical_entropy`](@ref).
 
 # Returns
 A `NamedTuple` with `E` (ascending energies, same units as `:emax`) and `β` (units
@@ -233,7 +233,7 @@ second-order). Orders `1…max_order` are searched. The transition temperature i
 - `edge`, `min_separation`, `energy_window`, `beta_max`: numerical controls;
   `min_separation` defaults to 3% of the (trimmed) energy span, and `beta_max`
   optionally adds an explicit β ceiling.
-- `n_cull`, `n_nodes`, `halfwidth`: as in [`caloric_derivatives`].
+- `n_cull`, `n_nodes`, `halfwidth`: as in [`caloric_derivatives`](@ref).
 
 # Returns
 `Vector{NamedTuple}` with fields `E_tr`, `T_tr`, `order::Int`, `kind`
@@ -321,7 +321,7 @@ and order stop drifting as `K` increases. Near-ground transitions converge last.
   is flagged `converged` (default 0.1).
 - `match_tol`: relative `T_tr` window for matching the same transition across `K`
   (default 0.25).
-- `kwargs...`: forwarded to [`inflection_transitions`] (e.g. `max_order`, `prominence`,
+- `kwargs...`: forwarded to [`inflection_transitions`](@ref) (e.g. `max_order`, `prominence`,
   `ground_trim`, `kb`).
 
 # Returns

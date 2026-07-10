@@ -13,6 +13,7 @@ export ωᵢ, partition_function, internal_energy, cv
 export gc_thermodynamic_stats
 export microcanonical_entropy, caloric_derivatives, inflection_transitions
 export transition_convergence
+export gc_thermodynamic_stats_ideal_ref
 
 """
     read_output(filename::String)
@@ -336,6 +337,153 @@ function gc_thermodynamic_stats(df::DataFrame,
     end
 
     return mean_Es, Cvs, mean_Ns
+end
+
+"""
+    gc_thermodynamic_stats_ideal_ref(df::DataFrame, n_sites::Int, z0::Float64,
+                                     μs::Vector{Float64}, Ts::Vector{Float64},
+                                     n_walkers::Int;
+                                     n_cull::Int=1, ω0::Float64=1.0,
+                                     live_emax::Union{Nothing,Vector{Float64}}=nothing,
+                                     live_numbers::Union{Nothing,Vector{Int}}=nothing,
+                                     kb::Float64=8.617333262e-5)
+
+Assemble grand-canonical thermodynamics on a (μ, T) grid from a single
+ideal-gas-referenced nested sampling run (`ideal_gas_referenced_nested_sampling`
+in `SamplingSchemes`).
+
+The run samples the ideal-lattice-gas prior at reference fugacity `z0`
+(configuration weight `z0^N`, total prior mass `(1 + z0)^M` on `M = n_sites`
+sites) and culls by energy alone. The absolute grand partition function at any
+target chemical potential μ and temperature T is then
+
+```math
+\\Xi(\\mu, T) = (1 + z_0)^M \\sum_j \\omega_j \\left(\\frac{z}{z_0}\\right)^{N_j}
+               e^{-\\beta E_j}, \\qquad z = e^{\\beta\\mu},
+```
+
+where the sum runs over culled walkers (plus, when `live_emax`/`live_numbers`
+are given, the surviving live walkers, each with residual weight
+`(K/(K+n_cull))^{n_iters} / K` — no `ω0` factor, since `ω0` corrects the
+dead-sample shell weights only). There is no thermal-wavelength factor: a
+lattice gas has no momentum degrees of freedom, so `z = exp(βμ)` directly.
+All sums are evaluated with the log-sum-exp trick, and Ξ is returned as
+`log Ξ` to avoid overflow at low temperature.
+
+For a fully normalized absolute Ξ, pass `ω0 = (n_walkers + n_cull)/n_walkers`
+(Skilling weights) together with the live-walker tail — the dead weights then
+sum to `1 − (K/(K+n_cull))^{n_iters}` and the tail supplies the remainder, so
+`Σω = 1` exactly. The default `ω0 = 1.0` underestimates Ξ by a factor
+`K/(K+n_cull)` and neglects the tail (see the `ωᵢ` conventions). Ratio
+observables (`mean_N`, `var_N`, `mean_U`) are insensitive to `ω0`.
+
+The reweighting factor `(z/z0)^{N_j}` is pure importance sampling in μ: its
+reliability at each grid point is reported by the Kish effective sample size
+`N_eff = (Σ w)² / Σ w²`, which collapses as `|βμ − ln z0|` grows beyond
+roughly `1/√Var(N)`. Treat grid points with small `N_eff` (≲ 100) as
+unreliable and re-run with z0 closer to the target fugacity.
+
+# Arguments
+- `df::DataFrame`: NS output with columns `[:iter, :emax, :num_particles]`.
+- `n_sites::Int`: Number of lattice sites M.
+- `z0::Float64`: Reference fugacity of the prior used in the run (must match!).
+- `μs::Vector{Float64}`: Chemical potential grid (same energy units as `df.emax`, e.g. eV).
+- `Ts::Vector{Float64}`: Temperature grid in K.
+- `n_walkers::Int`: Number of walkers K used in the NS run.
+- `n_cull::Int=1`: Number of walkers culled per iteration.
+- `ω0::Float64=1.0`: Initial phase-space volume factor.
+- `live_emax::Union{Nothing,Vector{Float64}}=nothing`: Energies of the surviving live walkers.
+- `live_numbers::Union{Nothing,Vector{Int}}=nothing`: Particle counts of the surviving live walkers.
+- `kb::Float64`: Boltzmann constant (default: eV/K).
+
+# Returns
+A `NamedTuple` of `Matrix{Float64}` of size `(length(μs), length(Ts))`,
+indexed `[i_μ, i_T]`:
+- `logXi`: Natural log of the absolute grand partition function.
+- `mean_N`: Mean particle number ⟨N⟩.
+- `var_N`: Particle-number variance ⟨N²⟩ − ⟨N⟩².
+- `mean_U`: Mean configurational energy ⟨E⟩.
+- `N_eff`: Kish effective sample size of the reweighted estimate.
+"""
+function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
+                                          n_sites::Int,
+                                          z0::Float64,
+                                          μs::Vector{Float64},
+                                          Ts::Vector{Float64},
+                                          n_walkers::Int;
+                                          n_cull::Int=1,
+                                          ω0::Float64=1.0,
+                                          live_emax::Union{Nothing,Vector{Float64}}=nothing,
+                                          live_numbers::Union{Nothing,Vector{Int}}=nothing,
+                                          kb::Float64=8.617333262e-5)
+    if z0 <= 0.0
+        throw(ArgumentError("z0 must be positive"))
+    end
+    if n_sites <= 0
+        throw(ArgumentError("n_sites must be positive"))
+    end
+    if (live_emax === nothing) != (live_numbers === nothing)
+        throw(ArgumentError("live_emax and live_numbers must be provided together"))
+    end
+    if live_emax !== nothing && length(live_emax) != length(live_numbers)
+        throw(DimensionMismatch("live_emax and live_numbers must have the same length"))
+    end
+    n_dead = nrow(df)
+    if n_dead == 0 && (live_emax === nothing || isempty(live_emax))
+        throw(ArgumentError("df is empty and no live walkers were provided"))
+    end
+
+    # β- and μ-independent per-sample log prior-volume weights, built directly
+    # in log space: the linear ωᵢ underflows to 0.0 once iter ≳ 745·K/n_cull,
+    # which silently zeroes the deepest (lowest-energy) samples on large lattices
+    log_w0 = n_dead > 0 ?
+        (log(ω0) + log(n_cull / (n_walkers + n_cull))) .+
+        Vector{Float64}(df.iter) .* log(n_walkers / (n_walkers + n_cull)) : Float64[]
+    Es = n_dead > 0 ? Vector{Float64}(df.emax) : Float64[]
+    Ns = n_dead > 0 ? Vector{Float64}(df.num_particles) : Float64[]
+
+    if live_emax !== nothing && !isempty(live_emax)
+        # Residual prior volume after the last recorded iteration, split
+        # uniformly over the K surviving walkers. No ω0 factor here: ω0
+        # corrects the dead-sample shell weights, not the residual volume
+        # X_n = (K/(K+n_cull))^n — with ω0 = (K+n_cull)/K the dead weights sum
+        # to 1 − X_n and the tail closes the identity Σw = 1 exactly
+        n_iters = n_dead > 0 ? maximum(df.iter) : 0
+        log_tail = n_iters * log(n_walkers / (n_walkers + n_cull)) - log(n_walkers)
+        log_w0 = vcat(log_w0, fill(log_tail, length(live_emax)))
+        Es = vcat(Es, live_emax)
+        Ns = vcat(Ns, Float64.(live_numbers))
+    end
+
+    log_prior_mass = n_sites * log1p(z0)
+    log_z0 = log(z0)
+
+    n_mu = length(μs)
+    n_T = length(Ts)
+    logXi = Matrix{Float64}(undef, n_mu, n_T)
+    mean_N = Matrix{Float64}(undef, n_mu, n_T)
+    var_N = Matrix{Float64}(undef, n_mu, n_T)
+    mean_U = Matrix{Float64}(undef, n_mu, n_T)
+    N_eff = Matrix{Float64}(undef, n_mu, n_T)
+
+    Threads.@threads for j in 1:n_T
+        β = 1.0 / (kb * Ts[j])
+        for i in 1:n_mu
+            s = β * μs[i] - log_z0
+            log_w = log_w0 .+ s .* Ns .- β .* Es
+            max_log = maximum(log_w)
+            ws = exp.(log_w .- max_log)
+            sum_w = sum(ws)
+            logXi[i, j] = log_prior_mass + max_log + log(sum_w)
+            n_avg = sum(ws .* Ns) / sum_w
+            mean_N[i, j] = n_avg
+            var_N[i, j] = sum(ws .* Ns .^ 2) / sum_w - n_avg^2
+            mean_U[i, j] = sum(ws .* Es) / sum_w
+            N_eff[i, j] = sum_w^2 / sum(abs2, ws)
+        end
+    end
+
+    return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U, N_eff=N_eff)
 end
 
 

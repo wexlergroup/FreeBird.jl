@@ -1209,20 +1209,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     end
 
     # Accumulate cluster acceptance stats and adapt cluster_p
-    if cl_total > 0
-        gc_params.cluster_accepted += cl_accepted
-        gc_params.cluster_total += cl_total
-        if mc_routine.cluster_adjust_interval > 0 &&
-           gc_params.cluster_total >= mc_routine.cluster_adjust_interval
-            window_rate = gc_params.cluster_accepted / max(gc_params.cluster_total, 1.0)
-            adjust_cluster_p(gc_params, window_rate, ns_iteration;
-                             target=mc_routine.target_cluster_accept,
-                             floor=mc_routine.cluster_p_floor,
-                             ceiling=mc_routine.cluster_p_ceiling)
-            gc_params.cluster_accepted = 0.0
-            gc_params.cluster_total = 0.0
-        end
-    end
+    _accumulate_cluster_stats!(gc_params, mc_routine, cl_accepted, cl_total, ns_iteration)
 
     return iter, omega_worst, energy_worst, n_worst, liveset, gc_params
 end
@@ -1300,4 +1287,297 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
     end
 
     return df, liveset, gc_params
+end
+
+# ======================================================================
+# Ideal-gas-referenced grand-canonical nested sampling
+# ======================================================================
+
+"""
+    mutable struct IdealGasReferencedGCNSParameters <: SamplingParameters
+
+Parameters for ideal-gas-referenced grand-canonical nested sampling on
+lattice systems.
+
+The prior is the non-interacting (ideal) lattice gas at reference fugacity
+`z0`: a Bernoulli product measure in which each site is occupied independently
+with probability `p0 = z0/(1 + z0)`, so a configuration with N particles
+carries prior weight `z0^N` and the total prior mass on M sites is
+`(1 + z0)^M`. Nested sampling culls on the energy E alone — the chemical
+potential does not enter the sampler. Both μ and T are recovered in
+post-processing (see `gc_thermodynamic_stats_ideal_ref` in `AnalysisTools`),
+so a single run yields Ξ(μ, T) over a continuous temperature range and a
+neighborhood of μ around `μ_ref(T) = k_B T ln z0`.
+
+Setting `reference_fugacity = 1` makes the prior the uniform measure over all
+2^M microstates — the same prior as the Ω-sorted construction in
+`GrandCanonicalNestedSamplingParameters`, which instead bakes a single μ into
+the sort quantity Ω = E − μN.
+
+Unlike the Ω-sorted construction there is deliberately no `n_max` field: the
+post-processing normalization `(1 + z0)^M` is the prior mass of the *full*
+occupation range N ∈ {0, …, M}, and capping insertions would silently
+truncate the prior support and bias Ξ.
+
+# Fields
+- `mc_steps::Int64`: MCMC steps per replacement walker.
+- `reference_fugacity::Float64`: Reference fugacity z0 of the ideal-lattice-gas prior.
+- `energy_perturbation::Float64`: Perturbation to break energy degeneracies.
+  Required to be nonzero on lattices (degenerate levels stall the strict `<`
+  ceiling and bias the evidence — enforced by the keyword constructor); must
+  remain ≪ k_B·T at the lowest temperature targeted in post-processing, since
+  perturbed energies are recorded.
+- `random_seed::Int64`: Kept for parity with `GrandCanonicalNestedSamplingParameters`;
+  **not currently consumed** by the NS loop — call `Random.seed!` before
+  `ideal_gas_referenced_nested_sampling` for reproducible runs.
+- `fail_count::Int64`: Consecutive failed replacements.
+- `allowed_fail_count::Int64`: Maximum consecutive failures before warning.
+- `cluster_p::Float64`: Current cluster growth probability (mutable runtime state).
+- `cluster_accepted::Float64`: Accepted cluster moves in current adjustment window.
+- `cluster_total::Float64`: Total cluster moves attempted in current adjustment window.
+- `cluster_p_history::Vector{Float64}`: Trajectory of cluster_p after each adjustment.
+- `cluster_accept_history::Vector{Float64}`: Acceptance rate at each adjustment.
+- `cluster_adjust_iterations::Vector{Int}`: NS iteration index at each adjustment.
+"""
+mutable struct IdealGasReferencedGCNSParameters <: SamplingParameters
+    mc_steps::Int64
+    reference_fugacity::Float64
+    energy_perturbation::Float64
+    random_seed::Int64
+    fail_count::Int64
+    allowed_fail_count::Int64
+    cluster_p::Float64
+    cluster_accepted::Float64
+    cluster_total::Float64
+    cluster_p_history::Vector{Float64}
+    cluster_accept_history::Vector{Float64}
+    cluster_adjust_iterations::Vector{Int}
+end
+
+"""
+    IdealGasReferencedGCNSParameters(;
+        mc_steps=100, reference_fugacity=1.0, energy_perturbation=1e-12,
+        random_seed=1234, fail_count=0, allowed_fail_count=10,
+        cluster_p=0.3, cluster_accepted=0.0, cluster_total=0.0,
+        cluster_p_history=Float64[], cluster_accept_history=Float64[],
+        cluster_adjust_iterations=Int[])
+
+Convenience constructor for `IdealGasReferencedGCNSParameters`.
+
+`reference_fugacity` (z0) must be positive. Choose z0 near the target
+fugacity range `exp(βμ)` of interest: post-run reweighting to a target (μ, T)
+carries a factor `(exp(βμ)/z0)^N` per sample, and its effective sample size
+degrades as `|βμ − ln z0|` grows (roughly beyond `1/√Var(N)`).
+
+The `cluster_*` fields are mutable runtime state for adaptive cluster move
+tuning, initialized from the static configuration on `MCGrandCanonicalMoves`
+at the start of `ideal_gas_referenced_nested_sampling` when `clusters_freq > 0`.
+"""
+function IdealGasReferencedGCNSParameters(;
+    mc_steps::Int64=100,
+    reference_fugacity::Float64=1.0,
+    energy_perturbation::Float64=1e-12,
+    random_seed::Int64=1234,
+    fail_count::Int64=0,
+    allowed_fail_count::Int64=10,
+    cluster_p::Float64=0.3,
+    cluster_accepted::Float64=0.0,
+    cluster_total::Float64=0.0,
+    cluster_p_history::Vector{Float64}=Float64[],
+    cluster_accept_history::Vector{Float64}=Float64[],
+    cluster_adjust_iterations::Vector{Int}=Int[],
+)
+    if reference_fugacity <= 0.0
+        throw(ArgumentError("reference_fugacity must be positive"))
+    end
+    if energy_perturbation == 0.0
+        throw(ArgumentError("energy_perturbation must be nonzero: degenerate " *
+            "lattice energy levels stall the strict < ceiling and bias the evidence"))
+    end
+    IdealGasReferencedGCNSParameters(
+        mc_steps, reference_fugacity, energy_perturbation,
+        random_seed, fail_count, allowed_fail_count,
+        cluster_p, cluster_accepted, cluster_total,
+        cluster_p_history, cluster_accept_history, cluster_adjust_iterations,
+    )
+end
+
+"""
+    _init_ideal_gas_ref_walkers!(liveset::LatticeGasWalkers,
+                                 params::IdealGasReferencedGCNSParameters)
+
+Initialize walkers as exact i.i.d. draws from the ideal-lattice-gas prior:
+each site occupied independently with probability `z0/(1 + z0)`.
+"""
+function _init_ideal_gas_ref_walkers!(liveset::LatticeGasWalkers,
+                                      params::IdealGasReferencedGCNSParameters)
+    h = liveset.hamiltonian
+    z0 = params.reference_fugacity
+    p0 = z0 / (1.0 + z0)
+    for walker in liveset.walkers
+        random_microstate!(walker.configuration; p=p0)
+        assign_energy!(walker, h; perturb_energy=params.energy_perturbation)
+        # Reset the iteration counter: df.iter feeds the ωᵢ prior-volume
+        # weights, so a stale counter from a reused liveset corrupts them
+        walker.iter = 0
+    end
+    return liveset
+end
+
+"""
+    nested_sampling_step!(liveset::LatticeGasWalkers,
+                          params::IdealGasReferencedGCNSParameters,
+                          mc_routine::MCGrandCanonicalMoves;
+                          ns_iteration::Int=0)
+
+Perform one step of ideal-gas-referenced grand-canonical nested sampling.
+
+Sorts walkers by energy E (not Ω — the chemical potential plays no role in
+the sampler), removes the worst (highest E), clones a parent with E < E_worst,
+and decorrelates the clone via grand-canonical MCMC that preserves the
+`z0^N`-weighted prior below the energy ceiling.
+
+# Returns
+- `iter`: Iteration number (or `missing` if the step failed).
+- `emax`: The E value of the removed walker (with units).
+- `num_particles`: The N value of the removed walker.
+- `liveset`: The updated liveset.
+- `params`: The updated parameters.
+"""
+function nested_sampling_step!(liveset::LatticeGasWalkers,
+                               params::IdealGasReferencedGCNSParameters,
+                               mc_routine::MCGrandCanonicalMoves;
+                               ns_iteration::Int=0)
+    ats = liveset.walkers
+    h = liveset.hamiltonian
+    n_walkers = length(ats)
+
+    # Sort by energy (descending — worst first); the z0^N prior weighting is
+    # maintained by the MC walk, not by the sort
+    sort_by_energy!(liveset)
+
+    iter::Union{Missing,Int} = missing
+    worst = ats[1]
+    emax_worst = worst.energy
+    n_worst = sum(worst.configuration.components[1])
+
+    emax_val = emax_worst.val  # unitless for the MC function
+    eligible = [k for k in 2:n_walkers if ats[k].energy < emax_worst]
+    if !isempty(eligible)
+        parent_idx = rand(eligible)
+    else
+        parent_idx = rand(2:n_walkers)
+    end
+    to_walk = deepcopy(ats[parent_idx])
+
+    # Decorrelate via GC MCMC: with mu = 0 the Ω ceiling reduces to an energy
+    # ceiling, and z0 weights the insert/delete acceptance to preserve the
+    # Bernoulli(z0/(1+z0)) prior
+    accept, rate, to_walk, cl_accepted, cl_total = MC_grand_canonical_walk!(
+        params.mc_steps, to_walk, h, emax_val, 0.0;
+        p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
+        energy_perturb=params.energy_perturbation,
+        z0=params.reference_fugacity,
+        clusters_freq=mc_routine.clusters_freq,
+        swaps_freq=mc_routine.swaps_freq,
+        cluster_p=params.cluster_p)
+
+    if accept
+        push!(ats, to_walk)
+        popfirst!(ats)
+        update_iter!(liveset)
+        params.fail_count = 0
+        iter = liveset.walkers[1].iter
+    else
+        emax_worst = missing
+        n_worst = missing
+        params.fail_count += 1
+    end
+
+    # Accumulate cluster acceptance stats and adapt cluster_p
+    _accumulate_cluster_stats!(params, mc_routine, cl_accepted, cl_total, ns_iteration)
+
+    return iter, emax_worst, n_worst, liveset, params
+end
+
+"""
+    ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
+                                         params::IdealGasReferencedGCNSParameters,
+                                         n_steps::Int64,
+                                         mc_routine::MCGrandCanonicalMoves,
+                                         save_strategy::DataSavingStrategy)
+
+Run the ideal-gas-referenced grand-canonical nested sampling loop.
+
+Walkers are initialized as exact i.i.d. draws from the ideal-lattice-gas
+prior at reference fugacity z0 (each site occupied with probability
+`z0/(1 + z0)`), then the loop iterates: remove the highest-energy walker,
+record (E, N), replace with a clone decorrelated below the energy ceiling
+under the `z0^N`-weighted prior. The chemical potential never enters the
+run; a single run is post-processed to Ξ(μ, T) on an arbitrary (μ, T) grid
+by `gc_thermodynamic_stats_ideal_ref` in `AnalysisTools`, which also needs
+the surviving live walkers' (E, N) for the live-set tail closure —
+extract them from the returned liveset.
+
+# Arguments
+- `liveset::LatticeGasWalkers`: The initial liveset (walkers will be re-initialized).
+- `params::IdealGasReferencedGCNSParameters`: Parameters including the reference fugacity z0.
+- `n_steps::Int64`: Number of NS iterations.
+- `mc_routine::MCGrandCanonicalMoves`: The GC move routine (reused from the Ω-sorted construction).
+- `save_strategy::DataSavingStrategy`: Strategy for periodic output.
+
+# Returns
+- `df::DataFrame`: Columns `[:iter, :emax, :num_particles]`.
+- `liveset::LatticeGasWalkers`: The final liveset (surviving walkers).
+- `params::IdealGasReferencedGCNSParameters`: Updated parameters.
+"""
+function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
+                                              params::IdealGasReferencedGCNSParameters,
+                                              n_steps::Int64,
+                                              mc_routine::MCGrandCanonicalMoves,
+                                              save_strategy::DataSavingStrategy)
+    # Initialize walkers as i.i.d. draws from the Bernoulli(z0/(1+z0)) prior
+    _init_ideal_gas_ref_walkers!(liveset, params)
+
+    # Initialize cluster_p and reset counters from MCGrandCanonicalMoves if applicable
+    if mc_routine.clusters_freq > 0
+        params.cluster_p = mc_routine.initial_cluster_p
+        params.cluster_accepted = 0.0
+        params.cluster_total = 0.0
+        empty!(params.cluster_p_history)
+        empty!(params.cluster_accept_history)
+        empty!(params.cluster_adjust_iterations)
+    end
+
+    df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[])
+
+    for i in 1:n_steps
+        print_info = i % save_strategy.n_info == 0
+        write_walker_every_n(liveset.walkers[1], i, save_strategy)
+
+        iter, emax, n_par, liveset, params = nested_sampling_step!(
+            liveset, params, mc_routine; ns_iteration=i)
+
+        @debug "IG-ref GC-NS step $i, iter: $iter, emax: $emax, N: $n_par"
+
+        if params.fail_count >= params.allowed_fail_count
+            @warn "IG-ref GC-NS: Failed $(params.allowed_fail_count) times in a row."
+            params.fail_count = 0
+        end
+
+        if !(iter isa typeof(missing))
+            push!(df, (iter, emax.val, n_par))
+        end
+
+        if print_info && !(iter isa typeof(missing))
+            @info "IG-ref GC-NS iter: $(iter), E: $(emax), N: $(n_par)"
+        elseif print_info && iter isa typeof(missing)
+            @info "IG-ref GC-NS MC move failed, step: $(i)"
+        end
+
+        write_df_every_n(df, i, save_strategy)
+        write_ls_every_n(liveset, i, save_strategy)
+    end
+
+    return df, liveset, params
 end

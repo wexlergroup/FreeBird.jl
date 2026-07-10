@@ -56,3 +56,31 @@ function adjust_cluster_p(params::SamplingParameters, rate::Float64, iteration::
     push!(params.cluster_adjust_iterations, iteration)
     return params
 end
+
+"""
+    _accumulate_cluster_stats!(params::SamplingParameters, mc_routine,
+                               cl_accepted::Int, cl_total::Int, ns_iteration::Int)
+
+Accumulate cluster-move acceptance statistics from one decorrelation walk onto
+`params` and call `adjust_cluster_p` when the adjustment window is full.
+`mc_routine` supplies the static tuning configuration (`cluster_adjust_interval`,
+`target_cluster_accept`, `cluster_p_floor`, `cluster_p_ceiling`). Shared by the
+grand-canonical `nested_sampling_step!` methods.
+"""
+function _accumulate_cluster_stats!(params::SamplingParameters, mc_routine,
+                                    cl_accepted::Int, cl_total::Int, ns_iteration::Int)
+    cl_total > 0 || return params
+    params.cluster_accepted += cl_accepted
+    params.cluster_total += cl_total
+    if mc_routine.cluster_adjust_interval > 0 &&
+       params.cluster_total >= mc_routine.cluster_adjust_interval
+        window_rate = params.cluster_accepted / max(params.cluster_total, 1.0)
+        adjust_cluster_p(params, window_rate, ns_iteration;
+                         target=mc_routine.target_cluster_accept,
+                         floor=mc_routine.cluster_p_floor,
+                         ceiling=mc_routine.cluster_p_ceiling)
+        params.cluster_accepted = 0.0
+        params.cluster_total = 0.0
+    end
+    return params
+end

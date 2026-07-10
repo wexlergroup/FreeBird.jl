@@ -449,3 +449,13 @@ function monte_carlo_sampling(
 
     return energies, ls, cvs, acceptance_rates
 end
+
+# Catch-all for common mistake of omitting MCRoutine as the first argument
+function monte_carlo_sampling(system, potential_or_hamiltonian, mc_params::MetropolisMCParameters; kwargs...)
+    throw(ArgumentError(
+        "`monte_carlo_sampling` requires an `MCRoutine` as the first argument.\n" *
+        "For atomistic systems, use e.g. `MCRandomWalkMaxE()` or `MCMixedMoves()`.\n" *
+        "For lattice systems, use `MCNewSample()`.\n" *
+        "Example: monte_carlo_sampling(MCRandomWalkMaxE(), walker, potential, params)"
+    ))
+end

@@ -751,7 +751,7 @@ end
                              p_move::Float64=0.5, p_insert::Float64=0.25,
                              energy_perturb::Float64=0.0, n_max::Int=typemax(Int),
                              clusters_freq::Int=0, swaps_freq::Int=1,
-                             cluster_p::Float64=0.3)
+                             cluster_p::Float64=0.3, z0::Float64=1.0)
 
 Perform grand-canonical MCMC on a single-component lattice, mixing fixed-N
 moves (local swaps and/or geometric cluster moves) with single-site insertion
@@ -763,10 +763,16 @@ Each step:
 - With probability `p_insert`: propose inserting one particle.
 - With probability `1 - p_move - p_insert`: propose deleting one particle.
 
-Insert/delete proposals use a Metropolis correction to preserve the uniform
-prior over all microstates with Ω < Ω_max:
-- Insert ratio: `(p_delete / p_insert) * (M - N) / (N + 1)`
-- Delete ratio: `(p_insert / p_delete) * N / (M - N + 1)`
+Insert/delete proposals use a Metropolis correction to preserve the ideal-lattice-gas
+prior at reference fugacity `z0` — the Bernoulli product measure giving each
+configuration with N particles weight `z0^N` — over all microstates with Ω < Ω_max:
+- Insert ratio: `z0 * (p_delete / p_insert) * (M - N) / (N + 1)`
+- Delete ratio: `(1 / z0) * (p_insert / p_delete) * N / (M - N + 1)`
+
+The default `z0 = 1.0` reduces to the uniform prior over all 2^M microstates,
+matching the Ω-sorted grand-canonical nested sampling construction. `z0 ≠ 1`
+is used by the ideal-gas-referenced (E-sorted) construction, where the walk
+runs with `mu = 0` so the Ω ceiling reduces to an energy ceiling.
 
 Cluster moves are symmetric (no Metropolis correction), accepted if Ω < Ω_max.
 
@@ -783,6 +789,8 @@ Cluster moves are symmetric (no Metropolis correction), accepted if Ω < Ω_max.
 - `clusters_freq::Int=0`: Relative weight of cluster moves within fixed-N branch (0 = disabled).
 - `swaps_freq::Int=1`: Relative weight of local swaps within fixed-N branch.
 - `cluster_p::Float64=0.3`: Current cluster growth probability.
+- `z0::Float64=1.0`: Reference fugacity of the prior preserved by insert/delete
+  (1.0 = uniform prior over microstates).
 
 # Returns
 - `accept_this_walker::Bool`: Whether at least one move was accepted.
@@ -802,9 +810,13 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                   n_max::Int=typemax(Int),
                                   clusters_freq::Int=0,
                                   swaps_freq::Int=1,
-                                  cluster_p::Float64=0.3)
+                                  cluster_p::Float64=0.3,
+                                  z0::Float64=1.0)
     if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
         throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
+    end
+    if z0 <= 0.0
+        throw(ArgumentError("z0 must be positive"))
     end
 
     n_accept = 0
@@ -869,16 +881,17 @@ function MC_grand_canonical_walk!(n_steps::Int,
             continue
         end
 
-        # Metropolis correction for insert/delete detailed balance
+        # Metropolis correction for insert/delete detailed balance under the
+        # z0^N-weighted prior (z0 = 1: uniform prior)
         # Cluster and local swap moves are symmetric — no correction needed
         accept = true
         if move_type == :insert
-            ratio = (p_delete / p_insert) * (n_sites - n) / (n + 1)
+            ratio = z0 * (p_delete / p_insert) * (n_sites - n) / (n + 1)
             if ratio < 1.0 && rand() >= ratio
                 accept = false
             end
         elseif move_type == :delete
-            ratio = (p_insert / p_delete) * n / (n_sites - n + 1)
+            ratio = (p_insert / p_delete) * n / (z0 * (n_sites - n + 1))
             if ratio < 1.0 && rand() >= ratio
                 accept = false
             end

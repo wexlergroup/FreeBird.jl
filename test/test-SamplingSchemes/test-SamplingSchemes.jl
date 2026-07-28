@@ -10,6 +10,8 @@
     include("test-wang_landau.jl")
     # test grand-canonical nested sampling
     include("test-grand_canonical_ns.jl")
+    # test ideal-gas-referenced grand-canonical nested sampling
+    include("test-ideal-gas-ref-gcns.jl")
     # test atomistic GC-NS fixed-N post-processing (ideal gas reference)
     include("test-atomistic-gcns-fixed-n.jl")
 

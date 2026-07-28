@@ -13,7 +13,7 @@ free. Along the contiguous cull index ``i`` the enclosed prior volume is
 energy ladder ``E(i)``,
 
 ```math
-S(E) = i\,\ln\!\frac{K}{K+1} - \ln\left|\frac{dE}{di}\right| ,
+S(E) = i\,\ln\!\frac{K}{K+1} - \ln\left|\frac{dE}{di}\right| + \mathrm{const} ,
 ```
 
 where derivatives are taken against the dense, uniform ``i``-axis (local cubic
@@ -23,7 +23,7 @@ Phys. Rev. E **84**, 011127 (2011) and Qi & Bachmann, Phys. Rev. Lett. **120**,
 the inverse caloric temperature ``\beta(E) = dS/dE``, and their **order** follows
 from the higher derivatives:
 
-| transition order | signature in ``S^{(n)}(E)`` |
+| transition order | *independent* signature in ``S^{(n)}(E)`` |
 |:--|:--|
 | 1 (first-order)  | ``\beta = S'`` has a positive local **minimum** (``\beta`` backbends; latent heat) |
 | 2 (second-order) | ``\gamma = S''`` has a negative local **maximum** |
@@ -31,10 +31,14 @@ from the higher derivatives:
 | odd ``n``        | positive local minimum of ``S^{(n)}`` |
 | even ``n``       | negative local maximum of ``S^{(n)}`` |
 
-The transition temperature is ``T_\mathrm{tr} = 1/\beta(E_\mathrm{tr})``. This is a
-purely microcanonical route: it needs no temperature grid, returns transition
-**energies and orders** directly, and can resolve transitions that broad canonical
-`cv(T)` peaks blur.
+*Dependent* transitions carry the swapped signatures (odd ``n``: negative local
+maximum; even ``n``: positive local minimum) and are reported with
+`kind = :dependent` when accompanied by an independent transition of lower order
+at lower energy. The transition temperature is
+``T_\mathrm{tr} = 1/(k_B\,\beta(E_\mathrm{tr}))`` — in Kelvin with the default
+`kb` in eV/K, or in energy units with `kb = 1`. This is a purely microcanonical
+route: it needs no temperature grid, returns transition **energies and orders**
+directly, and can resolve transitions that broad canonical `cv(T)` peaks blur.
 
 ### Workflow
 
@@ -70,6 +74,7 @@ conv = transition_convergence(dfs, [320, 640, 1280])   # flags drifting transiti
     divergence as ``E \to E_\mathrm{ground}``.
 
 ## Functions
+
 ```@autodocs
 Modules = [AnalysisTools]
 ```

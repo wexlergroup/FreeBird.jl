@@ -502,8 +502,9 @@ end
 """
     _log_factorial(n::Integer) -> Float64
 
-Return `log(n!)` for small non-negative `n`, computed by summing `log(k)` to
-keep the result exact in floating point for `n` up to several dozen.
+Return `log(n!)` for non-negative `n`, computed by summing `log(k)`. Accurate
+to roundoff accumulation (absolute error ~1e-11 at `n ~ 10^4`), which covers
+both the small-`n` atomistic use and the large-`M` `_log_binomial` use.
 """
 function _log_factorial(n::Integer)
     n < 0 && throw(ArgumentError("n must be non-negative"))
@@ -512,12 +513,97 @@ function _log_factorial(n::Integer)
 end
 
 """
+    _log_binomial(M::Integer, N::Integer) -> Float64
+
+Return `log(binomial(M, N))` in floating point, computed from `_log_factorial`
+so that it does not overflow for lattice sizes where `binomial(M, N)` exceeds
+`typemax(Int64)`.
+"""
+function _log_binomial(M::Integer, N::Integer)
+    0 <= N <= M || throw(ArgumentError("require 0 ≤ N ≤ M, got N=$N, M=$M"))
+    return _log_factorial(M) - _log_factorial(N) - _log_factorial(M - N)
+end
+
+"""
+    _fixed_N_log_evidence(df, T_grid; n_walkers, n_cull, ω0, live_energies, kb)
+        -> (log_Z_NS::Vector{Float64}, mean_E::Vector{Float64})
+
+Canonical NS evidence `log Z_NS(β) = log Σᵢ ωᵢ exp(−βEᵢ)` and canonical mean
+energy at each temperature in `T_grid`, evaluated by log-sum-exp. The discarded
+weights `ωᵢ` are built directly in log space, so deep ladders (`iter` beyond
+~`700 · n_walkers`, where the linear-space `ωᵢ` underflows Float64) keep their
+low-energy samples. When `live_energies` is supplied, the residual prior mass
+`ω0 · (K/(K+n_cull))^{n_iters}` (with `n_iters = maximum(df.iter)`) is split
+evenly among the supplied energies — the live-set tail correction. An empty
+ladder records no compression, so its tail carries the sector's entire prior
+mass, exactly 1 and independent of `ω0` (matching the internally-handled
+`N = 0` sector). Internal helper shared by the `gc_thermodynamic_stats_fixed_N`
+methods.
+"""
+function _fixed_N_log_evidence(
+    df::DataFrame,
+    T_grid::AbstractVector{<:Unitful.Temperature};
+    n_walkers::Int,
+    n_cull::Int,
+    ω0::Float64,
+    live_energies::Union{Nothing,AbstractVector{<:Real}},
+    kb::Float64,
+)
+    Es = collect(Float64, df.emax)
+    if isempty(Es) && (live_energies === nothing || isempty(live_energies))
+        throw(ArgumentError(
+            "a sector has no discarded samples and no live-set tail; for " *
+            "single-configuration sectors supply an empty DataFrame plus a " *
+            "live_emax entry carrying the sector energy (e.g. n_walkers " *
+            "copies of it)"))
+    end
+    # Log-space weights: the linear-space ωᵢ underflows Float64 for
+    # iter ≳ 700·K, silently dropping the low-energy samples that dominate
+    # at low T.
+    log_r = log(n_walkers / (n_walkers + n_cull))
+    log_ωi = (log(ω0) + log(n_cull / (n_walkers + n_cull))) .+ df.iter .* log_r
+    if live_energies === nothing
+        Es_all = Es
+        log_ws = log_ωi
+    else
+        Es_live = collect(Float64, live_energies)
+        # The live set carries the residual prior mass ω0 · r^n_iters, split
+        # evenly among the supplied energies. n_iters comes from the recorded
+        # iter values (not the row count), so continuation ladders whose iter
+        # does not start at 1 stay consistent with their ωᵢ. An empty ladder
+        # records no compression: its tail is the sector's entire prior mass,
+        # exactly 1, independent of ω0.
+        n_iters = isempty(df.iter) ? 0 : maximum(df.iter)
+        log_tail_total = n_iters == 0 ? 0.0 : log(ω0) + n_iters * log_r
+        log_tail = log_tail_total - log(length(Es_live))
+        Es_all = vcat(Es, Es_live)
+        log_ws = vcat(log_ωi, fill(log_tail, length(Es_live)))
+    end
+
+    log_Z_NS = Vector{Float64}(undef, length(T_grid))
+    mean_E = Vector{Float64}(undef, length(T_grid))
+    for (j, T) in enumerate(T_grid)
+        β = 1.0 / (kb * ustrip(u"K", T))
+        log_terms = log_ws .- β .* Es_all
+        max_log = maximum(log_terms)
+        ws = exp.(log_terms .- max_log)
+        sum_w = sum(ws)
+        log_Z_NS[j] = max_log + log(sum_w)
+        mean_E[j] = sum(ws .* Es_all) / sum_w
+    end
+    return log_Z_NS, mean_E
+end
+
+"""
     gc_thermodynamic_stats_fixed_N(ns_outputs, N_values, V, atomic_mass, μ_grid, T_grid;
                                    n_walkers=120, n_cull=1, ω0=1.0,
                                    live_emax=nothing, kb=8.617333262e-5)
 
-Compute grand-canonical thermodynamic averages from a stack of canonical
-nested-sampling outputs, one per fixed particle number `N`.
+Atomistic method: compute grand-canonical thermodynamic averages from a stack
+of canonical nested-sampling outputs, one per fixed particle number `N`, using
+the simulation-box volume `V` and the thermal wavelength. Returns `Xi` in
+linear space (contrast the lattice-gas method of this function, which takes
+`n_sites` and returns `logXi`).
 
 For each `N`, the canonical NS evidence at inverse temperature `β` is
 
@@ -548,12 +634,15 @@ grand sum for numerical stability.
 
 After a finite number of NS iterations `n_iters` the recorded weights `ωᵢ` carry
 only `1 − (K/(K+n_cull))^{n_iters}` of the prior volume (times `ω0`); the remainder
-sits in the `K` surviving live walkers. Supplying `live_emax` (one vector of K live
-walker energies per `N`) adds the live-set tail to each per-N evidence: each live
-walker contributes weight `ω0 · (K/(K+n_cull))^{n_iters} / K` at its current energy.
-When omitted, the live-set tail is neglected — for ratio observables (`⟨N⟩`, `⟨U⟩`)
-the resulting bias is small but visible at low T or shallow NS; for the absolute
-`Ξ` it appears as a uniform-in-N prefactor that does not cancel.
+sits in the `K` surviving live walkers. Supplying `live_emax` (one vector of live
+walker energies per `N`, normally the K live energies) adds the live-set tail to
+each per-N evidence: the residual mass `ω0 · (K/(K+n_cull))^{n_iters}` is split
+evenly among the supplied energies. A sector supplied as an empty DataFrame plus
+live energies carries mass exactly `1`, independent of `ω0` (see the lattice-gas
+method's "Special sectors"). When omitted, the live-set tail is neglected — for
+ratio observables (`⟨N⟩`, `⟨U⟩`) the resulting bias is small but visible at low T
+or shallow NS; for the absolute `Ξ` it appears as a uniform-in-N prefactor that
+does not cancel.
 
 # Arguments
 - `ns_outputs::AbstractVector{<:DataFrame}`: one canonical-NS output per `N`,
@@ -607,8 +696,14 @@ function gc_thermodynamic_stats_fixed_N(
     if !(0 in N_values)
         throw(ArgumentError("N_values must include 0 (the empty configuration)"))
     end
+    if !allunique(N_values)
+        throw(ArgumentError("N_values must not contain duplicate entries"))
+    end
     if live_emax !== nothing && length(live_emax) != length(N_values)
         throw(DimensionMismatch("live_emax and N_values must have the same length"))
+    end
+    if !all(T -> ustrip(u"K", T) > 0, T_grid)
+        throw(ArgumentError("every temperature in T_grid must be positive"))
     end
 
     N_int = collect(Int, N_values)
@@ -629,31 +724,11 @@ function gc_thermodynamic_stats_fixed_N(
             continue
         end
 
-        ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
-        Es = collect(Float64, df.emax)
-        n_iters = length(df.iter)
-        # Each live walker carries weight ω0 · (K/(K+n_cull))^n_iters / K,
-        # accounting for the prior volume that finite termination leaves in
-        # the live set.
-        log_tail = log(ω0) + n_iters * log(n_walkers / (n_walkers + n_cull)) -
-                   log(n_walkers)
-        for (j, T) in enumerate(T_grid)
-            β = 1.0 / (kb * ustrip(u"K", T))
-            if live_emax === nothing
-                log_terms = log.(ωi) .- β .* Es
-                Es_all = Es
-            else
-                Es_live = collect(Float64, live_emax[i])
-                log_terms = vcat(log.(ωi) .- β .* Es,
-                                 log_tail .- β .* Es_live)
-                Es_all = vcat(Es, Es_live)
-            end
-            max_log = maximum(log_terms)
-            ws = exp.(log_terms .- max_log)
-            sum_w = sum(ws)
-            log_Z_NS[i, j] = max_log + log(sum_w)
-            mean_E_N[i, j] = sum(ws .* Es_all) / sum_w
-        end
+        live = live_emax === nothing ? nothing : live_emax[i]
+        log_Z_NS[i, :], mean_E_N[i, :] = _fixed_N_log_evidence(
+            df, T_grid;
+            n_walkers=n_walkers, n_cull=n_cull, ω0=ω0,
+            live_energies=live, kb=kb)
     end
 
     log_fact = [_log_factorial(N) for N in N_int]
@@ -685,6 +760,172 @@ function gc_thermodynamic_stats_fixed_N(
     end
 
     return (Xi=Xi, mean_N=mean_N, var_N=var_N, mean_U=mean_U)
+end
+
+"""
+    gc_thermodynamic_stats_fixed_N(ns_outputs, N_values, n_sites, μ_grid, T_grid;
+                                   n_walkers=120, n_cull=1, ω0=1.0,
+                                   live_emax=nothing, kb=8.617333262e-5)
+
+Lattice-gas method: compute grand-canonical thermodynamic averages from a
+stack of canonical (fixed-`N`) lattice nested-sampling outputs, one per
+particle count `N`, on a lattice with `n_sites` sites.
+
+Fixed-`N` lattice NS samples the uniform prior over the `binomial(n_sites, N)`
+occupation patterns, so the absolute canonical partition function is
+`Z_N(β) = binomial(M, N) · Z_NS^{(N)}(β)` with `M = n_sites` and
+
+```math
+\\Xi(\\mu, T) = \\sum_N z^N \\binom{M}{N} Z_{\\mathrm{NS}}^{(N)}(\\beta),
+\\qquad z = \\exp(\\beta\\mu).
+```
+
+A lattice gas has no momentum integral, so `z = exp(βμ)` directly — no volume
+argument and no thermal wavelength enter (contrast the atomistic method of
+this function). The sum runs over the supplied `N_values`, which must include
+`0`; truncating `N_values` below `n_sites` truncates Ξ accordingly, which is
+safe only when `⟨N⟩` at the requested `(μ, T)` sits well below the largest
+supplied `N`.
+
+## Special sectors
+
+- `N = 0`: the empty lattice is a single configuration with `E = 0`, so
+  `Z_NS^{(0)} = 1`; the corresponding DataFrame contents are ignored.
+- `N = n_sites` (and any other single-configuration sector): NS cannot make
+  progress because every walker holds the same configuration. Supply an empty
+  DataFrame (`DataFrame(iter=Int[], emax=Float64[])`) together with a
+  `live_emax` entry holding the sector energy (conventionally `n_walkers`
+  copies of it; any count works) — the live-set tail then carries the
+  sector's entire prior mass, exactly `1` and independent of `ω0`, matching
+  the internally-handled `N = 0` sector. Because such sectors require a
+  `live_emax` entry, covering the full range `0:n_sites` in `N_values` is
+  only possible with `live_emax` supplied.
+
+## Live-set tail and normalization
+
+As for the atomistic method, the recorded weights `ωᵢ` carry only part of the
+prior volume after finite NS termination. Supplying `live_emax` (one vector of
+live-walker energies per `N`, normally the `n_walkers` live energies) splits
+the residual prior mass `ω0 · (K/(K+n_cull))^{n_iters}` evenly among the
+supplied entries of each sector. For fully-normalized absolute `Ξ`, pass
+`ω0 = (n_walkers + n_cull)/n_walkers` (Skilling weights) together with
+`live_emax`; with the defaults (`ω0 = 1.0`, no tail), `logXi` is biased low,
+and the omitted tail additionally leaves an `N`-dependent bias — small but
+visible at low `T` or for shallow NS runs, and not exactly cancelling in the
+ratio observables `mean_N`, `var_N`, and `mean_U` when per-`N` ladders differ
+in length or convergence.
+
+# Arguments
+- `ns_outputs::AbstractVector{<:DataFrame}`: one canonical lattice-NS output
+  per `N`, each with columns `[:iter, :emax]` (energies in eV, as produced by
+  `nested_sampling` on a `LatticeGasWalkers` liveset).
+- `N_values::AbstractVector{<:Integer}`: particle counts corresponding to each
+  DataFrame. Must include `0`, and every entry must lie in `0:n_sites`.
+- `n_sites::Integer`: number of lattice sites `M`.
+- `μ_grid::AbstractVector{<:typeof(1.0u"eV")}`: chemical potentials.
+- `T_grid::AbstractVector{<:Unitful.Temperature}`: temperatures.
+
+# Keyword arguments
+- `n_walkers::Int=120`: number of NS walkers used to produce each DataFrame.
+  Must be uniform across `ns_outputs`.
+- `n_cull::Int=1`: NS culls per iteration.
+- `ω0::Float64=1.0`: initial prior weight for the discarded-sample ladder.
+- `live_emax::Union{Nothing,AbstractVector{<:AbstractVector{<:Real}}}=nothing`:
+  when supplied, one vector of live-walker energies (in eV) per `N` —
+  normally the `n_walkers` live energies; the sector's residual prior mass is
+  split evenly among the supplied entries. The entry for `N=0` is ignored.
+- `kb::Float64`: Boltzmann constant in eV/K.
+
+# Returns
+A `NamedTuple` `(logXi, mean_N, var_N, mean_U)`. Each field is a
+`Matrix{Float64}` of size `(length(μ_grid), length(T_grid))` indexed
+`[i_μ, i_T]`. `logXi` is the natural log of the absolute grand partition
+function — returned in log space (unlike the atomistic method's `Xi`) because
+the binomial prior mass grows like `2^M` and `Ξ` overflows `Float64` for
+modest lattices. `mean_N` is `⟨N⟩`, `var_N` is `⟨N²⟩ − ⟨N⟩²`, and `mean_U`
+is `⟨E⟩` (grand-canonical, in eV).
+"""
+function gc_thermodynamic_stats_fixed_N(
+    ns_outputs::AbstractVector{<:DataFrame},
+    N_values::AbstractVector{<:Integer},
+    n_sites::Integer,
+    μ_grid::AbstractVector{<:typeof(1.0u"eV")},
+    T_grid::AbstractVector{<:Unitful.Temperature};
+    n_walkers::Int=120,
+    n_cull::Int=1,
+    ω0::Float64=1.0,
+    live_emax::Union{Nothing,AbstractVector{<:AbstractVector{<:Real}}}=nothing,
+    kb::Float64=8.617333262e-5,
+)
+    if length(ns_outputs) != length(N_values)
+        throw(DimensionMismatch("ns_outputs and N_values must have the same length"))
+    end
+    if !(0 in N_values)
+        throw(ArgumentError("N_values must include 0 (the empty lattice)"))
+    end
+    if !all(0 .<= N_values .<= n_sites)
+        throw(ArgumentError("every entry of N_values must lie in 0:n_sites"))
+    end
+    if !allunique(N_values)
+        throw(ArgumentError("N_values must not contain duplicate entries"))
+    end
+    if live_emax !== nothing && length(live_emax) != length(N_values)
+        throw(DimensionMismatch("live_emax and N_values must have the same length"))
+    end
+    if !all(T -> ustrip(u"K", T) > 0, T_grid)
+        throw(ArgumentError("every temperature in T_grid must be positive"))
+    end
+
+    N_int = collect(Int, N_values)
+    n_N = length(N_int)
+    n_mu = length(μ_grid)
+    n_T = length(T_grid)
+
+    log_Z_NS = Matrix{Float64}(undef, n_N, n_T)
+    mean_E_N = Matrix{Float64}(undef, n_N, n_T)
+
+    for (i, df) in enumerate(ns_outputs)
+        # The N = 0 sector is the empty lattice: a single configuration with
+        # E = 0, so Z_NS^{(0)} = 1. The corresponding DataFrame is ignored.
+        if N_int[i] == 0
+            log_Z_NS[i, :] .= 0.0
+            mean_E_N[i, :] .= 0.0
+            continue
+        end
+
+        live = live_emax === nothing ? nothing : live_emax[i]
+        log_Z_NS[i, :], mean_E_N[i, :] = _fixed_N_log_evidence(
+            df, T_grid;
+            n_walkers=n_walkers, n_cull=n_cull, ω0=ω0,
+            live_energies=live, kb=kb)
+    end
+
+    log_binom = [_log_binomial(n_sites, N) for N in N_int]
+
+    logXi = Matrix{Float64}(undef, n_mu, n_T)
+    mean_N = Matrix{Float64}(undef, n_mu, n_T)
+    var_N = Matrix{Float64}(undef, n_mu, n_T)
+    mean_U = Matrix{Float64}(undef, n_mu, n_T)
+
+    for (j, T) in enumerate(T_grid)
+        β = 1.0 / (kb * ustrip(u"K", T))
+        for (k, μ) in enumerate(μ_grid)
+            μ_val = ustrip(u"eV", μ)
+
+            log_w = log_Z_NS[:, j] .+ N_int .* (β * μ_val) .+ log_binom
+            max_log = maximum(log_w)
+            ws = exp.(log_w .- max_log)
+            sum_w = sum(ws)
+
+            logXi[k, j] = max_log + log(sum_w)
+            mean_N[k, j] = sum(ws .* N_int) / sum_w
+            mean_N2 = sum(ws .* (N_int .^ 2)) / sum_w
+            var_N[k, j] = mean_N2 - mean_N[k, j]^2
+            mean_U[k, j] = sum(ws .* view(mean_E_N, :, j)) / sum_w
+        end
+    end
+
+    return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U)
 end
 
 

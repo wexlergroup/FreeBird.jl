@@ -14,5 +14,7 @@
     include("test-ideal-gas-ref-gcns.jl")
     # test atomistic GC-NS fixed-N post-processing (ideal gas reference)
     include("test-atomistic-gcns-fixed-n.jl")
+    # test lattice GC-NS fixed-N post-processing
+    include("test-lattice-gcns-fixed-n.jl")
 
 end

@@ -128,6 +128,20 @@
             [-0.25u"eV"], [300.0u"K"];
             n_walkers=K,
             live_emax=[Float64[], Float64[]])
+
+        # Duplicate entries in N_values
+        @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+            ns_outputs, [0, 1, 1],
+            1000.0u"Å^3", 40.0u"u",
+            [-0.25u"eV"], [300.0u"K"];
+            n_walkers=K)
+
+        # Non-positive temperature
+        @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+            ns_outputs, [0, 1, 2],
+            1000.0u"Å^3", 40.0u"u",
+            [-0.25u"eV"], [0.0u"K"];
+            n_walkers=K)
     end
 
 end

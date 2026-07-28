@@ -13,6 +13,8 @@ export read_output
 export ωᵢ, partition_function, internal_energy, cv
 export gc_thermodynamic_stats
 export gc_thermodynamic_stats_fixed_N
+export microcanonical_entropy, caloric_derivatives, inflection_transitions
+export transition_convergence
 
 """
     read_output(filename::String)
@@ -537,5 +539,7 @@ function gc_thermodynamic_stats_fixed_N(
     return (Xi=Xi, mean_N=mean_N, var_N=var_N, mean_U=mean_U)
 end
 
+
+include("microcanonical_inflection.jl")
 
 end # module AnalysisTools

@@ -38,6 +38,33 @@
         # a nonzero-N sector with no discarded samples and no live tail
         @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
             [empty_df(), empty_df()], [0, 1], 4, μs, Ts)
+        # duplicate entries in N_values
+        @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+            [empty_df(), good_df(), good_df()], [0, 1, 1], 4, μs, Ts)
+        # non-positive temperature
+        @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+            dfs, [0, 1], 4, μs, [0.0u"K"])
+    end
+
+    # ================================================================
+    @testset "_fixed_N_log_evidence: single-configuration sectors" begin
+        # An empty ladder plus a live tail carries the sector's entire prior
+        # mass, exactly 1 — independent of ω0 and of how many live energies
+        # are supplied — so log_Z_NS = -βE exactly.
+        fe = FreeBird.AnalysisTools._fixed_N_log_evidence
+        empty_df = DataFrame(iter=Int[], emax=Float64[])
+        Ts = [200.0, 400.0] .* u"K"
+        E = -0.3
+        K = 25
+        for ω0 in (1.0, (K + 1) / K), live in (fill(E, K), [E])
+            logZ, meanE = fe(empty_df, Ts;
+                n_walkers=K, n_cull=1, ω0=ω0, live_energies=live, kb=kb)
+            for (j, T) in enumerate(Ts)
+                β = 1.0 / (kb * ustrip(u"K", T))
+                @test isapprox(logZ[j], -β * E, rtol=1e-12)
+                @test isapprox(meanE[j], E, rtol=1e-12)
+            end
+        end
     end
 
     # ================================================================
@@ -58,6 +85,11 @@
         dfs = [DataFrame(iter=collect(1:n_iters), emax=fill(N * ε, n_iters))
                for N in N_values]
         live = [fill(N * ε, K) for N in N_values]
+        # The N = M sector uses the documented single-configuration recipe
+        # (empty DataFrame + live tail), pinning it at tight tolerance: the
+        # tail carries exactly the sector's prior mass 1, matching the flat
+        # ladders' 1 + O(r^n/K) closure within rtol.
+        dfs[end] = DataFrame(iter=Int[], emax=Float64[])
 
         μ_grid = [-0.08, -0.04, 0.0] .* u"eV"
         T_grid = [250.0, 300.0, 400.0] .* u"K"
@@ -160,7 +192,6 @@
             liveset = LatticeGasWalkers(walkers, ham, perturb_energy=1e-12)
             ns_params = LatticeNestedSamplingParameters(
                 mc_steps=60,
-                random_seed=1000 + N,
                 allowed_fail_count=100_000)
             df, final_ls, _ = nested_sampling(
                 liveset, ns_params, n_iters, MCRandomWalkClone(), save_strategy)

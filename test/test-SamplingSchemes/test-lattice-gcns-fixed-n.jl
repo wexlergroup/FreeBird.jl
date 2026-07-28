@@ -81,6 +81,12 @@
 
     # ================================================================
     @testset "exact-enumeration validation (3x3 lattice, real NS runs)" begin
+        using Random
+        # The NS tolerance checks below are statistical: seed the global RNG
+        # so they do not depend on which test files ran before this one.
+        # (The random_seed field on the NS parameters is not consumed.)
+        Random.seed!(1000)
+
         M = 9
         ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
 

@@ -34,6 +34,37 @@ Units of energy `U` is also specified.
 GenericLatticeHamiltonian(on_site_interaction::Float64, nth_neighbor_interactions::Vector{Float64}, energy_units::Unitful.Units)
 GenericLatticeHamiltonian(on_site_interaction::U, nth_neighbor_interactions::Vector{U}) where U
 ```
+
+All couplings must be finite; `Inf` is rejected by the constructor because it
+stalls nested sampling silently (every ceiling comparison becomes `Inf >= Inf`).
+
+## Hard-core (athermal) lattice models
+
+Nearest-neighbor exclusion models — hard squares on the square lattice, hard
+hexagons on the triangular lattice — are expressed with a *finite* repulsive
+coupling on a lattice built with a single cutoff shell, e.g.
+`GenericLatticeHamiltonian(0.0, [1.0], u"eV")` with `cutoff_radii=[1.1]`.
+The energy is then `J × (number of excluded-neighbor pairs)`, an
+integer-leveled ladder whose `E = 0` manifold is exactly the hard-core
+configuration space, and the nested-sampling descent through the violating
+levels measures the hard-core partition function against the full,
+unrestricted prior (the `(1+z0)^M` normalization stays valid). Two numerical
+windows apply:
+
+- **Sampling**: choose the NS `energy_perturbation` δ with
+  `eps(E_max) ≪ δ ≪ J`, where `E_max = J·M·c/2` is the maximal violation
+  energy on `M` sites with excluded-shell coordination `c`. Concretely, keep
+  `δ / eps(E_max)` above ~`K²` so the `K` walkers draw distinct tie-breaking
+  values on a plateau: δ = `1e-9` at `J = 1 eV` is safe through
+  `E_max ≈ 10³ eV` (hard squares near `M ≈ 500`, hard hexagons near
+  `M ≈ 330`); scale δ proportionally for larger lattices.
+- **Post-processing**: evaluate at a temperature low enough that
+  `β·J ≥ (ladder depth in nats) + ~40`, with the depth
+  `n_iters · ln((K + n_cull)/K)`, while keeping `β·δ ≪ 1`; every violating
+  level's Boltzmann factor is then an exact zero to double precision, the
+  allowed levels' deviate from 1 only by `O(β·δ)`, and all observables are
+  athermal (functions of the activity `z = exp(βμ)` alone).
+
 ## Examples
 ```jldoctest
 julia> ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
@@ -54,6 +85,13 @@ struct GenericLatticeHamiltonian{N,U} <: ClassicalHamiltonian
     function GenericLatticeHamiltonian{N,U}(on_site_interaction::U, nth_neighbor_interactions::Vector{U}) where {N,U}
         if length(nth_neighbor_interactions) != N
             throw(ArgumentError("Length of nth_neighbor_interactions must match the number of neighbors"))
+        end
+        if !isfinite(on_site_interaction) || any(!isfinite, nth_neighbor_interactions)
+            throw(ArgumentError("non-finite couplings are not supported: an Inf coupling " *
+                "makes every nested-sampling ceiling comparison degenerate (Inf >= Inf) and " *
+                "the sampler stalls silently. Model hard-core exclusion with a finite " *
+                "repulsive coupling instead — see the hard-core recipe in the " *
+                "GenericLatticeHamiltonian docstring."))
         end
         return new(on_site_interaction, SVector{N, U}(nth_neighbor_interactions))
     end

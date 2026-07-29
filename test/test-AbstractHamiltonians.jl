@@ -5,6 +5,12 @@
         @testset "Constructor Tests" begin
             # Test error handling for mismatched lengths
             @test_throws ArgumentError GenericLatticeHamiltonian{3,typeof(1.0u"eV")}(1.0u"eV", [1.0, 2.0] .* u"eV")
+            # Non-finite couplings stall nested sampling silently (Inf >= Inf
+            # ceiling comparisons); hard-core models use a finite J instead
+            @test_throws ArgumentError GenericLatticeHamiltonian(0.0, [Inf, 0.0], u"eV")
+            @test_throws ArgumentError GenericLatticeHamiltonian(-Inf, [0.0], u"eV")
+            @test_throws ArgumentError GenericLatticeHamiltonian(0.0, [NaN], u"eV")
+            @test_throws ArgumentError GenericLatticeHamiltonian(0.0u"eV", [Inf * u"eV"])
         end
 
         @testset "Property Tests" begin

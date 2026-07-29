@@ -268,10 +268,75 @@
             adjacent_sites = deepcopy(lattice)
             adjacent_sites.components[1] .= false
             adjacent_sites.components[1][1:2] .= true
-            @test interacting_energy(adjacent_sites, ham) ≈ 
+            @test interacting_energy(adjacent_sites, ham) ≈
                   2 * ham.on_site_interaction + ham.nth_neighbor_interactions[1]
-            @test interacting_energy(adjacent_sites, mlham) ≈ 
+            @test interacting_energy(adjacent_sites, mlham) ≈
                   2 * ham.on_site_interaction + ham.nth_neighbor_interactions[1]
+        end
+
+        @testset "triangular lattice energies" begin
+            using Random
+            # First triangular coverage on the energy path: six first-shell
+            # neighbors per site under PBC, and energy = J × (occupied
+            # first-shell pairs) against an independent pair counter.
+            J = 1.0
+            ham_nn = GenericLatticeHamiltonian(0.0, [J], u"eV")
+            tri = MLattice{1,TriangularLattice}(
+                lattice_constant=1.0,
+                supercell_dimensions=(3, 3, 1),
+                periodicity=(true, true, false),
+                cutoff_radii=[1.1],
+                components=:equal,
+                adsorptions=:full)
+            M = length(tri.components[1])
+            @test M == 18
+            @test all(length(tri.neighbors[i][1]) == 6 for i in 1:M)
+            # First-shell adjacency is symmetric
+            @test all(i in tri.neighbors[j][1] for i in 1:M for j in tri.neighbors[i][1])
+
+            pair_count(occ) = sum(
+                occ[i] && occ[j] for i in 1:M for j in tri.neighbors[i][1] if j > i)
+
+            work = deepcopy(tri)
+            work.components[1] .= false
+            @test interacting_energy(work, ham_nn) ≈ 0.0u"eV"
+            work.components[1][1] = true
+            @test interacting_energy(work, ham_nn) ≈ 0.0u"eV"
+            work.components[1][first(tri.neighbors[1][1])] = true
+            @test interacting_energy(work, ham_nn) ≈ J * u"eV"
+            work.components[1] .= true
+            @test interacting_energy(work, ham_nn) ≈ J * 6 * M / 2 * u"eV"
+
+            Random.seed!(42)
+            for _ in 1:50
+                occ = rand(Bool, M)
+                work.components[1] .= occ
+                @test interacting_energy(work, ham_nn) ≈ J * pair_count(occ) * u"eV"
+            end
+
+            # The customary two-shell cutoffs [1.1, 1.5] leave the second
+            # shell EMPTY on a triangular lattice (second-neighbor distance
+            # √3 ≈ 1.732) — the constructor warns about the silent shell.
+            tri15 = @test_logs (:warn, r"empty on every") match_mode=:any MLattice{1,TriangularLattice}(
+                lattice_constant=1.0,
+                supercell_dimensions=(4, 4, 1),
+                periodicity=(true, true, false),
+                cutoff_radii=[1.1, 1.5],
+                components=:equal,
+                adsorptions=:full)
+            @test all(isempty(tri15.neighbors[i][2])
+                      for i in 1:length(tri15.components[1]))
+            # ... while [1.1, 1.8] captures the six √3 second neighbors.
+            tri18 = MLattice{1,TriangularLattice}(
+                lattice_constant=1.0,
+                supercell_dimensions=(4, 4, 1),
+                periodicity=(true, true, false),
+                cutoff_radii=[1.1, 1.8],
+                components=:equal,
+                adsorptions=:full)
+            M18 = length(tri18.components[1])
+            @test all(length(tri18.neighbors[i][1]) == 6 for i in 1:M18)
+            @test all(length(tri18.neighbors[i][2]) == 6 for i in 1:M18)
         end
     end
 

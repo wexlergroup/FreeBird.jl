@@ -16,5 +16,7 @@
     include("test-atomistic-gcns-fixed-n.jl")
     # test lattice GC-NS fixed-N post-processing
     include("test-lattice-gcns-fixed-n.jl")
+    # test hard-core lattice models (finite-J athermal recipe)
+    include("test-hard-core-lattices.jl")
 
 end

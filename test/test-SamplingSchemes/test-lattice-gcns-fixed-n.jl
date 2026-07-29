@@ -109,6 +109,17 @@
             @test isapprox(stats.var_N[k, j], M * θ / (1 + zeff), rtol=1e-8)
             @test isapprox(stats.mean_U[k, j], ε * M * θ, rtol=1e-8)
         end
+
+        # Per-N evidence slices: log_Z_N = log[C(M,N) · Z_NS^{(N)}(β)], with
+        # Z_NS^{(N)} = e^{-βNε} for the flat ladders (Σω = 1 per sector).
+        @test stats.N_values == N_values
+        @test size(stats.log_Z_N) == (length(N_values), length(T_grid))
+        lb = FreeBird.AnalysisTools._log_binomial
+        for (j, T) in enumerate(T_grid), N in N_values
+            β = 1.0 / (kb * ustrip(u"K", T))
+            @test isapprox(stats.log_Z_N[N + 1, j], lb(M, N) - β * N * ε,
+                           rtol=1e-8)
+        end
     end
 
     # ================================================================

@@ -635,7 +635,9 @@
                 @test lattice.basis == [(0.0, 0.0, 0.0), (1/2, sqrt(3)/2, 0.0)]
                 @test lattice.supercell_dimensions == (4, 2, 1)
                 @test lattice.periodicity == (true, true, false)
-                @test lattice.cutoff_radii == [1.1, 1.5]
+                # Triangular default is [1.1, 1.8]: the second-neighbor
+                # distance √3 ≈ 1.732 lies beyond the square-lattice 1.5
+                @test lattice.cutoff_radii == [1.1, 1.8]
                 @test length(lattice.neighbors) == 16
                 @test length(lattice.components) == 2
                 @test length(lattice.adsorptions) == 16

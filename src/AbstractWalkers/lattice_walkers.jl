@@ -75,7 +75,18 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
         
         neighbors[i] = nth_neighbors
     end
-    
+
+    for k in 1:layers_of_neighbors
+        if all(isempty(nbrs[k]) for nbrs in neighbors)
+            @warn "Neighbor shell $k (cutoff radius $(cutoff_radii[k])) is empty on every " *
+                  "site; a Hamiltonian coupling for this shell silently contributes zero. " *
+                  "Check cutoff_radii against the actual neighbor distances — e.g. on a " *
+                  "triangular lattice the second-neighbor distance is √3 ≈ 1.732 lattice " *
+                  "constants, beyond the square-lattice cutoff of 1.5 — or whether the " *
+                  "supercell is too small to contain this shell."
+        end
+    end
+
     return neighbors
 end
 
@@ -194,7 +205,7 @@ Throws an `ArgumentError` if the number of components does not match `C`.
                                   basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)],
                                   supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 2, 1),
                                   periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
-                                  cutoff_radii::Vector{Float64}=[1.1, 1.5],
+                                  cutoff_radii::Vector{Float64}=[1.1, 1.8],
                                   components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
                                   adsorptions::Union{Vector{Int},Symbol}=:full)
 
@@ -362,7 +373,9 @@ function MLattice{C,TriangularLattice}(; lattice_constant::Float64=1.0,
                                         basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)],
                                         supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 2, 1),
                                         periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
-                                        cutoff_radii::Vector{Float64}=[1.1, 1.5],
+                                        # The triangular second-neighbor distance is √3 ≈ 1.732, so the
+                                        # square-lattice default [1.1, 1.5] would leave shell 2 empty.
+                                        cutoff_radii::Vector{Float64}=[1.1, 1.8],
                                         components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
                                         adsorptions::Union{Vector{Int},Symbol}=:full,
                                     ) where C

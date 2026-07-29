@@ -1326,7 +1326,15 @@ truncate the prior support and bias Ξ.
   Required to be nonzero on lattices (degenerate levels stall the strict `<`
   ceiling and bias the evidence — enforced by the keyword constructor); must
   remain ≪ k_B·T at the lowest temperature targeted in post-processing, since
-  perturbed energies are recorded.
+  perturbed energies are recorded. It must also stay *above* the float
+  resolution of the largest energies on the ladder — keep
+  `energy_perturbation / eps(E_max)` above ~`K²` so the `K` walkers draw
+  distinct tie-breaking values on a degenerate plateau. The default `1e-12`
+  satisfies that only for `E_max` up to `O(1) eV`; finite-J hard-core ladders
+  reach `E_max = J·M·c/2`, so use `1e-9` there (safe through
+  `E_max ≈ 10³ eV`, i.e. a few hundred sites at `J = 1 eV`) and scale it
+  proportionally beyond — see the hard-core recipe in the
+  `GenericLatticeHamiltonian` docstring.
 - `random_seed::Int64`: Kept for parity with `GrandCanonicalNestedSamplingParameters`;
   **not currently consumed** by the NS loop — call `Random.seed!` before
   `ideal_gas_referenced_nested_sampling` for reproducible runs.

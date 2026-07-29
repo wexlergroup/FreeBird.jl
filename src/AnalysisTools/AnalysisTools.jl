@@ -385,6 +385,14 @@ reliability at each grid point is reported by the Kish effective sample size
 roughly `1/√Var(N)`. Treat grid points with small `N_eff` (≲ 100) as
 unreliable and re-run with z0 closer to the target fugacity.
 
+Athermal (hard-core) models sampled with the finite-J recipe (see the
+`GenericLatticeHamiltonian` docstring) are evaluated here at a temperature low
+enough that `β·J` exceeds the ladder depth in nats by ~40 while `β·δ ≪ 1`
+(δ = the run's `energy_perturbation`): the violating shells' `e^{-βE_j}` are
+then exact zeros, the retained shells' deviate from 1 only by `O(β·δ)`, and
+every observable is a function of `z = exp(βμ)` alone (`mean_U` reports the
+residual tie-breaking noise, ~δ).
+
 # Arguments
 - `df::DataFrame`: NS output with columns `[:iter, :emax, :num_particles]`.
 - `n_sites::Int`: Number of lattice sites M.
@@ -785,7 +793,11 @@ argument and no thermal wavelength enter (contrast the atomistic method of
 this function). The sum runs over the supplied `N_values`, which must include
 `0`; truncating `N_values` below `n_sites` truncates Ξ accordingly, which is
 safe only when `⟨N⟩` at the requested `(μ, T)` sits well below the largest
-supplied `N`.
+supplied `N`. (For an athermal hard-core model the truncation at the
+close-packing `N` is exact — every higher sector has no allowed
+configuration; see the hard-core recipe in the `GenericLatticeHamiltonian`
+docstring for the per-`N` sampling setup and the evaluation-temperature
+criterion.)
 
 ## Special sectors
 
@@ -837,13 +849,20 @@ in length or convergence.
 - `kb::Float64`: Boltzmann constant in eV/K.
 
 # Returns
-A `NamedTuple` `(logXi, mean_N, var_N, mean_U)`. Each field is a
-`Matrix{Float64}` of size `(length(μ_grid), length(T_grid))` indexed
-`[i_μ, i_T]`. `logXi` is the natural log of the absolute grand partition
-function — returned in log space (unlike the atomistic method's `Xi`) because
-the binomial prior mass grows like `2^M` and `Ξ` overflows `Float64` for
-modest lattices. `mean_N` is `⟨N⟩`, `var_N` is `⟨N²⟩ − ⟨N⟩²`, and `mean_U`
-is `⟨E⟩` (grand-canonical, in eV).
+A `NamedTuple` `(logXi, mean_N, var_N, mean_U, log_Z_N, N_values)`. The first
+four fields are `Matrix{Float64}` of size `(length(μ_grid), length(T_grid))`
+indexed `[i_μ, i_T]`. `logXi` is the natural log of the absolute grand
+partition function — returned in log space (unlike the atomistic method's
+`Xi`) because the binomial prior mass grows like `2^M` and `Ξ` overflows
+`Float64` for modest lattices. `mean_N` is `⟨N⟩`, `var_N` is `⟨N²⟩ − ⟨N⟩²`,
+and `mean_U` is `⟨E⟩` (grand-canonical, in eV). `log_Z_N` is the
+`(length(N_values), length(T_grid))` matrix of log canonical
+partition-function slices `log[C(M,N) · Z_NS^{(N)}(β)]` — the per-`N`
+evidence the assembly is built from — and `N_values` echoes the particle
+counts (as `Vector{Int}`) indexing its rows. For an athermal (hard-core)
+model evaluated at a sufficiently low `T` (see the hard-core recipe in the
+`GenericLatticeHamiltonian` docstring), `log_Z_N` is `log g_N`, the log count
+of allowed `N`-particle configurations.
 """
 function gc_thermodynamic_stats_fixed_N(
     ns_outputs::AbstractVector{<:DataFrame},
@@ -925,7 +944,8 @@ function gc_thermodynamic_stats_fixed_N(
         end
     end
 
-    return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U)
+    return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U,
+            log_Z_N=log_Z_NS .+ log_binom, N_values=N_int)
 end
 
 

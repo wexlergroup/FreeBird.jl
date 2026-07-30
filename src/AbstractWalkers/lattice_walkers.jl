@@ -534,6 +534,15 @@ Diagnostics:
 Note: for a pair signature (`K = 2`) this reproduces the sites of a
 neighbor shell as unordered pairs — useful as a counting diagnostic; pair
 couplings themselves belong in `GenericLatticeHamiltonian`.
+
+**Homometry caveat**: for `K ≥ 4`, non-congruent figures can share a
+distance multiset (homometric figures), and this method then enumerates
+the embeddings of every such figure together — it warns about this. Pass
+the coordinate template instead (the `coords` method) to enumerate only
+embeddings whose full distance *matrix* matches the template under some
+site permutation, which excludes homometric aliases while preserving the
+torus counting convention. For `K ≤ 3` the multiset determines the figure
+and the two methods agree.
 """
 function enumerate_motif_embeddings(lattice::MLattice, distances::AbstractVector{<:Real};
                                     tol::Float64=1e-6,
@@ -545,7 +554,79 @@ function enumerate_motif_embeddings(lattice::MLattice, distances::AbstractVector
             "distances must be the full pairwise multiset of a K-site motif " *
             "— 1 (K = 2), 3 (K = 3), 6 (K = 4), or 10 (K = 5) entries — got $npairs"))
     end
-    sig = sort(collect(Float64, distances))
+    if K >= 4
+        @warn "a distance multiset does not determine a figure for K ≥ 4 " *
+              "(homometric figures share multisets); embeddings of every " *
+              "figure with this multiset are enumerated together. Pass the " *
+              "coordinate template to enumerate_motif_embeddings to select " *
+              "the congruent embeddings only."
+    end
+    return _enumerate_motif_core(lattice, collect(Float64, distances), K,
+                                 nothing, tol, expected_count)
+end
+
+"""
+    enumerate_motif_embeddings(lattice::MLattice, coords::AbstractVector{<:Tuple};
+                               tol=1e-6, expected_count=nothing)
+
+Template method: declare the motif by its site coordinates (as accepted by
+[`motif_distances`](@ref)) and enumerate only the embeddings whose full
+minimum-image distance matrix matches the template's under some site
+permutation. This is the recommended method for `K ≥ 4`, where a distance
+multiset alone does not determine the figure (homometric figures).
+"""
+function enumerate_motif_embeddings(lattice::MLattice, coords::AbstractVector{<:Tuple};
+                                    tol::Float64=1e-6,
+                                    expected_count::Union{Int,Nothing}=nothing)
+    K = length(coords)
+    2 <= K <= 5 || throw(ArgumentError(
+        "the motif template must have 2 to 5 sites, got $K"))
+    to3(t) = (Float64(t[1]), Float64(t[2]), length(t) >= 3 ? Float64(t[3]) : 0.0)
+    pts = [to3(t) for t in coords]
+    T = zeros(K, K)
+    for a in 1:K, b in 1:K
+        T[a, b] = sqrt((pts[a][1] - pts[b][1])^2 +
+                       (pts[a][2] - pts[b][2])^2 +
+                       (pts[a][3] - pts[b][3])^2)
+    end
+    sig = sort([T[a, b] for a in 1:K for b in (a+1):K])
+    return _enumerate_motif_core(lattice, sig, K, T, tol, expected_count)
+end
+
+# Does some permutation of `sites` match the template distance matrix `T`
+# entrywise within tol? Backtracking assignment with early pruning; K ≤ 5,
+# so at most 120 permutations are ever considered.
+function _matches_template(sites::Vector{Int}, dist, T::Matrix{Float64}, tol::Float64)
+    K = length(sites)
+    perm = zeros(Int, K)
+    used = falses(K)
+    function assign(a)
+        a > K && return true
+        for b in 1:K
+            used[b] && continue
+            ok = true
+            for a2 in 1:(a-1)
+                if abs(dist(sites[perm[a2]], sites[b]) - T[a2, a]) > tol
+                    ok = false
+                    break
+                end
+            end
+            ok || continue
+            used[b] = true
+            perm[a] = b
+            assign(a + 1) && return true
+            used[b] = false
+        end
+        return false
+    end
+    return assign(1)
+end
+
+function _enumerate_motif_core(lattice::MLattice, distances::Vector{Float64}, K::Int,
+                               template::Union{Nothing,Matrix{Float64}},
+                               tol::Float64, expected_count::Union{Int,Nothing})
+    npairs = length(distances)
+    sig = sort(distances)
     all(>(0.0), sig) || throw(ArgumentError("motif distances must be positive"))
     tol > 0 || throw(ArgumentError("tol must be positive"))
 
@@ -556,19 +637,25 @@ function enumerate_motif_embeddings(lattice::MLattice, distances::AbstractVector
     pos = lattice.positions
     per = lattice.periodicity
 
-    # Wrap-around guard: a periodic circumference not exceeding K·d_max
-    # admits winding embeddings; counts then follow the torus convention
+    # Wrap-around guard: the shortest periodic translation (over small
+    # integer combinations of the periodic supercell vectors, which covers
+    # reasonably reduced cells; extreme shear beyond ±1 combinations is not
+    # detected) must exceed K·d_max, else winding embeddings are admitted
+    # and counts follow the torus convention
     d_max = sig[end]
-    for k in 1:3
-        per[k] || continue
-        C = norm(scv[:, k])
-        if C <= K * d_max + tol
-            @warn "periodic circumference $(round(C, digits=4)) along axis $k " *
-                  "does not exceed K·d_max = $(K * d_max); the cell is not a " *
-                  "faithful quotient and embeddings follow the torus " *
-                  "(minimum-image) convention"
-            break
-        end
+    C_min = Inf
+    for n1 in -1:1, n2 in -1:1, n3 in -1:1
+        (n1 == 0 && n2 == 0 && n3 == 0) && continue
+        (!per[1] && n1 != 0) && continue
+        (!per[2] && n2 != 0) && continue
+        (!per[3] && n3 != 0) && continue
+        C_min = min(C_min, norm(n1 * scv[:, 1] + n2 * scv[:, 2] + n3 * scv[:, 3]))
+    end
+    if isfinite(C_min) && C_min <= K * d_max + tol
+        @warn "shortest periodic translation $(round(C_min, digits=4)) does " *
+              "not exceed K·d_max = $(K * d_max); the cell is not a faithful " *
+              "quotient and embeddings follow the torus (minimum-image) " *
+              "convention"
     end
 
     uniq = Float64[]
@@ -581,11 +668,14 @@ function enumerate_motif_embeddings(lattice::MLattice, distances::AbstractVector
 
     # Per-site candidates at any signature distance, restricted to j > i:
     # anchored strictly increasing enumeration makes each unordered set
-    # appear exactly once, with the anchor as its minimum index
+    # appear exactly once, with the anchor as its minimum index. Pruning
+    # measures 2·tol from the merged uniq representatives so it stays a
+    # relaxation of the elementwise acceptance below (a representative can
+    # sit up to tol away from the signature entry it absorbed).
     cand = [Int[] for _ in 1:M]
     for i in 1:M, j in (i+1):M
         d = dist(i, j)
-        if any(u -> abs(u - d) <= tol, uniq)
+        if any(u -> abs(u - d) <= 2 * tol, uniq)
             push!(cand[i], j)
         end
     end
@@ -600,7 +690,9 @@ function enumerate_motif_embeddings(lattice::MLattice, distances::AbstractVector
             end
             sort!(ds)
             if all(abs(ds[t] - sig[t]) <= tol for t in 1:npairs)
-                push!(embeddings, NTuple{K,Int}(partial))
+                if template === nothing || _matches_template(partial, dist, template, tol)
+                    push!(embeddings, NTuple{K,Int}(partial))
+                end
             end
             return nothing
         end
@@ -609,7 +701,7 @@ function enumerate_motif_embeddings(lattice::MLattice, distances::AbstractVector
             ok = true
             for s in partial
                 dj = dist(s, j)
-                if !any(u -> abs(u - dj) <= tol, uniq)
+                if !any(u -> abs(u - dj) <= 2 * tol, uniq)
                     ok = false
                     break
                 end

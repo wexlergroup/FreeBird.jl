@@ -46,10 +46,14 @@
         @test length(enumerate_motif_embeddings(sq8, [1.0, 1.0, 2.0];
                                                 expected_count=128)) == 128
 
-        # Unit-square quattro: one per plaquette
+        # Unit-square quattro via the template method: one per plaquette
         @test length(enumerate_motif_embeddings(sq8,
-            motif_distances([(0, 0), (1, 0), (0, 1), (1, 1)]);
-            expected_count=64)) == 64
+            [(0, 0), (1, 0), (0, 1), (1, 1)]; expected_count=64)) == 64
+        # The multiset method warns for K ≥ 4 (homometric figures share
+        # multisets); the unit square has no alias, so the counts agree
+        q_ms = @test_logs (:warn, r"[Hh]omometric") match_mode = :any enumerate_motif_embeddings(
+            sq8, motif_distances([(0, 0), (1, 0), (0, 1), (1, 1)]))
+        @test length(q_ms) == 64
 
         # Pair signature (K = 2) reproduces the nearest-neighbor shell as
         # unordered pairs: 2M on the square lattice
@@ -94,6 +98,40 @@
     end
 
     # ================================================================
+    @testset "homometric figures and tolerance semantics" begin
+        # A homometric pair: non-congruent quattros sharing one distance
+        # multiset. The template method separates the two families (each has
+        # a mirror stabilizer of order 2, hence 4M embeddings); the multiset
+        # method warns and enumerates both together.
+        sq10 = cluster_square(10)
+        A = [(0, 0), (1, 0), (0, 1), (2, 2)]
+        B = [(0, 0), (1, 0), (2, 1), (2, 2)]
+        @test motif_distances(A) ≈ motif_distances(B)
+        eA = enumerate_motif_embeddings(sq10, A; expected_count=400)
+        eB = enumerate_motif_embeddings(sq10, B; expected_count=400)
+        @test isempty(intersect(Set(eA), Set(eB)))
+        both = @test_logs (:warn, r"[Hh]omometric") match_mode = :any enumerate_motif_embeddings(
+            sq10, motif_distances(A))
+        @test length(both) == 800
+        @test Set(both) == union(Set(eA), Set(eB))
+
+        # Candidate pruning is a relaxation of acceptance: a distance within
+        # tol of a signature entry that was merged into a nearby uniq
+        # representative must still be found (regression: pruning at tol
+        # from the representative silently dropped it)
+        gen = MLattice{1,GenericLattice}(
+            [5.0 0.0 0.0; 0.0 5.0 0.0; 0.0 0.0 1.0],
+            [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.1, 0.0, 0.0)],
+            (1, 1, 1),
+            (false, false, false),
+            [2.2],
+            [[false, false, false]],
+            [true, true, true])
+        found = enumerate_motif_embeddings(gen, [1.0, 1.05, 2.1]; tol=0.06)
+        @test length(found) == 1   # sides (1.0, 1.1, 2.1) accepted elementwise
+    end
+
+    # ================================================================
     @testset "cluster energy evaluation" begin
         Random.seed!(139)
         L = 6
@@ -102,7 +140,7 @@
         t1_embs = enumerate_motif_embeddings(sq6,
             motif_distances([(0, 0), (1, 0), (0, 1)]); expected_count=4M)
         q_embs = enumerate_motif_embeddings(sq6,
-            motif_distances([(0, 0), (1, 0), (0, 1), (1, 1)]); expected_count=M)
+            [(0, 0), (1, 0), (0, 1), (1, 1)]; expected_count=M)
         V0, J1, J2 = -0.1, 0.05, 0.02
         Jt, Jq = 0.168, -0.120
         pair = GenericLatticeHamiltonian(V0, [J1, J2], u"eV")
@@ -190,20 +228,40 @@
             dy = min(mod(ja - jb, 4), mod(jb - ja, 4))
             return dx^2 + dy^2
         end
-        brute3 = Float64[]
+        brute3 = Dict{NTuple{3,Int},Float64}()
         for a in 1:16, b in (a+1):16, c in (b+1):16
             r2s = sort([d24(a, b), d24(a, c), d24(b, c)])
-            push!(brute3, 0.05 * count(==(1), r2s) +
-                          (r2s == [1, 1, 2] ? 0.168 : 0.0))
+            brute3[(a, b, c)] = 0.05 * count(==(1), r2s) +
+                                (r2s == [1, 1, 2] ? 0.168 : 0.0)
         end
-        lib3 = sort([ustrip(u"eV", e) for e in df_exact.energy])
-        @test length(lib3) == 560
-        @test maximum(abs.(lib3 .- sort(brute3))) < 1e-10
+        @test nrow(df_exact) == 560
+        # Configuration-resolved: each enumerated configuration's energy
+        # against the brute force keyed by its occupied sites (a multiset
+        # comparison could not detect energies permuted among configurations)
+        for row in eachrow(df_exact)
+            occ_sites = NTuple{3,Int}(findall(row.config[1]))
+            @test abs(ustrip(u"eV", row.energy) - brute3[occ_sites]) < 1e-10
+        end
 
         # A Hamiltonian built for a larger lattice fails fast at liveset
-        # construction instead of raising a BoundsError mid-run
+        # construction instead of raising a BoundsError mid-run — and at the
+        # raw-lattice sampler entry points, which never build a liveset
         w4 = [LatticeWalker(deepcopy(lat4), energy=0.0u"eV", iter=0)]
         @test_throws ArgumentError LatticeGasWalkers(w4, h)
+        wl_params = WangLandauParameters(energy_min=-8.0, energy_max=8.0,
+                                         num_energy_bins=30, num_steps=10,
+                                         max_iter=2, random_seed=7)
+        @test_throws ArgumentError wang_landau(deepcopy(lat4), h, wl_params)
+        @test_throws ArgumentError nvt_monte_carlo(MCNewSample(), deepcopy(lat4),
+                                                   h, 300.0, 5, 7)
+
+        # The converse mismatch — a Hamiltonian enumerated on a smaller
+        # lattice, all of whose indices exist on the bigger one — is
+        # undetectable from indices alone: construction succeeds and the
+        # embeddings are geometric nonsense. Documented caller
+        # responsibility: always enumerate on the lattice being sampled.
+        w6 = [LatticeWalker(deepcopy(sq6), energy=0.0u"eV", iter=0)]
+        @test LatticeGasWalkers(w6, h4) isa LatticeGasWalkers
     end
 
     # ================================================================
@@ -229,8 +287,7 @@
         function zhang_hamiltonian(L)
             lat = cluster_square(L; cutoffs=[1.1, 1.5, 2.1, 2.3])
             clusters = [ClusterInteraction(zhang_J[k] * u"eV",
-                            enumerate_motif_embeddings(lat,
-                                motif_distances(zhang_motifs[k]);
+                            enumerate_motif_embeddings(lat, zhang_motifs[k];
                                 expected_count=zhang_per_site[k] * L * L))
                         for k in keys(zhang_motifs)]
             ham = ClusterLatticeHamiltonian(
@@ -261,6 +318,13 @@
         set_phase!((i, j) -> iseven(i + j))
         @test interacting_energy(sq12, zhang).val ≈
               72 * (-1.249 + 2 * 0.090 + 2 * (-0.050) + 2 * 0.051) atol = 1e-10
+        # p(2×1) stripes (every other column), 72 adatoms: pins J1 and the
+        # linear t1 separately from t2 (per adatom: 1 vertical first-shell
+        # pair, 2 third-shell pairs, 2 fourth-shell pairs, 1 vertical t1
+        # trio; no √2 pairs, so t2, t3, t6, and q2 are all inactive)
+        set_phase!((i, j) -> i % 2 == 0)
+        @test interacting_energy(sq12, zhang).val ≈
+              72 * (-1.249 + 0.292 + 2 * (-0.050) + 2 * (-0.010) + 0.168) atol = 1e-10
         # (1×1), 144 adatoms: every figure at its per-site multiplicity
         sq12.components[1] .= true
         @test interacting_energy(sq12, zhang).val ≈

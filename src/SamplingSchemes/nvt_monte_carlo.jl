@@ -80,8 +80,9 @@ function nvt_monte_carlo(
     # Set the random seed
     Random.seed!(random_seed)
 
-    # No liveset is built on this path, so run the shell-coverage check here
+    # No liveset is built on this path, so run the setup checks here
     AbstractLiveSets._warn_uncoupled_shells(lattice, h)
+    AbstractLiveSets._check_cluster_sites(h, lattice)
 
     energies = Vector{Float64}(undef, num_steps)
     configurations = Vector{typeof(lattice)}(undef, num_steps)

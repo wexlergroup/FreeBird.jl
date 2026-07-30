@@ -29,11 +29,16 @@ _n_coupled_shells(h) = nothing
 """
     _check_cluster_sites(hamiltonian, cfg)
 
-One-time check at liveset construction: a `ClusterLatticeHamiltonian`
-whose embeddings reference site indices beyond the lattice was built for a
-different lattice; failing here with a descriptive `ArgumentError` beats a
-`BoundsError` from deep inside the energy kernel. A no-op for every other
-Hamiltonian type.
+One-time check at run setup (the `LatticeGasWalkers` constructor and the
+raw-lattice `wang_landau`/`nvt_monte_carlo` entry points): a
+`ClusterLatticeHamiltonian` whose embeddings reference site indices beyond
+the lattice was built for a different lattice; failing here with a
+descriptive `ArgumentError` beats a `BoundsError` from deep inside the
+energy kernel. A no-op for every other Hamiltonian type. The converse
+mismatch — a Hamiltonian enumerated on a *smaller* lattice, whose indices
+all exist but whose embeddings have wrong geometry — is undetectable from
+indices alone and remains the caller's responsibility: always enumerate on
+the lattice being sampled.
 """
 _check_cluster_sites(hamiltonian, cfg) = nothing
 function _check_cluster_sites(h::ClusterLatticeHamiltonian, cfg::AbstractLattice)

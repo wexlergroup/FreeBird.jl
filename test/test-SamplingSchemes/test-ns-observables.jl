@@ -99,6 +99,44 @@
     end
 
     # ================================================================
+    # The pairing-guard test needs a step method that violates the cull
+    # invariant; structs and method extensions must live at module top level
+    @eval begin
+        struct BrokenObsRoutine <: MCRoutine end
+        function FreeBird.SamplingSchemes.nested_sampling_step!(
+                liveset::LatticeGasWalkers,
+                ns_params::NestedSamplingParameters,
+                mc_routine::BrokenObsRoutine;
+                ns_iteration::Int=0)
+            # Claims an accepted iteration whose emax does not belong to the
+            # pre-sorted worst walker
+            return 1, liveset.walkers[1].energy + 1.0u"eV", liveset, ns_params
+        end
+    end
+
+    @testset "observable hook: parallel rejection and pairing guard" begin
+        lat = obs_square_lattice(4, 4)
+        walkers = [LatticeWalker(deepcopy(lat), energy=0.0u"eV", iter=0)
+                   for _ in 1:6]
+        ls = LatticeGasWalkers(walkers, obs_ham)
+        params = LatticeNestedSamplingParameters(mc_steps=5,
+            energy_perturbation=1e-9)
+
+        # Parallel/multi-cull routines cull several walkers per recorded row,
+        # so they are rejected up front rather than corrupting the ledger
+        @test_throws ArgumentError nested_sampling(ls, params, Int64(1),
+            MCRandomWalkMaxEParallel(), obs_save;
+            observables=[:psi => order_parameter_c2x2])
+
+        # A step that reports a different walker than the pre-sorted worst
+        # trips the bit-exact pairing guard
+        @test_throws ErrorException nested_sampling(ls, params, Int64(1),
+            BrokenObsRoutine(), obs_save;
+            observables=[:psi => order_parameter_c2x2])
+        obs_cleanup()
+    end
+
+    # ================================================================
     @testset "observable hook: exact dead-point pairing (igref route)" begin
         Random.seed!(42)
         lat = obs_square_lattice(4, 4)
@@ -218,13 +256,28 @@
 
         # Self-consistency: averaging the ledger's own columns reproduces
         # mean_N and mean_U
+        # Mixed value types (Vector{Int} + Vector{Float64} typejoin to
+        # Dict{Symbol,Vector}) pin the loosened Dict annotation: this is
+        # exactly the documented self-consistency call
         stats2 = gc_thermodynamic_stats_ideal_ref(df, M, z0, μs, Ts, K;
             ω0=ω0, live_emax=live_E, live_numbers=live_N,
             observable_cols=[:num_particles, :emax],
-            live_observables=Dict(:num_particles => Float64.(live_N),
-                                  :emax => live_E))
+            live_observables=Dict(:num_particles => live_N, :emax => live_E))
         @test stats2.observables[:num_particles] ≈ stats2.mean_N rtol = 1e-12
         @test stats2.observables[:emax] ≈ stats2.mean_U rtol = 1e-12
+
+        # Live-tail-only analysis: a zero-row ledger need not carry the
+        # observable columns (mirrors the fixed-N empty-sector convention)
+        df_empty = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[])
+        st_tail = gc_thermodynamic_stats_ideal_ref(df_empty, M, z0, μs, Ts, K;
+            ω0=ω0, live_emax=live_E, live_numbers=live_N,
+            observable_cols=[:a], live_observables=Dict(:a => live_a))
+        for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
+            β = 1 / (kb * T)
+            w = exp.(β * μ .* Float64.(live_N) .- β .* live_E)
+            @test st_tail.observables[:a][i, j] ≈
+                  sum(w .* live_a) / sum(w) rtol = 1e-12
+        end
 
         # Backward compatibility: pre-existing fields keep their order, new
         # fields are appended, positional destructuring still works
@@ -312,6 +365,34 @@
             # The N = 0 sector contributes psi = 0 with weight wN[1]
             @test stats.observables[:psi][k, j] ≈
                   (wN[2] * p1 + wN[3] * p2) / sw rtol = 1e-10
+        end
+
+        # The N = 0 live_observables entry is USED (its live_emax counterpart
+        # is ignored): with a nonzero Int-typed sentinel — which also pins the
+        # loosened heterogeneous-Dict annotation — the empty sector's
+        # contribution wN[1] * 10 must appear in <b>, and it dominates at the
+        # strongly negative mu grid point
+        df1b = DataFrame(iter=[1, 2], emax=[0.3, 0.1], psi=[0.2, 0.4],
+                         b=[1.0, 3.0])
+        live_b = [Dict{Symbol,Vector}(:psi => [0.0], :b => [10]),
+                  Dict{Symbol,Vector}(:psi => [0.6, 0.8], :b => [5.0, 7.0]),
+                  Dict{Symbol,Vector}(:psi => [0.5, 0.5, 0.5],
+                                      :b => [2.0, 2.0, 2.0])]
+        stats_b = gc_thermodynamic_stats_fixed_N(
+            [df0, df1b, df2], N_values, M, μ_grid, T_grid;
+            n_walkers=K, ω0=ω0, live_emax=live_E,
+            observable_cols=[:psi, :b], live_observables=live_b)
+        @test stats_b.observables[:psi] ≈ stats.observables[:psi] rtol = 1e-12
+        for (j, T) in enumerate([300.0, 600.0]), (k, μ) in enumerate([-0.05, 0.02])
+            β = 1 / (kb * T)
+            b1v = w1 .* exp.(-β .* E1)
+            z1 = sum(b1v)
+            bb1 = sum(b1v .* vcat(df1b.b, live_b[2][:b])) / z1
+            z2 = exp(-β * 0.02)
+            wN = binom .* [1.0, z1, z2] .* exp.(β * μ .* [0.0, 1.0, 2.0])
+            sw = sum(wN)
+            @test stats_b.observables[:b][k, j] ≈
+                  (wN[1] * 10.0 + wN[2] * bb1 + wN[3] * 2.0) / sw rtol = 1e-10
         end
 
         # Backward compatibility: field order preserved, new fields appended

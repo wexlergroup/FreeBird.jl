@@ -446,7 +446,7 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
                                           live_emax::Union{Nothing,Vector{Float64}}=nothing,
                                           live_numbers::Union{Nothing,Vector{Int}}=nothing,
                                           observable_cols::AbstractVector{Symbol}=Symbol[],
-                                          live_observables::Union{Nothing,AbstractDict{Symbol,<:AbstractVector{<:Real}}}=nothing,
+                                          live_observables::Union{Nothing,AbstractDict{Symbol}}=nothing,
                                           kb::Float64=8.617333262e-5)
     if z0 <= 0.0
         throw(ArgumentError("z0 must be positive"))
@@ -466,11 +466,16 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
     end
     allunique(observable_cols) || throw(ArgumentError(
         "observable_cols must not contain duplicate entries"))
-    for col in observable_cols
-        hasproperty(df, col) || throw(ArgumentError(
-            "observable_cols: df has no column :$col"))
-        any(ismissing, df[!, col]) && throw(ArgumentError(
-            "observable_cols: df column :$col contains missing values"))
+    if n_dead > 0
+        # A zero-row df contributes no dead points, so its columns are never
+        # read: live-tail-only analyses need not carry the observable columns
+        # (mirroring the fixed-N empty-sector convention)
+        for col in observable_cols
+            hasproperty(df, col) || throw(ArgumentError(
+                "observable_cols: df has no column :$col"))
+            any(ismissing, df[!, col]) && throw(ArgumentError(
+                "observable_cols: df column :$col contains missing values"))
+        end
     end
     if live_observables !== nothing && live_emax === nothing
         throw(ArgumentError(
@@ -493,7 +498,10 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
                 "live_observables keys must match observable_cols exactly"))
         end
         for col in observable_cols
-            if length(live_observables[col]) != length(live_emax)
+            v = live_observables[col]
+            (v isa AbstractVector && all(x -> x isa Real, v)) || throw(ArgumentError(
+                "live_observables[:$col] must be a vector of Real values"))
+            if length(v) != length(live_emax)
                 throw(DimensionMismatch(
                     "live_observables[:$col] must have one entry per live " *
                     "walker (length(live_emax) = $(length(live_emax)))"))
@@ -534,6 +542,13 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
         As[col] = A
     end
 
+    # Second moments are formed on shifted energies (the cv() convention):
+    # the one-pass <E^2> - <E>^2 on absolute energies carries an ~eps*E^2
+    # cancellation floor that can dominate small variances at large |E|.
+    # Variances and covariances are shift-invariant, so the shift cancels.
+    E_shift = isempty(Es) ? 0.0 : minimum(Es)
+    Es_c = Es .- E_shift
+
     log_prior_mass = n_sites * log1p(z0)
     log_z0 = log(z0)
 
@@ -561,10 +576,10 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
             n_avg = sum(ws .* Ns) / sum_w
             mean_N[i, j] = n_avg
             var_N[i, j] = sum(ws .* Ns .^ 2) / sum_w - n_avg^2
-            u_avg = sum(ws .* Es) / sum_w
-            mean_U[i, j] = u_avg
-            var_U[i, j] = sum(ws .* Es .^ 2) / sum_w - u_avg^2
-            cov_UN[i, j] = sum(ws .* Es .* Ns) / sum_w - u_avg * n_avg
+            u_c = sum(ws .* Es_c) / sum_w
+            mean_U[i, j] = u_c + E_shift
+            var_U[i, j] = sum(ws .* Es_c .^ 2) / sum_w - u_c^2
+            cov_UN[i, j] = sum(ws .* Es_c .* Ns) / sum_w - u_c * n_avg
             for col in observable_cols
                 obs_out[col][i, j] = sum(ws .* As[col]) / sum_w
             end
@@ -627,7 +642,11 @@ low-energy samples. When `live_energies` is supplied, the residual prior mass
 evenly among the supplied energies — the live-set tail correction. An empty
 ladder records no compression, so its tail carries the sector's entire prior
 mass, exactly 1 and independent of `ω0` (matching the internally-handled
-`N = 0` sector). `mean_E2` is the canonical ⟨E²⟩(β), and `mean_obs` carries
+`N = 0` sector). `mean_E2` is the canonical second moment of the shifted
+energies, ⟨(E − `energy_shift`)²⟩(β) — the caller supplies one global
+`energy_shift` so sector moments combine consistently and the one-pass
+variance avoids the ~eps·E² cancellation floor (`mean_E` stays absolute) —
+and `mean_obs` carries
 the canonical average of each requested per-dead-point observable column
 (dead values from `df[!, col]`, live-tail values from `live_observables[col]`,
 aligned with `live_energies`). Internal helper shared by the
@@ -643,7 +662,8 @@ function _fixed_N_log_evidence(
     live_energies::Union{Nothing,AbstractVector{<:Real}},
     kb::Float64,
     observable_cols::AbstractVector{Symbol}=Symbol[],
-    live_observables::Union{Nothing,AbstractDict{Symbol,<:AbstractVector{<:Real}}}=nothing,
+    live_observables::Union{Nothing,AbstractDict{Symbol}}=nothing,
+    energy_shift::Float64=0.0,
 )
     Es = collect(Float64, df.emax)
     if isempty(Es) && (live_energies === nothing || isempty(live_energies))
@@ -687,6 +707,11 @@ function _fixed_N_log_evidence(
         As_all[col] = A
     end
 
+    # Second moments are formed on shifted energies (the cv() convention);
+    # the caller supplies one global shift so the sector moments stay
+    # mutually consistent in the grand-canonical assembly
+    Es_c = Es_all .- energy_shift
+
     log_Z_NS = Vector{Float64}(undef, length(T_grid))
     mean_E = Vector{Float64}(undef, length(T_grid))
     mean_E2 = Vector{Float64}(undef, length(T_grid))
@@ -700,7 +725,7 @@ function _fixed_N_log_evidence(
         sum_w = sum(ws)
         log_Z_NS[j] = max_log + log(sum_w)
         mean_E[j] = sum(ws .* Es_all) / sum_w
-        mean_E2[j] = sum(ws .* (Es_all .^ 2)) / sum_w
+        mean_E2[j] = sum(ws .* (Es_c .^ 2)) / sum_w
         for col in observable_cols
             mean_obs[col][j] = sum(ws .* As_all[col]) / sum_w
         end
@@ -1000,7 +1025,7 @@ function gc_thermodynamic_stats_fixed_N(
     ω0::Float64=1.0,
     live_emax::Union{Nothing,AbstractVector{<:AbstractVector{<:Real}}}=nothing,
     observable_cols::AbstractVector{Symbol}=Symbol[],
-    live_observables::Union{Nothing,AbstractVector{<:AbstractDict{Symbol,<:AbstractVector{<:Real}}}}=nothing,
+    live_observables::Union{Nothing,AbstractVector{<:AbstractDict{Symbol}}}=nothing,
     kb::Float64=8.617333262e-5,
 )
     if length(ns_outputs) != length(N_values)
@@ -1046,9 +1071,12 @@ function gc_thermodynamic_stats_fixed_N(
             Set(keys(d)) == Set(observable_cols) || throw(ArgumentError(
                 "live_observables[$i] keys must match observable_cols exactly"))
             for col in observable_cols
-                isempty(d[col]) && throw(ArgumentError(
+                v = d[col]
+                (v isa AbstractVector && all(x -> x isa Real, v)) || throw(ArgumentError(
+                    "live_observables[$i][:$col] must be a vector of Real values"))
+                isempty(v) && throw(ArgumentError(
                     "live_observables[$i][:$col] is empty"))
-                if N_int[i] != 0 && length(d[col]) != length(live_emax[i])
+                if N_int[i] != 0 && length(v) != length(live_emax[i])
                     throw(DimensionMismatch(
                         "live_observables[$i][:$col] must have one entry per " *
                         "live walker (length(live_emax[$i]) = " *
@@ -1071,9 +1099,22 @@ function gc_thermodynamic_stats_fixed_N(
             "live_observables was given but observable_cols is empty"))
     end
 
+    # One global energy shift for all sector second moments (the cv()
+    # convention): variances and covariances are shift-invariant, and forming
+    # them on E - E_shift avoids the ~eps*E^2 one-pass cancellation floor.
+    # The N = 0 sector pins E = 0 into the spectrum, hence the min with 0.
+    E_shift = 0.0
+    for (i, dfi) in enumerate(ns_outputs)
+        N_int[i] == 0 && continue
+        nrow(dfi) > 0 && (E_shift = min(E_shift, minimum(dfi.emax)))
+        if live_emax !== nothing && !isempty(live_emax[i])
+            E_shift = min(E_shift, minimum(live_emax[i]))
+        end
+    end
+
     log_Z_NS = Matrix{Float64}(undef, n_N, n_T)
     mean_E_N = Matrix{Float64}(undef, n_N, n_T)
-    mean_E2_N = Matrix{Float64}(undef, n_N, n_T)
+    mean_E2_N = Matrix{Float64}(undef, n_N, n_T)   # shifted: <(E - E_shift)^2>
     obs_N = Dict{Symbol,Matrix{Float64}}(
         col => Matrix{Float64}(undef, n_N, n_T) for col in observable_cols)
 
@@ -1083,7 +1124,7 @@ function gc_thermodynamic_stats_fixed_N(
         if N_int[i] == 0
             log_Z_NS[i, :] .= 0.0
             mean_E_N[i, :] .= 0.0
-            mean_E2_N[i, :] .= 0.0
+            mean_E2_N[i, :] .= E_shift^2   # <(0 - E_shift)^2>
             for col in observable_cols
                 # Unlike its ignored live_emax entry, the N = 0 sector's
                 # live_observables entry is used: it supplies the observable
@@ -1101,7 +1142,8 @@ function gc_thermodynamic_stats_fixed_N(
             df, T_grid;
             n_walkers=n_walkers, n_cull=n_cull, ω0=ω0,
             live_energies=live, kb=kb,
-            observable_cols=observable_cols, live_observables=live_obs)
+            observable_cols=observable_cols, live_observables=live_obs,
+            energy_shift=E_shift)
         mean_E2_N[i, :] = sector_E2
         for col in observable_cols
             obs_N[col][i, :] = sector_obs[col]
@@ -1135,11 +1177,13 @@ function gc_thermodynamic_stats_fixed_N(
             var_N[k, j] = mean_N2 - mean_N[k, j]^2
             u_avg = sum(ws .* view(mean_E_N, :, j)) / sum_w
             mean_U[k, j] = u_avg
-            # Law of total expectation over the N sectors: the grand-canonical
-            # <E^2> is the w_N-weighted canonical <E^2>_N, likewise <E N>
-            var_U[k, j] = sum(ws .* view(mean_E2_N, :, j)) / sum_w - u_avg^2
-            cov_UN[k, j] = sum(ws .* N_int .* view(mean_E_N, :, j)) / sum_w -
-                           u_avg * mean_N[k, j]
+            # Law of total expectation over the N sectors, formed on shifted
+            # energies (mean_E2_N holds <(E - E_shift)^2>_N; variances and
+            # covariances are shift-invariant)
+            u_c = u_avg - E_shift
+            var_U[k, j] = sum(ws .* view(mean_E2_N, :, j)) / sum_w - u_c^2
+            cov_UN[k, j] = sum(ws .* N_int .* (view(mean_E_N, :, j) .- E_shift)) / sum_w -
+                           u_c * mean_N[k, j]
             for col in observable_cols
                 obs_out[col][k, j] = sum(ws .* view(obs_N[col], :, j)) / sum_w
             end

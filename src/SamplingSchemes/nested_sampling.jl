@@ -1089,9 +1089,11 @@ Perform a nested sampling loop for a given number of steps.
   `name`, exactly paired with that row's `iter`-keyed prior-volume weight.
   Names must not collide with the built-in ledger columns
   (`$(join(String.(_RESERVED_LEDGER_COLUMNS), ", "))`); callbacks must be
-  pure functions of the configuration returning a `Real`. Supported for
-  single-cull MC routines — a pairing guard raises an error otherwise.
-  The default `nothing` leaves the ledger schema unchanged.
+  pure functions of the configuration returning a `Real`. Parallel and
+  multi-cull MC routines (`MCRoutineParallel` subtypes) are rejected up
+  front with an `ArgumentError`; a bit-exact pairing guard additionally
+  raises an error if a step ever culls a different walker than the one the
+  row records. The default `nothing` leaves the ledger schema unchanged.
 
 # Returns
 - `df`: A DataFrame containing the iteration number and maximum energy for each step,
@@ -1116,6 +1118,10 @@ function nested_sampling(liveset::AbstractLiveSet,
     end
     df = DataFrame(iter=Int[], emax=Float64[])
     if observables !== nothing
+        mc_routine isa MCRoutineParallel && throw(ArgumentError(
+            "observables: parallel/multi-cull MC routines are not supported " *
+            "— each accepted iteration culls multiple walkers but records a " *
+            "single ledger row, so per-dead-point pairing is undefined"))
         _validate_observables(observables, liveset)
         for (name, _) in observables
             df[!, name] = Float64[]

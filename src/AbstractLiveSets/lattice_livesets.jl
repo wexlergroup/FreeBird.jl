@@ -21,6 +21,43 @@ function assign_energy!(walker::LatticeWalker{C}, hamiltonian::ClassicalHamilton
     return walker
 end
 
+_n_coupled_shells(h::GenericLatticeHamiltonian{N,U}) where {N,U} = N
+_n_coupled_shells(h::MLatticeHamiltonian{C,N,U}) where {C,N,U} = N
+_n_coupled_shells(h) = nothing
+
+"""
+    _warn_uncoupled_shells(cfg_or_walkers, hamiltonian)
+
+One-time check at run setup: warn when the lattice carries more neighbor
+shells (`cutoff_radii`) than the Hamiltonian couples, since the outer
+shells then contribute exactly zero energy — silently, if unnoticed. The
+converse mismatch (more coupled shells than the lattice provides) throws
+an `ArgumentError` at energy evaluation instead. Complements the
+empty-shell warning emitted by `compute_neighbors` at lattice
+construction. Called from the `LatticeGasWalkers` constructor and from the
+lattice entry points of `wang_landau` and `nvt_monte_carlo`, which take a
+raw lattice and never build a liveset.
+"""
+function _warn_uncoupled_shells(cfg::AbstractLattice, hamiltonian)
+    cfg isa MLattice || return nothing
+    n_coupled = _n_coupled_shells(hamiltonian)
+    n_coupled === nothing && return nothing
+    n_shells = length(cfg.cutoff_radii)
+    if n_coupled < n_shells
+        @warn "the lattice carries $n_shells neighbor shells (cutoff_radii) " *
+              "but the Hamiltonian couples only the first $n_coupled; the " *
+              "outer $(n_shells - n_coupled) shell(s) contribute zero " *
+              "energy. Drop the unused cutoff_radii or extend " *
+              "nth_neighbor_interactions if this is unintended."
+    end
+    return nothing
+end
+
+function _warn_uncoupled_shells(walkers::Vector{<:LatticeWalker}, hamiltonian)
+    isempty(walkers) && return nothing
+    return _warn_uncoupled_shells(walkers[1].configuration, hamiltonian)
+end
+
 """
     struct LatticeGasWalkers <: LatticeWalkers
 
@@ -38,6 +75,7 @@ struct  LatticeGasWalkers <: LatticeWalkers
     walkers::Vector{LatticeWalker{C}} where C
     hamiltonian::ClassicalHamiltonian
     function LatticeGasWalkers(walkers::Vector{LatticeWalker{C}}, hamiltonian::ClassicalHamiltonian; assign_energy=true, perturb_energy::Float64=0.0) where C
+        _warn_uncoupled_shells(walkers, hamiltonian)
         if assign_energy
             [assign_energy!(walker, hamiltonian; perturb_energy=perturb_energy) for walker in walkers]
         end

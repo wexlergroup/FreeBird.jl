@@ -1,4 +1,22 @@
 """
+    _check_shell_counts(lattice_neighbors, n_coupled::Int)
+
+Throw an `ArgumentError` when a Hamiltonian couples more neighbor shells
+than the lattice's neighbor list provides. Called from the energy kernels,
+so it is a single integer comparison in the common case.
+"""
+@inline function _check_shell_counts(lattice_neighbors::Vector{Vector{Vector{Int64}}}, n_coupled::Int)
+    n_shells = isempty(lattice_neighbors) ? 0 : length(lattice_neighbors[1])
+    if n_coupled > n_shells
+        throw(ArgumentError(
+            "the Hamiltonian couples $n_coupled neighbor shells but the " *
+            "lattice provides only $n_shells (= length(cutoff_radii)); " *
+            "extend cutoff_radii so every coupled shell exists"))
+    end
+    return nothing
+end
+
+"""
     lattice_interaction_energy(lattice_occupations::Vector{Bool}, lattice_neighbors::Vector{Vector{Vector{Int64}}}, h::GenericLatticeHamiltonian{N,U})
 
 Compute the interaction energy of a lattice configuration using the Hamiltonian parameters.
@@ -11,8 +29,15 @@ Compute the interaction energy of a lattice configuration using the Hamiltonian 
 # Returns
 - `e_interaction::U`: The interaction energy of the lattice configuration.
 
+Throws an `ArgumentError` when the Hamiltonian couples more neighbor shells
+than the lattice's neighbor list provides (`N > length(cutoff_radii)`),
+which would otherwise surface as a raw `BoundsError` from the innermost
+loop. The converse mismatch (fewer coupled shells than the lattice carries)
+is legal — the outer shells are simply not coupled — and is flagged once,
+with a warning, at `LatticeGasWalkers` construction.
 """
 function lattice_interaction_energy(lattice_occupations::Vector{Bool}, lattice_neighbors::Vector{Vector{Vector{Int64}}}, h::GenericLatticeHamiltonian{N,U}) where {N,U}
+    _check_shell_counts(lattice_neighbors, N)
     e_interaction::U = 0.0*unit(h.on_site_interaction)
     for index in eachindex(lattice_occupations)
         if lattice_occupations[index]
@@ -42,8 +67,11 @@ Compute the interaction energy between two lattice configurations using the Hami
 # Returns
 - `e_interaction::U`: The interaction energy between the two lattice configurations.
 
+Throws an `ArgumentError` on the same shell-count mismatch as
+[`lattice_interaction_energy`](@ref).
 """
 function inter_component_energy(lattice1::Vector{Bool}, lattice2::Vector{Bool}, lattice_neighbors::Vector{Vector{Vector{Int64}}}, h::GenericLatticeHamiltonian{N,U}) where {N,U}
+    _check_shell_counts(lattice_neighbors, N)
     e_interaction::U = 0.0*unit(h.on_site_interaction)
     for index in eachindex(lattice1)
         if lattice1[index]

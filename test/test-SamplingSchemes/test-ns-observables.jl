@@ -257,4 +257,99 @@
             df, M, z0, μs, Ts, K;
             live_observables=Dict(:a => live_a))
     end
+
+    # ================================================================
+    @testset "fixed-N stats: var_U, cov_UN, and observable averages" begin
+        kb = 8.617333262e-5
+        M = 4
+        K = 3
+        ω0 = (K + 1) / K
+        N_values = [0, 1, 2]
+        T_grid = [300.0, 600.0] .* u"K"
+        μ_grid = [-0.05, 0.02] .* u"eV"
+
+        df0 = DataFrame(iter=Int[], emax=Float64[])
+        df1 = DataFrame(iter=[1, 2], emax=[0.3, 0.1], psi=[0.2, 0.4])
+        df2 = DataFrame(iter=Int[], emax=Float64[])   # single-config convention
+        live_E = [Float64[], [0.05, 0.01], [0.02, 0.02, 0.02]]
+        live_psi = [Dict(:psi => [0.0]),
+                    Dict(:psi => [0.6, 0.8]),
+                    Dict(:psi => [0.5, 0.5, 0.5])]
+
+        stats = gc_thermodynamic_stats_fixed_N(
+            [df0, df1, df2], N_values, M, μ_grid, T_grid;
+            n_walkers=K, ω0=ω0, live_emax=live_E,
+            observable_cols=[:psi], live_observables=live_psi)
+
+        # Independent linear-space reference. Sector 1: two dead points plus
+        # a two-entry tail (n_iters = 2). Sector 2: empty ladder, tail mass
+        # exactly 1 split over three copies of the sector energy.
+        w1 = vcat(ω0 * (1 / (K + 1)) .* (K / (K + 1)) .^ df1.iter,
+                  fill(ω0 * (K / (K + 1))^2 / 2, 2))
+        E1 = vcat(df1.emax, live_E[2])
+        a1 = vcat(df1.psi, live_psi[2][:psi])
+        binom = [1.0, 4.0, 6.0]                       # C(4, N)
+        for (j, T) in enumerate([300.0, 600.0]), (k, μ) in enumerate([-0.05, 0.02])
+            β = 1 / (kb * T)
+            b1 = w1 .* exp.(-β .* E1)
+            z1 = sum(b1)
+            e1 = sum(b1 .* E1) / z1
+            e1sq = sum(b1 .* E1 .^ 2) / z1
+            p1 = sum(b1 .* a1) / z1
+            z2 = exp(-β * 0.02)
+            e2, e2sq, p2 = 0.02, 0.02^2, 0.5
+            wN = binom .* [1.0, z1, z2] .* exp.(β * μ .* [0.0, 1.0, 2.0])
+            sw = sum(wN)
+            U = (wN[2] * e1 + wN[3] * e2) / sw
+            Nbar = (wN[2] * 1 + wN[3] * 2) / sw
+            @test stats.logXi[k, j] ≈ log(sw) rtol = 1e-10
+            @test stats.mean_N[k, j] ≈ Nbar rtol = 1e-10
+            @test stats.mean_U[k, j] ≈ U rtol = 1e-10
+            @test stats.var_U[k, j] ≈
+                  (wN[2] * e1sq + wN[3] * e2sq) / sw - U^2 rtol = 1e-8
+            @test stats.cov_UN[k, j] ≈
+                  (wN[2] * 1 * e1 + wN[3] * 2 * e2) / sw - U * Nbar rtol = 1e-8
+            # The N = 0 sector contributes psi = 0 with weight wN[1]
+            @test stats.observables[:psi][k, j] ≈
+                  (wN[2] * p1 + wN[3] * p2) / sw rtol = 1e-10
+        end
+
+        # Backward compatibility: field order preserved, new fields appended
+        stats_nc = gc_thermodynamic_stats_fixed_N(
+            [df0, df1, df2], N_values, M, μ_grid, T_grid;
+            n_walkers=K, ω0=ω0, live_emax=live_E)
+        @test keys(stats_nc) == (:logXi, :mean_N, :var_N, :mean_U,
+                                 :log_Z_N, :N_values, :var_U, :cov_UN,
+                                 :observables)
+        @test isempty(stats_nc.observables)
+        @test stats_nc.logXi ≈ stats.logXi rtol = 1e-14
+
+        # Validation traps
+        @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+            [df0, df1, df2], N_values, M, μ_grid, T_grid;
+            n_walkers=K, live_emax=live_E, observable_cols=[:psi])
+        @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+            [df0, df1, df2], N_values, M, μ_grid, T_grid;
+            n_walkers=K, observable_cols=[:psi], live_observables=live_psi)
+        @test_throws DimensionMismatch gc_thermodynamic_stats_fixed_N(
+            [df0, df1, df2], N_values, M, μ_grid, T_grid;
+            n_walkers=K, live_emax=live_E, observable_cols=[:psi],
+            live_observables=live_psi[1:2])
+        @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+            [df0, df1, df2], N_values, M, μ_grid, T_grid;
+            n_walkers=K, live_emax=live_E, observable_cols=[:psi],
+            live_observables=[Dict(:other => [0.0]), live_psi[2], live_psi[3]])
+        @test_throws DimensionMismatch gc_thermodynamic_stats_fixed_N(
+            [df0, df1, df2], N_values, M, μ_grid, T_grid;
+            n_walkers=K, live_emax=live_E, observable_cols=[:psi],
+            live_observables=[live_psi[1], Dict(:psi => [0.6]), live_psi[3]])
+        df1_nocol = DataFrame(iter=[1, 2], emax=[0.3, 0.1])
+        @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+            [df0, df1_nocol, df2], N_values, M, μ_grid, T_grid;
+            n_walkers=K, live_emax=live_E, observable_cols=[:psi],
+            live_observables=live_psi)
+        @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+            [df0, df1, df2], N_values, M, μ_grid, T_grid;
+            n_walkers=K, live_emax=live_E, live_observables=live_psi)
+    end
 end

@@ -18,5 +18,7 @@
     include("test-lattice-gcns-fixed-n.jl")
     # test hard-core lattice models (finite-J athermal recipe)
     include("test-hard-core-lattices.jl")
+    # test per-dead-point observable recording and its post-processing
+    include("test-ns-observables.jl")
 
 end

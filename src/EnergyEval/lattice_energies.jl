@@ -116,6 +116,49 @@ function interacting_energy(lattice::SLattice, h::MLatticeHamiltonian{C,N,U}) wh
 end
 
 """
+    cluster_energy(occupations::Vector{Bool}, c::ClusterInteraction{K,U})
+
+Energy contribution of one cluster figure: the coupling times the number of
+its embeddings whose `K` sites are all occupied. The per-figure function
+barrier keeps the inner loop type-stable across the heterogeneous cluster
+orders of a `ClusterLatticeHamiltonian`. Bounds checks stay on: an
+embedding referencing a site beyond the occupation vector must raise a
+`BoundsError` rather than read memory (the liveset constructor validates
+this once up front).
+"""
+function cluster_energy(occupations::Vector{Bool}, c::ClusterInteraction{K,U}) where {K,U}
+    n = 0
+    for emb in c.embeddings
+        occupied = true
+        for s in emb
+            if !occupations[s]
+                occupied = false
+                break
+            end
+        end
+        n += occupied ? 1 : 0
+    end
+    return n * c.coupling
+end
+
+"""
+    interacting_energy(lattice::SLattice, h::ClusterLatticeHamiltonian{N,U})
+
+Total energy under a multi-body lattice Hamiltonian: the wrapped pair
+part (on-site + `N` pair shells, evaluated exactly as for a bare
+`GenericLatticeHamiltonian`) plus every cluster figure's contribution.
+Single-component (`SLattice`) configurations only.
+"""
+function interacting_energy(lattice::SLattice, h::ClusterLatticeHamiltonian{N,U}) where {N,U}
+    e = interacting_energy(lattice, h.pair_ham)
+    occ = lattice.components[1]
+    for c in h.clusters
+        e += cluster_energy(occ, c)
+    end
+    return e
+end
+
+"""
     interacting_energy(lattice::MLattice{C,G}, h::MLatticeHamiltonian{C,N,U})
 
 Compute the interaction energy of a multi-component lattice configuration using the Hamiltonian parameters.

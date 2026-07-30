@@ -23,7 +23,33 @@ end
 
 _n_coupled_shells(h::GenericLatticeHamiltonian{N,U}) where {N,U} = N
 _n_coupled_shells(h::MLatticeHamiltonian{C,N,U}) where {C,N,U} = N
+_n_coupled_shells(h::ClusterLatticeHamiltonian{N,U}) where {N,U} = N
 _n_coupled_shells(h) = nothing
+
+"""
+    _check_cluster_sites(hamiltonian, cfg)
+
+One-time check at liveset construction: a `ClusterLatticeHamiltonian`
+whose embeddings reference site indices beyond the lattice was built for a
+different lattice; failing here with a descriptive `ArgumentError` beats a
+`BoundsError` from deep inside the energy kernel. A no-op for every other
+Hamiltonian type.
+"""
+_check_cluster_sites(hamiltonian, cfg) = nothing
+function _check_cluster_sites(h::ClusterLatticeHamiltonian, cfg::AbstractLattice)
+    M = num_sites(cfg)
+    for (i, c) in enumerate(h.clusters)
+        for e in c.embeddings
+            if e[end] > M   # canonical form: the last index is the maximum
+                throw(ArgumentError(
+                    "clusters[$i] embedding $e references site $(e[end]) but " *
+                    "the lattice has only $M sites; the Hamiltonian was " *
+                    "built for a different lattice"))
+            end
+        end
+    end
+    return nothing
+end
 
 """
     _warn_uncoupled_shells(cfg_or_walkers, hamiltonian)
@@ -76,6 +102,7 @@ struct  LatticeGasWalkers <: LatticeWalkers
     hamiltonian::ClassicalHamiltonian
     function LatticeGasWalkers(walkers::Vector{LatticeWalker{C}}, hamiltonian::ClassicalHamiltonian; assign_energy=true, perturb_energy::Float64=0.0) where C
         _warn_uncoupled_shells(walkers, hamiltonian)
+        isempty(walkers) || _check_cluster_sites(hamiltonian, walkers[1].configuration)
         if assign_energy
             [assign_energy!(walker, hamiltonian; perturb_energy=perturb_energy) for walker in walkers]
         end

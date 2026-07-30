@@ -179,4 +179,82 @@
         @test all(isapprox.(df.e_check, df.emax; atol=1e-8))
         @test all(0.0 .<= df.psi .<= 0.5)
     end
+
+    # ================================================================
+    @testset "igref stats: var_U, cov_UN, and observable averages" begin
+        kb = 8.617333262e-5
+        df = DataFrame(iter=[1, 2, 3], emax=[0.5, 0.3, 0.1],
+                       num_particles=[2, 1, 0], a=[1.0, 2.0, 4.0])
+        live_E = [0.05, 0.02]
+        live_N = [1, 2]
+        live_a = [8.0, 16.0]
+        K, z0, M = 4, 1.0, 16
+        ω0 = (K + 1) / K
+        μs = [-0.02, 0.03]
+        Ts = [300.0, 600.0]
+
+        stats = gc_thermodynamic_stats_ideal_ref(df, M, z0, μs, Ts, K;
+            ω0=ω0, live_emax=live_E, live_numbers=live_N,
+            observable_cols=[:a], live_observables=Dict(:a => live_a))
+
+        # Independent linear-space reference for the closed-form weighted sums
+        w0 = ω0 * (1 / (K + 1)) .* (K / (K + 1)) .^ df.iter
+        wt = fill((K / (K + 1))^3 / K, 2)      # tail carries no ω0 factor
+        w_all = vcat(w0, wt)
+        E_all = vcat(df.emax, live_E)
+        N_all = vcat(Float64.(df.num_particles), Float64.(live_N))
+        a_all = vcat(df.a, live_a)
+        for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
+            β = 1 / (kb * T)
+            w = w_all .* exp.(β * μ .* N_all .- β .* E_all)   # z0 = 1
+            sw = sum(w)
+            u = sum(w .* E_all) / sw
+            n = sum(w .* N_all) / sw
+            @test stats.mean_U[i, j] ≈ u rtol = 1e-12
+            @test stats.var_U[i, j] ≈ sum(w .* E_all .^ 2) / sw - u^2 rtol = 1e-10
+            @test stats.cov_UN[i, j] ≈ sum(w .* E_all .* N_all) / sw - u * n rtol = 1e-10
+            @test stats.observables[:a][i, j] ≈ sum(w .* a_all) / sw rtol = 1e-12
+        end
+
+        # Self-consistency: averaging the ledger's own columns reproduces
+        # mean_N and mean_U
+        stats2 = gc_thermodynamic_stats_ideal_ref(df, M, z0, μs, Ts, K;
+            ω0=ω0, live_emax=live_E, live_numbers=live_N,
+            observable_cols=[:num_particles, :emax],
+            live_observables=Dict(:num_particles => Float64.(live_N),
+                                  :emax => live_E))
+        @test stats2.observables[:num_particles] ≈ stats2.mean_N rtol = 1e-12
+        @test stats2.observables[:emax] ≈ stats2.mean_U rtol = 1e-12
+
+        # Backward compatibility: pre-existing fields keep their order, new
+        # fields are appended, positional destructuring still works
+        stats3 = gc_thermodynamic_stats_ideal_ref(df, M, z0, μs, Ts, K)
+        @test isempty(stats3.observables)
+        @test keys(stats3) == (:logXi, :mean_N, :var_N, :mean_U, :N_eff,
+                               :var_U, :cov_UN, :observables)
+        lX, mN, vN, mU, Ne = stats3
+        @test lX == stats3.logXi && Ne == stats3.N_eff
+
+        # Validation traps
+        @test_throws ArgumentError gc_thermodynamic_stats_ideal_ref(
+            df, M, z0, μs, Ts, K; observable_cols=[:nope])
+        @test_throws ArgumentError gc_thermodynamic_stats_ideal_ref(
+            df, M, z0, μs, Ts, K; observable_cols=[:a, :a],
+            live_emax=live_E, live_numbers=live_N,
+            live_observables=Dict(:a => live_a))
+        @test_throws ArgumentError gc_thermodynamic_stats_ideal_ref(
+            df, M, z0, μs, Ts, K; observable_cols=[:a],
+            live_emax=live_E, live_numbers=live_N)
+        @test_throws ArgumentError gc_thermodynamic_stats_ideal_ref(
+            df, M, z0, μs, Ts, K; observable_cols=[:a],
+            live_emax=live_E, live_numbers=live_N,
+            live_observables=Dict(:b => live_a))
+        @test_throws DimensionMismatch gc_thermodynamic_stats_ideal_ref(
+            df, M, z0, μs, Ts, K; observable_cols=[:a],
+            live_emax=live_E, live_numbers=live_N,
+            live_observables=Dict(:a => [1.0]))
+        @test_throws ArgumentError gc_thermodynamic_stats_ideal_ref(
+            df, M, z0, μs, Ts, K;
+            live_observables=Dict(:a => live_a))
+    end
 end

@@ -404,16 +404,36 @@ residual tie-breaking noise, ~δ).
 - `ω0::Float64=1.0`: Initial phase-space volume factor.
 - `live_emax::Union{Nothing,Vector{Float64}}=nothing`: Energies of the surviving live walkers.
 - `live_numbers::Union{Nothing,Vector{Int}}=nothing`: Particle counts of the surviving live walkers.
+- `observable_cols::AbstractVector{Symbol}=Symbol[]`: Names of extra `df`
+  columns (recorded per dead point, e.g. via the `observables` keyword of
+  `ideal_gas_referenced_nested_sampling`) whose reweighted averages
+  ⟨A⟩(μ, T) are returned in `observables`. Requesting `:num_particles` or
+  `:emax` legitimately reproduces `mean_N`/`mean_U` (a self-consistency
+  check).
+- `live_observables=nothing`: Required whenever `observable_cols` is
+  non-empty and a live-set tail is supplied — a
+  `Dict{Symbol,<:AbstractVector{<:Real}}` with exactly the
+  `observable_cols` keys, holding each observable's values on the surviving
+  live walkers (one entry per `live_emax` entry, same order). Omitting the
+  tail values would silently deflate every ⟨A⟩, so this is an error rather
+  than a default.
 - `kb::Float64`: Boltzmann constant (default: eV/K).
 
 # Returns
-A `NamedTuple` of `Matrix{Float64}` of size `(length(μs), length(Ts))`,
-indexed `[i_μ, i_T]`:
+A `NamedTuple`; every field except `observables` is a `Matrix{Float64}` of
+size `(length(μs), length(Ts))`, indexed `[i_μ, i_T]`:
 - `logXi`: Natural log of the absolute grand partition function.
 - `mean_N`: Mean particle number ⟨N⟩.
 - `var_N`: Particle-number variance ⟨N²⟩ − ⟨N⟩².
 - `mean_U`: Mean configurational energy ⟨E⟩.
 - `N_eff`: Kish effective sample size of the reweighted estimate.
+- `var_U`: Energy variance ⟨E²⟩ − ⟨E⟩². The grand-canonical heat capacity
+  follows as `C = k_B β² (var_U − μ · cov_UN)`, matching the Ω-sorted
+  `gc_thermodynamic_stats` formula.
+- `cov_UN`: Energy–particle-number covariance ⟨EN⟩ − ⟨E⟩⟨N⟩.
+- `observables`: `Dict{Symbol,Matrix{Float64}}` mapping each requested
+  column to its reweighted average ⟨A⟩(μ, T); empty when no columns are
+  requested.
 """
 function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
                                           n_sites::Int,
@@ -425,6 +445,8 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
                                           ω0::Float64=1.0,
                                           live_emax::Union{Nothing,Vector{Float64}}=nothing,
                                           live_numbers::Union{Nothing,Vector{Int}}=nothing,
+                                          observable_cols::AbstractVector{Symbol}=Symbol[],
+                                          live_observables::Union{Nothing,AbstractDict{Symbol,<:AbstractVector{<:Real}}}=nothing,
                                           kb::Float64=8.617333262e-5)
     if z0 <= 0.0
         throw(ArgumentError("z0 must be positive"))
@@ -441,6 +463,42 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
     n_dead = nrow(df)
     if n_dead == 0 && (live_emax === nothing || isempty(live_emax))
         throw(ArgumentError("df is empty and no live walkers were provided"))
+    end
+    allunique(observable_cols) || throw(ArgumentError(
+        "observable_cols must not contain duplicate entries"))
+    for col in observable_cols
+        hasproperty(df, col) || throw(ArgumentError(
+            "observable_cols: df has no column :$col"))
+        any(ismissing, df[!, col]) && throw(ArgumentError(
+            "observable_cols: df column :$col contains missing values"))
+    end
+    if live_observables !== nothing && live_emax === nothing
+        throw(ArgumentError(
+            "live_observables requires live_emax/live_numbers (the live-set tail)"))
+    end
+    if live_observables !== nothing && isempty(observable_cols)
+        throw(ArgumentError(
+            "live_observables was given but observable_cols is empty"))
+    end
+    if !isempty(observable_cols) && live_emax !== nothing
+        if live_observables === nothing
+            throw(ArgumentError(
+                "observable_cols with a live-set tail requires live_observables " *
+                "(the per-column values of the surviving live walkers); omitting " *
+                "them would silently deflate the tail's contribution to every " *
+                "observable average"))
+        end
+        if Set(keys(live_observables)) != Set(observable_cols)
+            throw(ArgumentError(
+                "live_observables keys must match observable_cols exactly"))
+        end
+        for col in observable_cols
+            if length(live_observables[col]) != length(live_emax)
+                throw(DimensionMismatch(
+                    "live_observables[:$col] must have one entry per live " *
+                    "walker (length(live_emax) = $(length(live_emax)))"))
+            end
+        end
     end
 
     # β- and μ-independent per-sample log prior-volume weights, built directly
@@ -465,6 +523,17 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
         Ns = vcat(Ns, Float64.(live_numbers))
     end
 
+    # Per-column observable values aligned with (Es, Ns): dead points first,
+    # then the live-set tail in the same order as live_emax
+    As = Dict{Symbol,Vector{Float64}}()
+    for col in observable_cols
+        A = n_dead > 0 ? Vector{Float64}(df[!, col]) : Float64[]
+        if live_emax !== nothing && !isempty(live_emax)
+            A = vcat(A, Vector{Float64}(live_observables[col]))
+        end
+        As[col] = A
+    end
+
     log_prior_mass = n_sites * log1p(z0)
     log_z0 = log(z0)
 
@@ -475,6 +544,10 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
     var_N = Matrix{Float64}(undef, n_mu, n_T)
     mean_U = Matrix{Float64}(undef, n_mu, n_T)
     N_eff = Matrix{Float64}(undef, n_mu, n_T)
+    var_U = Matrix{Float64}(undef, n_mu, n_T)
+    cov_UN = Matrix{Float64}(undef, n_mu, n_T)
+    obs_out = Dict{Symbol,Matrix{Float64}}(
+        col => Matrix{Float64}(undef, n_mu, n_T) for col in observable_cols)
 
     Threads.@threads for j in 1:n_T
         β = 1.0 / (kb * Ts[j])
@@ -488,12 +561,19 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
             n_avg = sum(ws .* Ns) / sum_w
             mean_N[i, j] = n_avg
             var_N[i, j] = sum(ws .* Ns .^ 2) / sum_w - n_avg^2
-            mean_U[i, j] = sum(ws .* Es) / sum_w
+            u_avg = sum(ws .* Es) / sum_w
+            mean_U[i, j] = u_avg
+            var_U[i, j] = sum(ws .* Es .^ 2) / sum_w - u_avg^2
+            cov_UN[i, j] = sum(ws .* Es .* Ns) / sum_w - u_avg * n_avg
+            for col in observable_cols
+                obs_out[col][i, j] = sum(ws .* As[col]) / sum_w
+            end
             N_eff[i, j] = sum_w^2 / sum(abs2, ws)
         end
     end
 
-    return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U, N_eff=N_eff)
+    return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U, N_eff=N_eff,
+            var_U=var_U, cov_UN=cov_UN, observables=obs_out)
 end
 
 

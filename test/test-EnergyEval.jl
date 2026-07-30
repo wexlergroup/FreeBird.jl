@@ -411,6 +411,172 @@
             @test length(list_num_par) == 1
             @test length(new_sys) == 1
         end
-    end    
+    end
+
+    @testset "multi-shell pair couplings (shell-count validation, sign-mixed sets)" begin
+        using Random
+
+        function shell_lattice(L, cutoffs)
+            MLattice{1,SquareLattice}(
+                lattice_constant=1.0,
+                basis=[(0.0, 0.0, 0.0)],
+                supercell_dimensions=(L, L, 1),
+                periodicity=(true, true, false),
+                cutoff_radii=cutoffs,
+                components=[[false for _ in 1:L*L]],
+                adsorptions=:full)
+        end
+
+        # Square-lattice shells at distances 1, √2, 2, √5, 2√2, 3, √10, √13, 4
+        cut4 = [1.1, 1.5, 2.1, 2.3]
+        cut9 = [1.1, 1.5, 2.1, 2.3, 2.9, 3.1, 3.2, 3.7, 4.1]
+
+        # ------------------------------------------------------------
+        @testset "Zhang pair part: closed-form adlayer energies (8x8, 4 shells)" begin
+            # Pair part of the Zhang, Blum & Reuter O-Pd(100) lattice-gas
+            # Hamiltonian [PRB 75, 235406 (2007)], FreeBird sign convention
+            # (positive = repulsive); four shells with mixed signs
+            V0 = -1.249
+            J = [0.292, 0.090, -0.050, -0.010]
+            ham = GenericLatticeHamiltonian(V0, J, u"eV")
+            lat = shell_lattice(8, cut4)
+
+            # c(2x2) checkerboard at half coverage: each occupied site sees 4
+            # occupied 2nd-shell (√2) and 4 occupied 3rd-shell (distance 2)
+            # neighbors; shells 1 and 4 connect opposite sublattices and
+            # contribute exactly zero
+            lat.components[1] .= [iseven(((s - 1) % 8) + ((s - 1) ÷ 8)) for s in 1:64]
+            @test interacting_energy(lat, ham).val ≈
+                  32 * (V0 + 2 * J[2] + 2 * J[3]) atol = 1e-10
+
+            # p(2x2) at quarter coverage: only the 3rd shell (distance 2)
+            # connects occupied sites
+            lat.components[1] .= [((s - 1) % 8) % 2 == 0 && ((s - 1) ÷ 8) % 2 == 0
+                                  for s in 1:64]
+            @test interacting_energy(lat, ham).val ≈
+                  16 * (V0 + 2 * J[3]) atol = 1e-10
+        end
+
+        # ------------------------------------------------------------
+        @testset "Kappus-shape nine-shell set vs independent brute force (16x16)" begin
+            # Kappus [Surf. Sci. 691, 121444 (2020)] elastic O-Pd(100) pair
+            # set: nine shells, mixed signs. The 16x16 cell is faithful for
+            # every shell (circumference 16 > 2 x 4).
+            Random.seed!(138)
+            J9 = [0.228, 0.066, -0.043, -0.015, 0.020, 0.007, -0.006, -0.009, 0.008]
+            ham9 = GenericLatticeHamiltonian(0.0, J9, u"eV")
+            L = 16
+            lat = shell_lattice(L, cut9)
+
+            # Independent reference: integer minimum-image squared distances
+            # classify the shells exactly; shares no code with
+            # compute_neighbors. (r² = 17, i.e. √17 ≈ 4.12, falls outside the
+            # 4.1 cutoff, matching the library's shell assignment.)
+            shell_of_r2 = Dict(1 => 1, 2 => 2, 4 => 3, 5 => 4, 8 => 5,
+                               9 => 6, 10 => 7, 13 => 8, 16 => 9)
+            function brute_force_E(occ)
+                E = 0.0
+                for a in 1:L*L, b in (a+1):L*L
+                    (occ[a] && occ[b]) || continue
+                    ia, ja = (a - 1) % L, (a - 1) ÷ L
+                    ib, jb = (b - 1) % L, (b - 1) ÷ L
+                    dx = min(mod(ia - ib, L), mod(ib - ia, L))
+                    dy = min(mod(ja - jb, L), mod(jb - ja, L))
+                    sh = get(shell_of_r2, dx^2 + dy^2, 0)
+                    sh == 0 || (E += J9[sh])
+                end
+                return E
+            end
+
+            # atol sized for summation-order headroom (~2000 terms, |E| up
+            # to ~28 eV: observed discrepancy ~4e-13); adjacent shell
+            # couplings differ by >= 1e-3, so 1e-9 loses no bug-catching power
+            for _ in 1:50
+                occ = rand(L * L) .< 0.4
+                lat.components[1] .= occ
+                @test interacting_energy(lat, ham9).val ≈ brute_force_E(occ) atol = 1e-9
+            end
+        end
+
+        # ------------------------------------------------------------
+        @testset "shell-count mismatch behavior" begin
+            lat4 = shell_lattice(4, cut4)
+            lat4.components[1][1:2] .= true
+
+            # More coupled shells than the lattice provides: ArgumentError,
+            # not a raw BoundsError — on every energy path and at liveset
+            # construction (where energies are assigned)
+            ham5 = GenericLatticeHamiltonian(0.0, [0.1, 0.1, 0.1, 0.1, 0.1], u"eV")
+            @test_throws ArgumentError interacting_energy(lat4, ham5)
+            @test_throws ArgumentError FreeBird.EnergyEval.lattice_interaction_energy(
+                lat4.components[1], lat4.neighbors, ham5)
+            @test_throws ArgumentError FreeBird.EnergyEval.inter_component_energy(
+                lat4.components[1], lat4.components[1], lat4.neighbors, ham5)
+            walkers5 = [LatticeWalker(deepcopy(lat4), energy=0.0u"eV", iter=0)]
+            @test_throws ArgumentError LatticeGasWalkers(walkers5, ham5)
+
+            # Fewer coupled shells than the lattice carries: legal (outer
+            # shells simply uncoupled), but warned once at liveset construction
+            ham2 = GenericLatticeHamiltonian(0.0, [0.1, 0.05], u"eV")
+            E2 = interacting_energy(lat4, ham2)
+            @test unit(E2) == u"eV"
+            walkers2 = [LatticeWalker(deepcopy(lat4), energy=0.0u"eV", iter=0)]
+            @test_logs (:warn, r"couples only the first 2") match_mode = :any LatticeGasWalkers(
+                walkers2, ham2)
+
+            # Matching counts: silent
+            ham4 = GenericLatticeHamiltonian(0.0, [0.1, 0.05, 0.02, 0.01], u"eV")
+            walkers4 = [LatticeWalker(deepcopy(lat4), energy=0.0u"eV", iter=0)]
+            @test_logs min_level = Base.CoreLogging.Warn LatticeGasWalkers(walkers4, ham4)
+
+            # Both guards fire through the MLatticeHamiltonian dispatch too
+            # (its shell count is the shared type parameter N, not C)
+            mham2 = MLatticeHamiltonian(2,
+                [GenericLatticeHamiltonian(0.0, [0.1, 0.05], u"eV") for _ in 1:3])
+            lat1 = shell_lattice(4, [1.1])
+            lat1.components[1][1:2] .= true
+            @test_throws ArgumentError interacting_energy(lat1, mham2)
+            walkers_m = [LatticeWalker(deepcopy(lat4), energy=0.0u"eV", iter=0)]
+            @test_logs (:warn, r"couples only the first 2") match_mode = :any LatticeGasWalkers(
+                walkers_m, mham2)
+
+            # The warn also reaches the raw-lattice sampler entry points,
+            # which never construct a liveset
+            wl_params = WangLandauParameters(energy_min=-0.5, energy_max=3.0,
+                                             num_energy_bins=30, num_steps=10,
+                                             max_iter=2, random_seed=7)
+            @test_logs (:warn, r"couples only the first 2") match_mode = :any wang_landau(
+                deepcopy(lat4), ham2, wl_params)
+            @test_logs (:warn, r"couples only the first 2") match_mode = :any nvt_monte_carlo(
+                MCNewSample(), deepcopy(lat4), ham2, 300.0, 5, 7)
+        end
+
+        # ------------------------------------------------------------
+        @testset "sign-mixed multi-shell GC-NS smoke run" begin
+            Random.seed!(1380)
+            ham = GenericLatticeHamiltonian(-0.05, [0.292, 0.090, -0.050, -0.010], u"eV")
+            lat = shell_lattice(8, cut4)
+            walkers = [LatticeWalker(deepcopy(lat), energy=0.0u"eV", iter=0)
+                       for _ in 1:20]
+            ls = LatticeGasWalkers(walkers, ham; assign_energy=false)
+            params = IdealGasReferencedGCNSParameters(
+                mc_steps=20, reference_fugacity=1.0, energy_perturbation=1e-9)
+            save = SaveEveryN("t_shell.csv", "t_shell.traj", "t_shell.ls",
+                              1000000, 1000000, 1000000)
+            df, final_ls, _ = ideal_gas_referenced_nested_sampling(
+                ls, params, Int64(100),
+                MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3), save)
+            rm.(["t_shell.csv", "t_shell.traj", "t_shell.ls"], force=true)
+
+            @test nrow(df) > 0
+            # Live-set energies match direct recomputation up to the
+            # tie-breaking perturbation
+            for w in final_ls.walkers
+                @test isapprox(w.energy.val,
+                               interacting_energy(w.configuration, ham).val;
+                               atol=1e-8)
+            end
+        end
+    end
 
 end

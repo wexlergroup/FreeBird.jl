@@ -79,7 +79,10 @@ function nvt_monte_carlo(
 )
     # Set the random seed
     Random.seed!(random_seed)
-    
+
+    # No liveset is built on this path, so run the shell-coverage check here
+    AbstractLiveSets._warn_uncoupled_shells(lattice, h)
+
     energies = Vector{Float64}(undef, num_steps)
     configurations = Vector{typeof(lattice)}(undef, num_steps)
     # df = DataFrame(energy=Float64[], config=Vector{Vector{Bool}}[])

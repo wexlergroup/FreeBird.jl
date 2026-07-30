@@ -12,6 +12,7 @@ using StaticArrays
 export AbstractHamiltonian
 export ClassicalHamiltonian
 export GenericLatticeHamiltonian, MLatticeHamiltonian
+export ClusterInteraction, ClusterLatticeHamiltonian
 
 abstract type AbstractHamiltonian end
 
@@ -175,6 +176,141 @@ function Base.show(io::IO, hamiltonian::MLatticeHamiltonian{C,N,U}) where {C,N,U
        for j in 1:C
            println(io, "    Hamiltonians[$i, $j]: ", hamiltonian.Hamiltonians[i,j])
        end
+    end
+end
+
+"""
+    struct ClusterInteraction{K,U}
+
+A single multi-body (cluster) interaction figure on a lattice: one coupling
+plus the explicit list of the figure's embeddings, each an ordered `K`-tuple
+of site indices. The coupling is the energy contributed per fully occupied
+embedding. Each unordered site set appears exactly once, in canonical
+(strictly increasing) form, so double counting of symmetric motifs is
+structurally impossible. Embedding lists are typically produced by
+`enumerate_motif_embeddings` under the torus (minimum-image) convention,
+matching how the pair shells count neighbors.
+
+Only orders `K ≥ 3` are represented: on-site and pair terms belong in the
+wrapped `GenericLatticeHamiltonian` of a [`ClusterLatticeHamiltonian`](@ref).
+
+Note: "cluster" here names an interaction figure of a cluster expansion,
+not the geometric cluster Monte Carlo moves elsewhere in FreeBird.
+
+# Constructor
+```julia
+ClusterInteraction(coupling, embeddings::Vector{NTuple{K,Int}})
+```
+Throws `ArgumentError` on `K < 3`, a non-finite coupling, an embedding that
+is not strictly increasing or contains a non-positive index, or a duplicate
+embedding; warns on an empty embedding list (which contributes exactly
+zero energy).
+"""
+struct ClusterInteraction{K,U}
+    coupling::U
+    embeddings::Vector{NTuple{K,Int}}
+
+    function ClusterInteraction{K,U}(coupling::U, embeddings::Vector{NTuple{K,Int}}) where {K,U}
+        if K < 3
+            throw(ArgumentError(
+                "ClusterInteraction is for 3-body and higher motifs (got K = $K); " *
+                "on-site and pair terms belong in the wrapped GenericLatticeHamiltonian"))
+        end
+        if !isfinite(coupling)
+            throw(ArgumentError(
+                "non-finite cluster couplings are not supported; model hard " *
+                "constraints with finite couplings (see the hard-core recipe " *
+                "in the GenericLatticeHamiltonian docstring)"))
+        end
+        isempty(embeddings) &&
+            @warn "ClusterInteraction with an empty embedding list contributes exactly zero energy"
+        seen = Set{NTuple{K,Int}}()
+        for e in embeddings
+            if e[1] < 1
+                throw(ArgumentError("embedding $e contains a non-positive site index"))
+            end
+            for k in 1:K-1
+                if e[k] >= e[k+1]
+                    throw(ArgumentError(
+                        "embedding $e is not in canonical (strictly increasing) " *
+                        "order; each unordered site set must appear exactly once"))
+                end
+            end
+            if e in seen
+                throw(ArgumentError("duplicate embedding $e would double-count its energy"))
+            end
+            push!(seen, e)
+        end
+        return new(coupling, embeddings)
+    end
+end
+
+function ClusterInteraction(coupling::U, embeddings::Vector{NTuple{K,Int}}) where {K,U}
+    return ClusterInteraction{K,U}(coupling, embeddings)
+end
+
+function Base.show(io::IO, c::ClusterInteraction{K,U}) where {K,U}
+    print(io, "ClusterInteraction{$K}: coupling = ", c.coupling,
+          ", ", length(c.embeddings), " embeddings")
+end
+
+"""
+    struct ClusterLatticeHamiltonian{N,U} <: ClassicalHamiltonian
+
+A lattice Hamiltonian with on-site, pair-shell, and multi-body (cluster)
+terms: a `GenericLatticeHamiltonian{N,U}` carrying the on-site energy and
+the `N` pair-shell couplings, plus a vector of [`ClusterInteraction`](@ref)
+figures of arbitrary orders `K ≥ 3`. The total energy is the pair part
+plus, for every figure, the coupling times the number of its fully
+occupied embeddings.
+
+Sign and unit conventions follow `GenericLatticeHamiltonian`: positive
+couplings are repulsive. Published binding-energy parameter sets (e.g. the
+O-Pd(100) lattice-gas Hamiltonian of Zhang, Blum & Reuter, PRB 75, 235406
+(2007), whose optimum expansion carries four pair shells, four trios, and
+one quattro) map onto FreeBird by negating every parameter.
+
+Evaluated by `interacting_energy(lattice, h)` for single-component
+(`SLattice`) configurations, and therefore usable in every sampler that
+calls it generically.
+
+# Constructor
+```julia
+ClusterLatticeHamiltonian(pair_ham::GenericLatticeHamiltonian{N,U}, clusters)
+```
+`clusters` is a vector of `ClusterInteraction`s whose coupling type matches
+`U`; heterogeneous orders `K` are allowed.
+"""
+struct ClusterLatticeHamiltonian{N,U} <: ClassicalHamiltonian
+    pair_ham::GenericLatticeHamiltonian{N,U}
+    clusters::Vector{ClusterInteraction{K,U} where K}
+
+    function ClusterLatticeHamiltonian(pair_ham::GenericLatticeHamiltonian{N,U},
+                                       clusters::AbstractVector) where {N,U}
+        converted = Vector{ClusterInteraction{K,U} where K}()
+        for (i, c) in enumerate(clusters)
+            if !(c isa ClusterInteraction)
+                throw(ArgumentError(
+                    "clusters[$i] is a $(typeof(c)); expected a ClusterInteraction"))
+            end
+            if !(typeof(c.coupling) == U)
+                throw(ArgumentError(
+                    "clusters[$i] has coupling type $(typeof(c.coupling)), which " *
+                    "does not match the pair Hamiltonian's $U; construct every " *
+                    "coupling with the same units and value type"))
+            end
+            push!(converted, c)
+        end
+        return new{N,U}(pair_ham, converted)
+    end
+end
+
+function Base.show(io::IO, h::ClusterLatticeHamiltonian{N,U}) where {N,U}
+    println(io, "ClusterLatticeHamiltonian{$N,$U}:")
+    println(io, "    pair part: ", h.pair_ham)
+    println(io, "    clusters:")
+    for c in h.clusters
+        println(io, "        ", c)
     end
 end
 

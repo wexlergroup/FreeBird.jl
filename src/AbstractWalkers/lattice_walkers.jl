@@ -17,15 +17,38 @@ Compute the nearest and next-nearest neighbors for each atom in a 3D lattice.
 
 """
 
-function compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, 
-                           positions::Matrix{Float64}, 
-                           periodicity::Tuple{Bool, Bool, Bool}, 
+"""
+    _minimum_image_distance(supercell_lattice_vectors, reciprocal_lattice_vectors,
+                            periodicity, pos_i, pos_j)
+
+Minimum-image distance between two Cartesian positions under the given
+supercell and periodicity — the single distance kernel shared by
+`compute_neighbors` and `enumerate_motif_embeddings`, so pair shells and
+cluster embeddings follow the identical torus convention.
+"""
+@inline function _minimum_image_distance(supercell_lattice_vectors::AbstractMatrix{Float64},
+                                         reciprocal_lattice_vectors::AbstractMatrix{Float64},
+                                         periodicity::Tuple{Bool,Bool,Bool},
+                                         pos_i, pos_j)
+    dr = [pos_j[1] - pos_i[1], pos_j[2] - pos_i[2], pos_j[3] - pos_i[3]]
+    fractional_dr = reciprocal_lattice_vectors * dr
+    for k in 1:3
+        if periodicity[k]
+            fractional_dr[k] -= round(fractional_dr[k])
+        end
+    end
+    return norm(supercell_lattice_vectors * fractional_dr)
+end
+
+function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
+                           positions::Matrix{Float64},
+                           periodicity::Tuple{Bool, Bool, Bool},
                            cutoff_radii::Vector{Float64}
                            )
-                           
+
     neighbors = Vector{Vector{Vector{Int}}}(undef, size(positions, 1))
     num_atoms = size(positions, 1)
-    
+
     # Compute reciprocal lattice vectors for minimum image convention
     a1 = supercell_lattice_vectors[:, 1]
     a2 = supercell_lattice_vectors[:, 2]
@@ -39,40 +62,22 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
         for _ in 1:layers_of_neighbors
             push!(nth_neighbors, Int[])
         end
-        pos_i = positions[i, :]
-        
+
         for j in 1:num_atoms
             if i != j
-                pos_j = positions[j, :]
-                dx = pos_j[1] - pos_i[1]
-                dy = pos_j[2] - pos_i[2]
-                dz = pos_j[3] - pos_i[3]
+                distance = _minimum_image_distance(
+                    supercell_lattice_vectors, reciprocal_lattice_vectors,
+                    periodicity, view(positions, i, :), view(positions, j, :))
 
-                # Apply minimum image convention using reciprocal lattice vectors
-                dr = [dx, dy, dz]
-                fractional_dr = reciprocal_lattice_vectors * dr
-                
-                for k in 1:3
-                    if periodicity[k]
-                        fractional_dr[k] -= round(fractional_dr[k])
+                for k in 1:layers_of_neighbors
+                    if distance <= cutoff_radii[k]
+                        push!(nth_neighbors[k], j)
+                        break
                     end
                 end
-                
-                dr = supercell_lattice_vectors * fractional_dr
-
-                distance = norm(dr)
-
-                for i in 1:layers_of_neighbors
-                    if distance <= cutoff_radii[i]
-                        push!(nth_neighbors[i], j)
-                        break
-                    end 
-                end
-
-
             end
         end
-        
+
         neighbors[i] = nth_neighbors
     end
 
@@ -470,6 +475,178 @@ function order_parameter_c2x2(lattice::MLattice{1,SquareLattice})
         end
     end
     return abs(acc) / (d1 * d2)
+end
+
+"""
+    motif_distances(coords::AbstractVector{<:Tuple}) -> Vector{Float64}
+
+Sorted multiset of the pairwise Euclidean distances of a coordinate
+template, for transcribing a cluster-interaction figure straight from a
+paper's geometry (e.g. the trio `[(0, 0), (1, 0), (0, 1)]` gives
+`[1, 1, √2]`). Two-component tuples are treated as in-plane coordinates
+with `z = 0`. The result is the `distances` argument of
+[`enumerate_motif_embeddings`](@ref).
+"""
+function motif_distances(coords::AbstractVector{<:Tuple})
+    n = length(coords)
+    n >= 2 || throw(ArgumentError("a motif needs at least two sites"))
+    to3(t) = (Float64(t[1]), Float64(t[2]), length(t) >= 3 ? Float64(t[3]) : 0.0)
+    pts = [to3(t) for t in coords]
+    ds = Float64[]
+    for a in 1:n, b in (a+1):n
+        push!(ds, sqrt((pts[a][1] - pts[b][1])^2 +
+                       (pts[a][2] - pts[b][2])^2 +
+                       (pts[a][3] - pts[b][3])^2))
+    end
+    return sort(ds)
+end
+
+"""
+    enumerate_motif_embeddings(lattice::MLattice, distances::AbstractVector{<:Real};
+                               tol::Float64=1e-6,
+                               expected_count::Union{Int,Nothing}=nothing)
+        -> Vector{NTuple{K,Int}}
+
+Enumerate every embedding of a cluster motif on a periodic lattice. The
+motif is declared by the sorted multiset of its pairwise minimum-image
+distances (`K` is inferred from the multiset length: 1 → pair, 3 → trio,
+6 → quattro, 10 → quinto); [`motif_distances`](@ref) builds the multiset
+from a coordinate template. Distances are compared with absolute tolerance
+`tol`, using the same minimum-image kernel as `compute_neighbors`, so
+embeddings follow the identical torus convention as the pair shells: one
+entry per unordered site set whose distances match, in canonical strictly
+increasing order — the form [`ClusterInteraction`](@ref) requires.
+
+Diagnostics:
+- The total embedding count and the count per site are logged (`@info`).
+- A warning is emitted when the per-site embedding membership is not
+  uniform: on a site-transitive lattice, nonuniformity indicates distance
+  aliasing or an unsuitable `tol`.
+- A warning is emitted when any periodic circumference does not exceed
+  `K · maximum(distances)`: such a cell is not a faithful quotient, and
+  winding (wrap-around) embeddings are counted under the torus convention
+  (e.g. the 18-site triangular cell carries 42 nearest-neighbor-triangle
+  embeddings: 36 faces plus 6 winding three-cycles).
+- When `expected_count` is given (e.g. a hand-derived per-cell
+  multiplicity), a mismatch throws an `ArgumentError` — the recommended
+  guard against silent transcription errors.
+
+Note: for a pair signature (`K = 2`) this reproduces the sites of a
+neighbor shell as unordered pairs — useful as a counting diagnostic; pair
+couplings themselves belong in `GenericLatticeHamiltonian`.
+"""
+function enumerate_motif_embeddings(lattice::MLattice, distances::AbstractVector{<:Real};
+                                    tol::Float64=1e-6,
+                                    expected_count::Union{Int,Nothing}=nothing)
+    npairs = length(distances)
+    K = round(Int, (1 + sqrt(1 + 8.0 * npairs)) / 2)
+    if K * (K - 1) ÷ 2 != npairs || !(2 <= K <= 5)
+        throw(ArgumentError(
+            "distances must be the full pairwise multiset of a K-site motif " *
+            "— 1 (K = 2), 3 (K = 3), 6 (K = 4), or 10 (K = 5) entries — got $npairs"))
+    end
+    sig = sort(collect(Float64, distances))
+    all(>(0.0), sig) || throw(ArgumentError("motif distances must be positive"))
+    tol > 0 || throw(ArgumentError("tol must be positive"))
+
+    M = num_sites(lattice)
+    dims = lattice.supercell_dimensions
+    scv = lattice.lattice_vectors * Diagonal([dims[1], dims[2], dims[3]])
+    rec = inv(scv)
+    pos = lattice.positions
+    per = lattice.periodicity
+
+    # Wrap-around guard: a periodic circumference not exceeding K·d_max
+    # admits winding embeddings; counts then follow the torus convention
+    d_max = sig[end]
+    for k in 1:3
+        per[k] || continue
+        C = norm(scv[:, k])
+        if C <= K * d_max + tol
+            @warn "periodic circumference $(round(C, digits=4)) along axis $k " *
+                  "does not exceed K·d_max = $(K * d_max); the cell is not a " *
+                  "faithful quotient and embeddings follow the torus " *
+                  "(minimum-image) convention"
+            break
+        end
+    end
+
+    uniq = Float64[]
+    for d in sig
+        any(u -> abs(u - d) <= tol, uniq) || push!(uniq, d)
+    end
+
+    dist(i, j) = _minimum_image_distance(scv, rec, per,
+                                         view(pos, i, :), view(pos, j, :))
+
+    # Per-site candidates at any signature distance, restricted to j > i:
+    # anchored strictly increasing enumeration makes each unordered set
+    # appear exactly once, with the anchor as its minimum index
+    cand = [Int[] for _ in 1:M]
+    for i in 1:M, j in (i+1):M
+        d = dist(i, j)
+        if any(u -> abs(u - d) <= tol, uniq)
+            push!(cand[i], j)
+        end
+    end
+
+    embeddings = Vector{NTuple{K,Int}}()
+    partial = Int[]
+    function extend!()
+        if length(partial) == K
+            ds = Float64[]
+            for a in 1:K, b in (a+1):K
+                push!(ds, dist(partial[a], partial[b]))
+            end
+            sort!(ds)
+            if all(abs(ds[t] - sig[t]) <= tol for t in 1:npairs)
+                push!(embeddings, NTuple{K,Int}(partial))
+            end
+            return nothing
+        end
+        for j in cand[partial[1]]
+            j > partial[end] || continue
+            ok = true
+            for s in partial
+                dj = dist(s, j)
+                if !any(u -> abs(u - dj) <= tol, uniq)
+                    ok = false
+                    break
+                end
+            end
+            ok || continue
+            push!(partial, j)
+            extend!()
+            pop!(partial)
+        end
+        return nothing
+    end
+    for i in 1:M
+        empty!(partial)
+        push!(partial, i)
+        extend!()
+    end
+
+    counts = zeros(Int, M)
+    for e in embeddings, s in e
+        counts[s] += 1
+    end
+    total = length(embeddings)
+    @info "enumerate_motif_embeddings: $total embeddings of a $K-site motif " *
+          "($(round(total / M, digits=4)) per site)"
+    if !isempty(embeddings) && !all(==(counts[1]), counts)
+        @warn "per-site embedding membership is not uniform " *
+              "(min $(minimum(counts)), max $(maximum(counts))); on a " *
+              "site-transitive lattice this indicates distance aliasing or " *
+              "an unsuitable tol"
+    end
+    if expected_count !== nothing && total != expected_count
+        throw(ArgumentError(
+            "enumerated $total embeddings but expected_count = " *
+            "$expected_count; check the motif signature, tol, and the cell " *
+            "size (wrap-around)"))
+    end
+    return embeddings
 end
 
 """

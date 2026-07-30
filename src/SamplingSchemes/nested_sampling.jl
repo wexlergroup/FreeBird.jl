@@ -429,6 +429,48 @@ function update_iter!(liveset::AbstractLiveSet)
     end
 end
 
+const _RESERVED_LEDGER_COLUMNS = (:iter, :emax, :omega, :energy, :num_particles)
+
+"""
+    _validate_observables(observables, liveset::AbstractLiveSet)
+
+Validate an `observables` specification — a vector of `name::Symbol =>
+callback` pairs — for per-dead-point recording in a nested-sampling loop.
+
+Throws `ArgumentError` on an empty list, duplicate names, a name colliding
+with a reserved ledger column, or a callback whose probe evaluation on
+`liveset.walkers[1].configuration` does not return a `Real`; warns when the
+probe value is non-finite (a non-finite observable contributes NaN/Inf to
+every weighted average downstream). Callbacks must be pure functions of the
+configuration: each is evaluated once here as a probe and once per accepted
+iteration on the culled walker.
+"""
+function _validate_observables(observables::AbstractVector{<:Pair{Symbol,<:Any}},
+                               liveset::AbstractLiveSet)
+    isempty(observables) && throw(ArgumentError(
+        "observables: empty list; pass `nothing` to disable observable recording"))
+    names = first.(observables)
+    allunique(names) || throw(ArgumentError(
+        "observables: duplicate names in $(names)"))
+    for name in names
+        if name in _RESERVED_LEDGER_COLUMNS
+            throw(ArgumentError(
+                "observables: name :$name collides with a reserved ledger " *
+                "column; reserved names are $(_RESERVED_LEDGER_COLUMNS)"))
+        end
+    end
+    for (name, f) in observables
+        probe = f(liveset.walkers[1].configuration)
+        probe isa Real || throw(ArgumentError(
+            "observables: callback :$name returned a $(typeof(probe)); " *
+            "callbacks must return a Real"))
+        if !isfinite(Float64(probe))
+            @warn "observables: probe evaluation of :$name returned a non-finite value ($probe)"
+        end
+    end
+    return nothing
+end
+
 """
     estimate_temperature(n_walker::Int, n_cull::Int, ediff::Float64)
 Estimate the temperature for the nested sampling algorithm from dlog(ω)/dE.
@@ -1041,17 +1083,30 @@ Perform a nested sampling loop for a given number of steps.
 - `ns_params::NestedSamplingParameters`: The parameters for nested sampling.
 - `n_steps::Int64`: The number of steps to perform.
 - `mc_routine::MCRoutine`: The Monte Carlo routine to use.
+- `observables`: Optional vector of `name::Symbol => callback` pairs. Each
+  callback is evaluated on the culled walker's `configuration` at every
+  accepted iteration and recorded as an extra `Float64` ledger column named
+  `name`, exactly paired with that row's `iter`-keyed prior-volume weight.
+  Names must not collide with the built-in ledger columns
+  (`$(join(String.(_RESERVED_LEDGER_COLUMNS), ", "))`); callbacks must be
+  pure functions of the configuration returning a `Real`. Parallel and
+  multi-cull MC routines (`MCRoutineParallel` subtypes) are rejected up
+  front with an `ArgumentError`; a bit-exact pairing guard additionally
+  raises an error if a step ever culls a different walker than the one the
+  row records. The default `nothing` leaves the ledger schema unchanged.
 
 # Returns
-- `df`: A DataFrame containing the iteration number and maximum energy for each step.
+- `df`: A DataFrame containing the iteration number and maximum energy for each step,
+  plus one column per requested observable.
 - `liveset`: The updated set of walkers.
 - `ns_params`: The updated nested sampling parameters.
 """
-function nested_sampling(liveset::AbstractLiveSet, 
-                                ns_params::NestedSamplingParameters, 
-                                n_steps::Int64, 
+function nested_sampling(liveset::AbstractLiveSet,
+                                ns_params::NestedSamplingParameters,
+                                n_steps::Int64,
                                 mc_routine::MCRoutine,
-                                save_strategy::DataSavingStrategy)
+                                save_strategy::DataSavingStrategy;
+                                observables::Union{Nothing,AbstractVector{<:Pair{Symbol,<:Any}}}=nothing)
     # Initialize cluster_p and reset counters from MCMixedMoves if applicable
     if mc_routine isa MCMixedMoves && mc_routine.clusters_freq > 0
         ns_params.cluster_p = mc_routine.initial_cluster_p
@@ -1062,9 +1117,29 @@ function nested_sampling(liveset::AbstractLiveSet,
         empty!(ns_params.cluster_adjust_iterations)
     end
     df = DataFrame(iter=Int[], emax=Float64[])
+    if observables !== nothing
+        mc_routine isa MCRoutineParallel && throw(ArgumentError(
+            "observables: parallel/multi-cull MC routines are not supported " *
+            "— each accepted iteration culls multiple walkers but records a " *
+            "single ledger row, so per-dead-point pairing is undefined"))
+        _validate_observables(observables, liveset)
+        for (name, _) in observables
+            df[!, name] = Float64[]
+        end
+    end
+    culled = nothing
     for i in 1:n_steps
         print_info = i % save_strategy.n_info == 0
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
+        if observables !== nothing
+            # Pre-sort with the step's own comparator and hold the walker the
+            # step will cull: the step re-sorts (stable sort, so the identity
+            # permutation here) and culls walkers[1] on accept. `popfirst!`
+            # removes but never mutates the culled walker, so evaluating the
+            # callbacks on it after the step is exact.
+            sort_by_energy!(liveset)
+            culled = liveset.walkers[1]
+        end
         iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine; ns_iteration=i)
         @debug "n_step $i, iter: $iter, emax: $emax"
         if ns_params.fail_count >= ns_params.allowed_fail_count
@@ -1073,7 +1148,17 @@ function nested_sampling(liveset::AbstractLiveSet,
             ns_params.step_size = ns_params.initial_step_size
         end
         if !(iter isa typeof(missing))
-            push!(df, (iter, emax.val))
+            if observables === nothing
+                push!(df, (iter, emax.val))
+            else
+                emax == culled.energy || error(
+                    "NS observable recording: dead-point/observable pairing " *
+                    "lost (step culled a walker with energy $emax, but the " *
+                    "pre-sorted worst walker had $(culled.energy)); this MC " *
+                    "routine is not supported with `observables`")
+                push!(df, (iter, emax.val,
+                           (Float64(f(culled.configuration)) for (_, f) in observables)...))
+            end
         end
         print_message(i, iter, emax, ns_params.step_size, print_info, liveset)
         write_df_every_n(df, i, save_strategy)
@@ -1232,9 +1317,13 @@ highest-Ω walker, record (Ω, E, N), replace with a decorrelated clone.
 - `n_steps::Int64`: Number of NS iterations.
 - `mc_routine::MCGrandCanonicalMoves`: The GC move routine.
 - `save_strategy::DataSavingStrategy`: Strategy for periodic output.
+- `observables`: Optional vector of `name::Symbol => callback` pairs
+  recording per-dead-point observables as extra ledger columns; see
+  [`nested_sampling`](@ref).
 
 # Returns
-- `df::DataFrame`: Columns `[:iter, :omega, :energy, :num_particles]`.
+- `df::DataFrame`: Columns `[:iter, :omega, :energy, :num_particles]`,
+  plus one column per requested observable.
 - `liveset::LatticeGasWalkers`: The final liveset (surviving walkers).
 - `gc_params::GrandCanonicalNestedSamplingParameters`: Updated parameters.
 """
@@ -1242,7 +1331,8 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
                                          gc_params::GrandCanonicalNestedSamplingParameters,
                                          n_steps::Int64,
                                          mc_routine::MCGrandCanonicalMoves,
-                                         save_strategy::DataSavingStrategy)
+                                         save_strategy::DataSavingStrategy;
+                                         observables::Union{Nothing,AbstractVector{<:Pair{Symbol,<:Any}}}=nothing)
     # Initialize walkers with random microstates
     _init_gc_walkers!(liveset, gc_params)
 
@@ -1257,10 +1347,26 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
     end
 
     df = DataFrame(iter=Int[], omega=Float64[], energy=Float64[], num_particles=Int[])
+    if observables !== nothing
+        _validate_observables(observables, liveset)
+        for (name, _) in observables
+            df[!, name] = Float64[]
+        end
+    end
+    culled = nothing
 
     for i in 1:n_steps
         print_info = i % save_strategy.n_info == 0
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
+
+        if observables !== nothing
+            # Pre-sort with the step's own comparator (Ω = E − μN, descending)
+            # and hold the walker the step will cull; see `nested_sampling`.
+            sort!(liveset.walkers,
+                  by = w -> _grand_potential(w, gc_params.chemical_potential),
+                  rev=true)
+            culled = liveset.walkers[1]
+        end
 
         iter, omega, energy, n_par, liveset, gc_params = nested_sampling_step!(
             liveset, gc_params, mc_routine; ns_iteration=i)
@@ -1273,7 +1379,17 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
         end
 
         if !(iter isa typeof(missing))
-            push!(df, (iter, omega.val, energy.val, n_par))
+            if observables === nothing
+                push!(df, (iter, omega.val, energy.val, n_par))
+            else
+                omega == _grand_potential(culled, gc_params.chemical_potential) || error(
+                    "GC-NS observable recording: dead-point/observable " *
+                    "pairing lost (step culled a walker with Ω = $omega, but " *
+                    "the pre-sorted worst walker had Ω = " *
+                    "$(_grand_potential(culled, gc_params.chemical_potential)))")
+                push!(df, (iter, omega.val, energy.val, n_par,
+                           (Float64(f(culled.configuration)) for (_, f) in observables)...))
+            end
         end
 
         if print_info && !(iter isa typeof(missing))
@@ -1533,9 +1649,15 @@ extract them from the returned liveset.
 - `n_steps::Int64`: Number of NS iterations.
 - `mc_routine::MCGrandCanonicalMoves`: The GC move routine (reused from the Ω-sorted construction).
 - `save_strategy::DataSavingStrategy`: Strategy for periodic output.
+- `observables`: Optional vector of `name::Symbol => callback` pairs
+  recording per-dead-point observables (e.g. `order_parameter_c2x2`) as
+  extra ledger columns; see [`nested_sampling`](@ref). The recorded columns
+  feed the `observable_cols` machinery of
+  `gc_thermodynamic_stats_ideal_ref`.
 
 # Returns
-- `df::DataFrame`: Columns `[:iter, :emax, :num_particles]`.
+- `df::DataFrame`: Columns `[:iter, :emax, :num_particles]`,
+  plus one column per requested observable.
 - `liveset::LatticeGasWalkers`: The final liveset (surviving walkers).
 - `params::IdealGasReferencedGCNSParameters`: Updated parameters.
 """
@@ -1543,7 +1665,8 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
                                               params::IdealGasReferencedGCNSParameters,
                                               n_steps::Int64,
                                               mc_routine::MCGrandCanonicalMoves,
-                                              save_strategy::DataSavingStrategy)
+                                              save_strategy::DataSavingStrategy;
+                                              observables::Union{Nothing,AbstractVector{<:Pair{Symbol,<:Any}}}=nothing)
     # Initialize walkers as i.i.d. draws from the Bernoulli(z0/(1+z0)) prior
     _init_ideal_gas_ref_walkers!(liveset, params)
 
@@ -1558,10 +1681,24 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
     end
 
     df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[])
+    if observables !== nothing
+        _validate_observables(observables, liveset)
+        for (name, _) in observables
+            df[!, name] = Float64[]
+        end
+    end
+    culled = nothing
 
     for i in 1:n_steps
         print_info = i % save_strategy.n_info == 0
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
+
+        if observables !== nothing
+            # Pre-sort with the step's own comparator (energy, descending)
+            # and hold the walker the step will cull; see `nested_sampling`.
+            sort_by_energy!(liveset)
+            culled = liveset.walkers[1]
+        end
 
         iter, emax, n_par, liveset, params = nested_sampling_step!(
             liveset, params, mc_routine; ns_iteration=i)
@@ -1574,7 +1711,16 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
         end
 
         if !(iter isa typeof(missing))
-            push!(df, (iter, emax.val, n_par))
+            if observables === nothing
+                push!(df, (iter, emax.val, n_par))
+            else
+                emax == culled.energy || error(
+                    "IG-ref GC-NS observable recording: dead-point/observable " *
+                    "pairing lost (step culled a walker with energy $emax, " *
+                    "but the pre-sorted worst walker had $(culled.energy))")
+                push!(df, (iter, emax.val, n_par,
+                           (Float64(f(culled.configuration)) for (_, f) in observables)...))
+            end
         end
 
         if print_info && !(iter isa typeof(missing))

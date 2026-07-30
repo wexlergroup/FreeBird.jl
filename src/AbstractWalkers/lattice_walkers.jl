@@ -420,6 +420,59 @@ function occupied_site_count(MLattice::MLattice{C}) where C
 end
 
 """
+    order_parameter_c2x2(lattice::MLattice{1,SquareLattice}) -> Float64
+
+Sublattice order parameter for c(2×2) checkerboard ordering on a
+single-component square lattice:
+
+    Ψ = |Σ_{occupied sites} (−1)^(i+j)| / M,
+
+where `(i, j)` are the integer lattice coordinates of each site and `M` is
+the number of sites. Equivalent to the four-sublattice
+`Ψ_c(2×2) = |N_a + N_d − N_b − N_c| / M` of Zhang, Blum & Reuter
+[PRB **75**, 235406 (2007), Eq. (8)]: sublattices (a, d) share one
+checkerboard parity and (b, c) the other. A perfect c(2×2) arrangement at
+half filling gives `1/2`; the empty and the full lattice give `0`.
+
+Ψ is not a function of `(E, N)` — degenerate energy levels contain ordered
+and disordered configurations alike — so it must be evaluated on
+configurations (e.g. per culled walker, via the `observables` keyword of the
+nested-sampling loops) rather than reconstructed from an energy ledger.
+
+Requires a single-site basis, a strictly two-dimensional supercell
+(`supercell_dimensions[3] == 1`), and even in-plane dimensions (the two
+checkerboard sublattices must tile the periodic cell evenly); violations
+throw an `ArgumentError`.
+"""
+function order_parameter_c2x2(lattice::MLattice{1,SquareLattice})
+    if length(lattice.basis) != 1
+        throw(ArgumentError("order_parameter_c2x2 requires a single-site " *
+            "basis, got $(length(lattice.basis)) basis sites"))
+    end
+    d1, d2, d3 = lattice.supercell_dimensions
+    if d3 != 1
+        throw(ArgumentError("order_parameter_c2x2 requires a two-dimensional " *
+            "supercell (supercell_dimensions[3] == 1), got $d3 layers"))
+    end
+    if isodd(d1) || isodd(d2)
+        throw(ArgumentError("order_parameter_c2x2 requires even in-plane " *
+            "supercell dimensions so the checkerboard sublattices tile the " *
+            "periodic cell evenly, got ($d1, $d2)"))
+    end
+    occ = lattice.components[1]
+    acc = 0
+    for s in eachindex(occ)
+        if occ[s]
+            # lattice_positions ordering: basis innermost, dimension 1 fastest
+            i0 = (s - 1) % d1
+            j0 = ((s - 1) ÷ d1) % d2
+            acc += iseven(i0 + j0) ? 1 : -1
+        end
+    end
+    return abs(acc) / (d1 * d2)
+end
+
+"""
     mutable struct LatticeWalker
 
 The `LatticeWalker` struct represents a walker on a 3D lattice.

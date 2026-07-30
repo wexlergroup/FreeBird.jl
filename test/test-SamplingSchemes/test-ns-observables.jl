@@ -352,4 +352,163 @@
             [df0, df1, df2], N_values, M, μ_grid, T_grid;
             n_walkers=K, live_emax=live_E, live_observables=live_psi)
     end
+
+    # ================================================================
+    @testset "end-to-end: exact reference and route consistency (4x4, NN repulsion)" begin
+        # Statistical NS checks: seed the global RNG (the random_seed field on
+        # the NS parameters is not consumed). The igref tolerances were sized
+        # at or above 3 sigma of three-seed scatter at this configuration
+        # (max observed: |dlnXi| 0.23, |dN| 0.17, |dU| 0.0011, |dvar_U| 1e-4,
+        # |dcov_UN| 0.0024, |dpsi| 0.014, all N_eff >= 248); the fixed-N
+        # tolerances follow the existing exact-enumeration testset pattern.
+        # The prior must sit near the target ensemble: with repulsive
+        # couplings, z0 = 1 centers the Bernoulli prior at N = M/2 and the
+        # mu grid at ln z0 = 0, and the ladder-depth formula below is the
+        # full-compression depth M ln(1 + 1/z0).
+        Random.seed!(4400)
+        kb = 8.617333262e-5
+
+        M = 16
+        J = 0.1                      # eV, repulsive nearest-neighbor coupling
+        ham = GenericLatticeHamiltonian(0.0, [J, 0.0], u"eV")
+        lattice_at(N) = begin
+            lat = obs_square_lattice(4, 4)
+            lat.components[1] .= false
+            lat.components[1][1:N] .= true
+            lat
+        end
+        psi_from_occ(occ) = abs(sum(occ[s] ?
+            (iseven(((s - 1) % 4) + ((s - 1) ÷ 4)) ? 1 : -1) : 0
+            for s in eachindex(occ))) / length(occ)
+
+        # Exact per-configuration (E, N, psi) from fixed-N enumeration of all
+        # 2^16 configurations
+        exact_E = Dict{Int,Vector{Float64}}()
+        exact_psi = Dict{Int,Vector{Float64}}()
+        for N in 0:M
+            df_exact, _ = exact_enumeration(lattice_at(N), ham)
+            exact_E[N] = [ustrip(u"eV", e) for e in df_exact.energy]
+            exact_psi[N] = [psi_from_occ(cfg[1]) for cfg in df_exact.config]
+            @test length(exact_E[N]) == binomial(M, N)
+        end
+
+        function exact_stats(μ_val, T_val)
+            β = 1.0 / (kb * T_val)
+            lt = Float64[]; Ns = Float64[]; Es = Float64[]; Ps = Float64[]
+            for N in 0:M, i in eachindex(exact_E[N])
+                push!(lt, N * β * μ_val - β * exact_E[N][i])
+                push!(Ns, N); push!(Es, exact_E[N][i]); push!(Ps, exact_psi[N][i])
+            end
+            w = exp.(lt .- maximum(lt)); sw = sum(w)
+            u = sum(w .* Es) / sw; n = sum(w .* Ns) / sw
+            (logXi=maximum(lt) + log(sw), mean_N=n,
+             var_N=sum(w .* Ns .^ 2) / sw - n^2, mean_U=u,
+             var_U=sum(w .* Es .^ 2) / sw - u^2,
+             cov_UN=sum(w .* Es .* Ns) / sw - u * n,
+             psi=sum(w .* Ps) / sw)
+        end
+
+        μs = [-0.010, 0.000, 0.010]
+        Ts = [300.0, 450.0]
+
+        # ---- igref route with psi recording ----
+        z0 = 1.0
+        K_ig = 150
+        n_ig = ceil(Int, 1.15 * K_ig * M * log1p(1 / z0)) + 2 * K_ig
+        walkers = [LatticeWalker(deepcopy(lattice_at(0)), energy=0.0u"eV", iter=0)
+                   for _ in 1:K_ig]
+        ls = LatticeGasWalkers(walkers, ham; assign_energy=false)
+        params = IdealGasReferencedGCNSParameters(
+            mc_steps=100, reference_fugacity=z0, energy_perturbation=1e-9,
+            allowed_fail_count=100_000)
+        df_ig, final_ig, _ = ideal_gas_referenced_nested_sampling(
+            ls, params, Int64(n_ig), MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3),
+            obs_save; observables=[:psi => order_parameter_c2x2])
+        obs_cleanup()
+        live_E_ig = [w.energy.val for w in final_ig.walkers]
+        live_N_ig = [sum(w.configuration.components[1]) for w in final_ig.walkers]
+        live_psi_ig = [order_parameter_c2x2(w.configuration) for w in final_ig.walkers]
+
+        st_ig = gc_thermodynamic_stats_ideal_ref(df_ig, M, z0, μs, Ts, K_ig;
+            ω0=(K_ig + 1) / K_ig, live_emax=live_E_ig, live_numbers=live_N_ig,
+            observable_cols=[:psi], live_observables=Dict(:psi => live_psi_ig))
+
+        n_gated = 0
+        for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
+            st_ig.N_eff[i, j] >= 200 || continue
+            n_gated += 1
+            ex = exact_stats(μ, T)
+            @test isapprox(st_ig.logXi[i, j], ex.logXi, atol=0.7)
+            @test isapprox(st_ig.mean_N[i, j], ex.mean_N, atol=0.5)
+            @test isapprox(st_ig.mean_U[i, j], ex.mean_U, atol=0.01)
+            @test isapprox(st_ig.var_U[i, j], ex.var_U, rtol=0.4, atol=0.001)
+            @test isapprox(st_ig.cov_UN[i, j], ex.cov_UN, rtol=0.4, atol=0.01)
+            @test isapprox(st_ig.observables[:psi][i, j], ex.psi, atol=0.05)
+        end
+        # The grid was chosen inside the z0 window, so most points must pass
+        # the Kish gate
+        @test n_gated >= 4
+
+        # ---- fixed-N route with psi recording ----
+        K_fn = 100
+        n_fn = 1200
+        dfs = Vector{DataFrame}(undef, M + 1)
+        live_E_fn = Vector{Vector{Float64}}(undef, M + 1)
+        live_psi_fn = Vector{Dict{Symbol,Vector{Float64}}}(undef, M + 1)
+
+        dfs[1] = DataFrame(iter=Int[], emax=Float64[])
+        live_E_fn[1] = Float64[]
+        live_psi_fn[1] = Dict(:psi => [0.0])          # psi of the empty lattice
+
+        for N in 1:(M - 1)
+            walkers = [
+                begin
+                    lat = lattice_at(N)
+                    generate_random_new_lattice_sample!(lat)
+                    LatticeWalker(lat)
+                end for _ in 1:K_fn]
+            liveset = LatticeGasWalkers(walkers, ham, perturb_energy=1e-9)
+            ns_params = LatticeNestedSamplingParameters(
+                mc_steps=60, energy_perturbation=1e-9,
+                allowed_fail_count=100_000)
+            df, final_ls, _ = nested_sampling(
+                liveset, ns_params, n_fn, MCRandomWalkClone(), obs_save;
+                observables=[:psi => order_parameter_c2x2])
+            dfs[N + 1] = df
+            live_E_fn[N + 1] = [ustrip(u"eV", w.energy) for w in final_ls.walkers]
+            live_psi_fn[N + 1] = Dict(
+                :psi => [order_parameter_c2x2(w.configuration) for w in final_ls.walkers])
+        end
+        obs_cleanup()
+
+        # N = M: single configuration; empty ladder + live tail with K copies
+        dfs[M + 1] = DataFrame(iter=Int[], emax=Float64[])
+        live_E_fn[M + 1] = fill(only(exact_E[M]), K_fn)
+        live_psi_fn[M + 1] = Dict(:psi => fill(0.0, K_fn))   # full lattice: psi = 0
+
+        st_fn = gc_thermodynamic_stats_fixed_N(dfs, collect(0:M), M,
+            μs .* u"eV", Ts .* u"K";
+            n_walkers=K_fn, n_cull=1, ω0=(K_fn + 1) / K_fn,
+            live_emax=live_E_fn,
+            observable_cols=[:psi], live_observables=live_psi_fn)
+
+        for (j, T) in enumerate(Ts), (k, μ) in enumerate(μs)
+            ex = exact_stats(μ, T)
+            @test isapprox(st_fn.logXi[k, j], ex.logXi, atol=0.3)
+            @test isapprox(st_fn.mean_N[k, j], ex.mean_N, rtol=0.05, atol=0.3)
+            @test isapprox(st_fn.mean_U[k, j], ex.mean_U, rtol=0.05, atol=0.03)
+            @test isapprox(st_fn.var_U[k, j], ex.var_U, rtol=0.3, atol=0.015)
+            @test isapprox(st_fn.cov_UN[k, j], ex.cov_UN, rtol=0.3, atol=0.08)
+            @test isapprox(st_fn.observables[:psi][k, j], ex.psi, atol=0.04)
+        end
+
+        # ---- route consistency where the igref window is healthy ----
+        for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
+            st_ig.N_eff[i, j] >= 200 || continue
+            @test isapprox(st_ig.observables[:psi][i, j],
+                           st_fn.observables[:psi][i, j], atol=0.07)
+            @test isapprox(st_ig.var_U[i, j], st_fn.var_U[i, j],
+                           rtol=0.5, atol=0.005)
+        end
+    end
 end

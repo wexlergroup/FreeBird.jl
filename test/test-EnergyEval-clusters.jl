@@ -205,4 +205,105 @@
         w4 = [LatticeWalker(deepcopy(lat4), energy=0.0u"eV", iter=0)]
         @test_throws ArgumentError LatticeGasWalkers(w4, h)
     end
+
+    # ================================================================
+    @testset "Zhang O-Pd(100) m = 9 expansion: counts, adlayers, sampling" begin
+        # Figure geometry transcribed from Zhang, Blum & Reuter, PRB 75,
+        # 235406 (2007), Fig. 1 (arXiv:cond-mat/0701549). In the paper's own
+        # labeling, V^t_1 is the LINEAR (1, 1, 2) trio and V^t_2 the
+        # (1, 1, √2) right triangle; t3 is the scalene (1, √2, √5), t6 the
+        # diagonal linear (√2, √2, 2√2), and q2 the "hut"
+        # (0,0)-(1,0)-(2,0)+(1,1). FreeBird couplings are the negated GGA
+        # values of their Table III (positive = repulsive).
+        zhang_motifs = (
+            t1=[(0, 0), (1, 0), (2, 0)],
+            t2=[(0, 0), (1, 0), (0, 1)],
+            t3=[(0, 1), (1, 0), (2, 0)],
+            t6=[(0, 0), (1, 1), (2, 2)],
+            q2=[(0, 0), (1, 0), (2, 0), (1, 1)])
+        zhang_J = (t1=0.168, t2=-0.060, t3=0.048, t6=0.051, q2=-0.120)
+        # Embeddings per site under standard full-orbit counting: 8 divided
+        # by the order of the motif's point-group stabilizer
+        zhang_per_site = (t1=2, t2=4, t3=8, t6=2, q2=4)
+
+        function zhang_hamiltonian(L)
+            lat = cluster_square(L; cutoffs=[1.1, 1.5, 2.1, 2.3])
+            clusters = [ClusterInteraction(zhang_J[k] * u"eV",
+                            enumerate_motif_embeddings(lat,
+                                motif_distances(zhang_motifs[k]);
+                                expected_count=zhang_per_site[k] * L * L))
+                        for k in keys(zhang_motifs)]
+            ham = ClusterLatticeHamiltonian(
+                GenericLatticeHamiltonian(-1.249, [0.292, 0.090, -0.050, -0.010], u"eV"),
+                clusters)
+            return lat, ham
+        end
+
+        L12 = 12
+        M12 = L12 * L12
+        sq12, zhang = zhang_hamiltonian(L12)
+
+        # Ordered adlayers: closed forms from hand-derived per-adatom motif
+        # multiplicities (pins transcription, sign convention, and counting
+        # simultaneously)
+        set_phase!(pred) = (sq12.components[1] .=
+            [pred((s - 1) % L12, (s - 1) ÷ L12) for s in 1:M12])
+
+        # (3×3), 16 adatoms, no neighbor within √5: on-site only
+        set_phase!((i, j) -> i % 3 == 0 && j % 3 == 0)
+        @test interacting_energy(sq12, zhang).val ≈ 16 * (-1.249) atol = 1e-10
+        # p(2×2), 36 adatoms: 2 third-shell pairs per adatom, no multi-body
+        set_phase!((i, j) -> i % 2 == 0 && j % 2 == 0)
+        @test interacting_energy(sq12, zhang).val ≈
+              36 * (-1.249 + 2 * (-0.050)) atol = 1e-10
+        # c(2×2), 72 adatoms: 2 second- and 2 third-shell pairs plus 2
+        # diagonal-linear t6 trios per adatom
+        set_phase!((i, j) -> iseven(i + j))
+        @test interacting_energy(sq12, zhang).val ≈
+              72 * (-1.249 + 2 * 0.090 + 2 * (-0.050) + 2 * 0.051) atol = 1e-10
+        # (1×1), 144 adatoms: every figure at its per-site multiplicity
+        sq12.components[1] .= true
+        @test interacting_energy(sq12, zhang).val ≈
+              144 * (-1.249 +
+                     2 * 0.292 + 2 * 0.090 + 2 * (-0.050) + 4 * (-0.010) +
+                     2 * 0.168 + 4 * (-0.060) + 8 * 0.048 + 2 * 0.051 +
+                     4 * (-0.120)) atol = 1e-10
+
+        # The Θ ≤ 1/2 closed forms also match the paper's Table I DFT
+        # binding energies to ≤ 2 meV per adatom under this counting
+        # convention. The dense phases ((2×2)-3O, (1×1)) follow a different
+        # multiplicity convention in the paper and are deliberately not
+        # asserted against Table I.
+        for (pred, n_ad, Eb_table) in (
+                ((i, j) -> i % 3 == 0 && j % 3 == 0, 16, 1.249),
+                ((i, j) -> i % 2 == 0 && j % 2 == 0, 36, 1.348),
+                ((i, j) -> iseven(i + j), 72, 1.069))
+            set_phase!(pred)
+            @test isapprox(-interacting_energy(sq12, zhang).val / n_ad, Eb_table;
+                           atol=0.003)
+        end
+
+        # The full Zhang Hamiltonian runs in GC-NS unmodified: seeded igref
+        # run on 6×6, live-set energies match direct recomputation
+        Random.seed!(1390)
+        sq6z, z6 = zhang_hamiltonian(6)
+        walkers = [LatticeWalker(deepcopy(sq6z), energy=0.0u"eV", iter=0)
+                   for _ in 1:20]
+        ls = LatticeGasWalkers(walkers, z6; assign_energy=false)
+        params = IdealGasReferencedGCNSParameters(
+            mc_steps=20, reference_fugacity=1.0, energy_perturbation=1e-9,
+            allowed_fail_count=100_000)
+        save = SaveEveryN("t_zh.csv", "t_zh.traj", "t_zh.ls",
+                          1000000, 1000000, 1000000)
+        df, fls, _ = ideal_gas_referenced_nested_sampling(
+            ls, params, Int64(150),
+            MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3), save)
+        rm.(["t_zh.csv", "t_zh.traj", "t_zh.ls"], force=true)
+        @test nrow(df) > 0
+        for w in fls.walkers
+            @test isapprox(w.energy.val,
+                           interacting_energy(w.configuration, z6).val;
+                           atol=1e-8)
+        end
+    end
 end

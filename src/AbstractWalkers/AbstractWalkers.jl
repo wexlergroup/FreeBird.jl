@@ -26,6 +26,7 @@ export MLattice, SLattice, GLattice
 export update_walker!
 export num_sites, occupied_site_count
 export order_parameter_c2x2
+export order_parameter_sqrt3
 export enumerate_motif_embeddings, motif_distances
 export view_structure
 

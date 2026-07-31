@@ -73,6 +73,173 @@
     obs_cleanup() = rm.(["t_obs.csv", "t_obs.traj", "t_obs.ls"], force=true)
     count_N(cfg) = Float64(sum(cfg.components[1]))
 
+    # ================================================================
+    @testset "order_parameter_sqrt3" begin
+        # Shared single-component triangular-lattice builder (NN shell only)
+        function obs_tri_lattice(d1, d2)
+            MLattice{1,TriangularLattice}(
+                lattice_constant=1.0,
+                supercell_dimensions=(d1, d2, 1),
+                periodicity=(true, true, false),
+                cutoff_radii=[1.1],
+                components=[[false for _ in 1:2*d1*d2]],
+                adsorptions=:full)
+        end
+
+        # Independent geometric decoder: recover the triangular integer
+        # coordinates (m, n) by inverting [t1 t2] on the stored positions and
+        # color with c = (m - n) mod 3, so the labels are derived from the
+        # geometry rather than from the index arithmetic under test
+        function sqrt3_labels(lat)
+            a = lat.lattice_vectors[1, 1]
+            map(1:size(lat.positions, 1)) do s
+                x, y = lat.positions[s, 1], lat.positions[s, 2]
+                n = round(Int, 2 * y / (sqrt(3) * a))
+                m = round(Int, x / a - n / 2)
+                mod(m - n, 3)
+            end
+        end
+
+        for (d1, d2) in [(3, 3), (6, 2)]
+            lat = obs_tri_lattice(d1, d2)
+            M = 2 * d1 * d2
+            labels = sqrt3_labels(lat)
+            # The hardcoded decoder inside order_parameter_sqrt3, recomputed
+            # here, must match the geometric labels site by site
+            hard = [begin
+                        b = (s - 1) % 2
+                        ci = ((s - 1) ÷ 2) % d1
+                        b == 0 ? ci % 3 : (ci + 2) % 3
+                    end for s in 1:M]
+            @test labels == hard
+            # Each sublattice holds exactly M/3 sites
+            @test [count(==(c), labels) for c in 0:2] == fill(M ÷ 3, 3)
+            # A proper 3-coloring: no first-shell neighbor pair shares a
+            # label (this also pins the neighbor lists)
+            @test all(labels[nb] != labels[s]
+                      for s in 1:M for nb in lat.neighbors[s][1])
+        end
+
+        # Exact values on the 18-site commensurate cell
+        lat = obs_tri_lattice(3, 3)
+        labels = sqrt3_labels(lat)
+
+        # Empty and full lattices carry no sqrt3 order (1 + ω + ω² = 0)
+        @test order_parameter_sqrt3(lat) == 0.0
+        lat.components[1] .= true
+        @test order_parameter_sqrt3(lat) == 0.0
+
+        # Each pure sublattice state, built from the geometric labels: 1/3
+        for c in 0:2
+            lat.components[1] .= (labels .== c)
+            @test order_parameter_sqrt3(lat) == 1 / 3
+        end
+
+        # Single particle: 1/M
+        lat.components[1] .= false
+        lat.components[1][1] = true
+        @test order_parameter_sqrt3(lat) == 1 / 18
+
+        # Mixed state with sublattice counts (2, 1, 0): |2 + ω| / 18 = √3/18
+        lat.components[1] .= false
+        a_sites = findall(==(0), labels)
+        b_sites = findall(==(1), labels)
+        lat.components[1][a_sites[1]] = true
+        lat.components[1][a_sites[2]] = true
+        lat.components[1][b_sites[1]] = true
+        @test order_parameter_sqrt3(lat) ≈ sqrt(3) / 18 rtol = 1e-12
+
+        # The shipped default (4, 2, 1) cell is incommensurate: d1 % 3 != 0
+        @test_throws ArgumentError order_parameter_sqrt3(obs_tri_lattice(4, 2))
+
+        # Three-dimensional supercell
+        lat3d = MLattice{1,TriangularLattice}(
+            lattice_constant=1.0,
+            supercell_dimensions=(3, 3, 2),
+            periodicity=(true, true, true),
+            cutoff_radii=[1.1],
+            components=[[false for _ in 1:36]],
+            adsorptions=:full)
+        @test_throws ArgumentError order_parameter_sqrt3(lat3d)
+
+        # One-site basis
+        lat1b = MLattice{1,TriangularLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)],
+            supercell_dimensions=(3, 3, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1],
+            components=[[false for _ in 1:9]],
+            adsorptions=:full)
+        @test_throws ArgumentError order_parameter_sqrt3(lat1b)
+
+        # A distorted basis breaks the tripartition arithmetic
+        latdb = MLattice{1,TriangularLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0), (0.3, 0.3, 0.0)],
+            supercell_dimensions=(3, 3, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1],
+            components=[[false for _ in 1:18]],
+            adsorptions=:full)
+        @test_throws ArgumentError order_parameter_sqrt3(latdb)
+
+        # lattice_constant != 1 scales lattice_vectors but not the default
+        # basis, so the geometry is no longer triangular; the basis-values
+        # guard rejects it
+        latlc = MLattice{1,TriangularLattice}(
+            lattice_constant=2.0,
+            supercell_dimensions=(3, 3, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.2],
+            components=[[false for _ in 1:18]],
+            adsorptions=:full)
+        @test_throws ArgumentError order_parameter_sqrt3(latlc)
+
+        # A short seeded canonical NS run records psi and its square through
+        # the moment-callback pattern from the docstring
+        Random.seed!(21)
+        tri_ham = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
+        walkers = [LatticeWalker(deepcopy(obs_tri_lattice(3, 3)),
+                                 energy=0.0u"eV", iter=0) for _ in 1:20]
+        # Fixed-N ladder at N = 6: place 6 particles per walker
+        for w in walkers
+            occ = vcat(fill(true, 6), fill(false, 12))
+            shuffle!(occ)
+            w.configuration.components[1] .= occ
+        end
+        ls = LatticeGasWalkers(walkers, tri_ham; perturb_energy=1e-9)
+        params = LatticeNestedSamplingParameters(mc_steps=30,
+            energy_perturbation=1e-9, allowed_fail_count=100000)
+
+        df, _, _ = nested_sampling(ls, params, Int64(200),
+            MCRandomWalkClone(), obs_save;
+            observables=[:psi => order_parameter_sqrt3,
+                         :psi2 => (cfg -> order_parameter_sqrt3(cfg)^2)])
+        obs_cleanup()
+
+        @test names(df) == ["iter", "emax", "psi", "psi2"]
+        @test all(0.0 .<= df.psi .<= 1 / 3)
+        @test all(isapprox.(df.psi2, df.psi .^ 2; rtol=1e-12))
+
+        # Schema is unchanged when observables are not requested
+        Random.seed!(21)
+        walkers2 = [LatticeWalker(deepcopy(obs_tri_lattice(3, 3)),
+                                  energy=0.0u"eV", iter=0) for _ in 1:20]
+        for w in walkers2
+            occ = vcat(fill(true, 6), fill(false, 12))
+            shuffle!(occ)
+            w.configuration.components[1] .= occ
+        end
+        ls2 = LatticeGasWalkers(walkers2, tri_ham; perturb_energy=1e-9)
+        params2 = LatticeNestedSamplingParameters(mc_steps=30,
+            energy_perturbation=1e-9, allowed_fail_count=100000)
+        df2, _, _ = nested_sampling(ls2, params2, Int64(50),
+            MCRandomWalkClone(), obs_save)
+        obs_cleanup()
+        @test names(df2) == ["iter", "emax"]
+    end
+
     @testset "observable hook: validation" begin
         lat = obs_square_lattice(4, 4)
         walkers = [LatticeWalker(deepcopy(lat), energy=0.0u"eV", iter=0) for _ in 1:8]

@@ -1,23 +1,4 @@
 """
-compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, 
-                  positions::Matrix{Float64}, 
-                  cutoff_radii::Vector{Float64}, 
-                  periodicity::Tuple{Bool, Bool, Bool})
-
-Compute the nearest and next-nearest neighbors for each atom in a 3D lattice.
-
-# Arguments
-- `supercell_lattice_vectors::Matrix{Float64}`: The lattice vectors of the supercell.
-- `positions::Matrix{Float64}`: The positions of the atoms in the supercell.
-- `periodicity::Tuple{Bool, Bool, Bool}`: A Boolean tuple of length three indicating periodicity in each dimension (true for periodic, false for non-periodic).
-- `cutoff_radii::Vector{Float64}`: The cutoff radii for the *index*-th nearest neighbors.
-
-# Returns
-- `neighbors::Vector{Tuple{Vector{Int}, Vector{Int}}}`: A vector of tuples containing the indices of the first and second nearest neighbors for each atom.
-
-"""
-
-"""
     _minimum_image_distance(supercell_lattice_vectors, reciprocal_lattice_vectors,
                             periodicity, pos_i, pos_j)
 
@@ -40,11 +21,59 @@ cluster embeddings follow the identical torus convention.
     return norm(supercell_lattice_vectors * fractional_dr)
 end
 
+"""
+    compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
+                      positions::Matrix{Float64},
+                      periodicity::Tuple{Bool, Bool, Bool},
+                      cutoff_radii::Vector{Float64};
+                      image_multiplicity::Bool=false)
+
+Compute the neighbor shells of every site in a supercell. Each in-cutoff
+distance is assigned to the first shell whose cutoff admits it (a nested
+`<=` cutoff ladder), so `cutoff_radii` must be non-empty, finite, strictly
+positive, and strictly increasing; anything else throws an
+`ArgumentError`.
+
+# Arguments
+- `supercell_lattice_vectors::Matrix{Float64}`: The lattice vectors of the supercell, one cell vector per column.
+- `positions::Matrix{Float64}`: The Cartesian positions of the sites, one site per row.
+- `periodicity::Tuple{Bool, Bool, Bool}`: A Boolean tuple of length three indicating periodicity in each dimension (true for periodic, false for non-periodic).
+- `cutoff_radii::Vector{Float64}`: The cutoff radii for the *index*-th nearest neighbors, strictly increasing.
+- `image_multiplicity::Bool=false`: The neighbor-counting convention, see below.
+
+# Returns
+- `neighbors::Vector{Vector{Vector{Int}}}`: For each site, one vector of neighbor indices per shell.
+
+# Conventions
+
+With `image_multiplicity=false` (the default), each site pair is counted
+once, in the shell of its minimum-image distance. On a cell whose periodic
+circumference does not exceed twice a shell cutoff, pairs connected
+through more than one periodic image are still counted once — the affected
+shells sit below their bulk-tiled coordination — and one warning listing
+every such shell and its collapsed-image count is emitted per call.
+Detection is exact (the periodic images are enumerated), so faithful cells
+never warn.
+
+With `image_multiplicity=true`, a neighbor index is pushed once per
+in-cutoff periodic image, including a site's own images (self-entries,
+`j == i`, which arise when a periodic circumference is within the cutoff):
+the cluster-expansion small-cell convention, under which the periodic
+cell's energy equals the bulk energy per cell of the tiled configuration.
+"""
 function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
                            positions::Matrix{Float64},
                            periodicity::Tuple{Bool, Bool, Bool},
-                           cutoff_radii::Vector{Float64}
+                           cutoff_radii::Vector{Float64};
+                           image_multiplicity::Bool=false,
                            )
+
+    if isempty(cutoff_radii) || any(r -> !(isfinite(r) && r > 0.0), cutoff_radii) ||
+       !all(cutoff_radii[k] < cutoff_radii[k+1] for k in 1:length(cutoff_radii)-1)
+        throw(ArgumentError(
+            "cutoff_radii must be finite, positive, and strictly increasing " *
+            "(shells are assigned by a nested cutoff ladder), got $cutoff_radii"))
+    end
 
     neighbors = Vector{Vector{Vector{Int}}}(undef, size(positions, 1))
     num_atoms = size(positions, 1)
@@ -56,6 +85,45 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
     reciprocal_lattice_vectors = inv([a1 a2 a3])
 
     layers_of_neighbors = length(cutoff_radii)
+    r_max = last(cutoff_radii)
+
+    # First shell whose cutoff admits the distance (the nested `<=` ladder);
+    # 0 when the distance is beyond the outermost cutoff.
+    function shell_of(distance::Float64)
+        for k in 1:layers_of_neighbors
+            if distance <= cutoff_radii[k]
+                return k
+            end
+        end
+        return 0
+    end
+
+    # Periodic-image offsets that can reach into the outermost cutoff:
+    # n_k in -N_k:N_k with N_k = floor(r_max·‖row k of inv(scv)‖ + 1/2) + 1.
+    # The inverse-cell row norm is the reciprocal of the perpendicular cell
+    # height, so this range provably contains every in-cutoff image on
+    # skewed cells too. Non-periodic directions contribute only n_k = 0.
+    offset_ranges = map(1:3) do k
+        if periodicity[k]
+            N = floor(Int, r_max * norm(view(reciprocal_lattice_vectors, k, :)) + 0.5) + 1
+            -N:N
+        else
+            0:0
+        end
+    end
+    # Precomputed Cartesian offsets; the Bool marks the zero offset (the
+    # central image, which is the kept image for j != i and the null term
+    # for j == i).
+    offsets = Tuple{Float64,Float64,Float64,Bool}[]
+    for n1 in offset_ranges[1], n2 in offset_ranges[2], n3 in offset_ranges[3]
+        push!(offsets, (n1 * a1[1] + n2 * a2[1] + n3 * a3[1],
+                        n1 * a1[2] + n2 * a2[2] + n3 * a3[2],
+                        n1 * a1[3] + n2 * a2[3] + n3 * a3[3],
+                        n1 == 0 && n2 == 0 && n3 == 0))
+    end
+
+    # Discarded in-cutoff images per shell (default mode only)
+    collapsed = zeros(Int, layers_of_neighbors)
 
     for i in 1:num_atoms
         nth_neighbors = Vector{Int}[]
@@ -64,21 +132,67 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
         end
 
         for j in 1:num_atoms
-            if i != j
-                distance = _minimum_image_distance(
-                    supercell_lattice_vectors, reciprocal_lattice_vectors,
-                    periodicity, view(positions, i, :), view(positions, j, :))
+            # Central image: the same rounding reduction as
+            # _minimum_image_distance, so `dmin` below is bit-identical to
+            # the per-pair minimum-image distance used before this rewrite —
+            # neighbor-list order feeds seeded RNG streams, so the default
+            # path must reproduce the previous lists element-for-element.
+            dr = [positions[j, 1] - positions[i, 1],
+                  positions[j, 2] - positions[i, 2],
+                  positions[j, 3] - positions[i, 3]]
+            fractional_dr = reciprocal_lattice_vectors * dr
+            for k in 1:3
+                if periodicity[k]
+                    fractional_dr[k] -= round(fractional_dr[k])
+                end
+            end
+            dr_c = supercell_lattice_vectors * fractional_dr
 
-                for k in 1:layers_of_neighbors
-                    if distance <= cutoff_radii[k]
-                        push!(nth_neighbors[k], j)
-                        break
-                    end
+            if image_multiplicity
+                # Push j once per in-cutoff periodic image (self-images
+                # included); only the single zero-displacement self term is
+                # skipped — it is not a bond.
+                for (ox, oy, oz, central) in offsets
+                    (j == i && central) && continue
+                    d = sqrt((dr_c[1] + ox)^2 + (dr_c[2] + oy)^2 + (dr_c[3] + oz)^2)
+                    k = shell_of(d)
+                    k != 0 && push!(nth_neighbors[k], j)
+                end
+            else
+                # Minimum-image convention: for j != i push j once, into the
+                # shell of the central (minimum-image) distance, exactly as
+                # before; tally every other in-cutoff image — the collapsed
+                # images of j != i pairs and all in-cutoff self-images — per
+                # that image's own shell.
+                if j != i
+                    kept_shell = shell_of(norm(dr_c))
+                    kept_shell != 0 && push!(nth_neighbors[kept_shell], j)
+                end
+                for (ox, oy, oz, central) in offsets
+                    central && continue
+                    d = sqrt((dr_c[1] + ox)^2 + (dr_c[2] + oy)^2 + (dr_c[3] + oz)^2)
+                    k = shell_of(d)
+                    k != 0 && (collapsed[k] += 1)
                 end
             end
         end
 
         neighbors[i] = nth_neighbors
+    end
+
+    if any(>(0), collapsed)
+        wrapped = ["$k (cutoff $(cutoff_radii[k])): $(collapsed[k]) collapsed image bond(s)"
+                   for k in 1:layers_of_neighbors if collapsed[k] > 0]
+        @warn "neighbor shell(s) [" * join(wrapped, ", ") * "] wrap the " *
+              "periodic cell: some pairs (or a site and its own periodic " *
+              "image) are connected through more than one image within the " *
+              "cutoff but are counted once under the minimum-image " *
+              "convention, so per-site coordination, and any energy " *
+              "coupling these shells, is below the bulk-tiled value. " *
+              "Enlarge the supercell so every periodic circumference " *
+              "exceeds twice the shell cutoff, or construct the lattice " *
+              "with `image_multiplicity=true` to count every image (the " *
+              "cluster-expansion small-cell convention)."
     end
 
     for k in 1:layers_of_neighbors
@@ -182,9 +296,10 @@ A mutable struct representing a lattice with the following fields:
         basis::Vector{Tuple{Float64, Float64, Float64}},
         supercell_dimensions::Tuple{Int64, Int64, Int64},
         periodicity::Tuple{Bool, Bool, Bool},
-        components::Vector{Vector{Bool}},
-        adsorptions::Vector{Bool},
         cutoff_radii::Vector{Float64},
+        components::Vector{Vector{Bool}},
+        adsorptions::Vector{Bool};
+        image_multiplicity::Bool=false,
     ) where {C,G}
 
 Creates an `MLattice` instance with the specified parameters. The constructor performs the following steps:
@@ -192,7 +307,7 @@ Creates an `MLattice` instance with the specified parameters. The constructor pe
 1. Validates that the number of components matches the expected value `C`.
 2. Computes the positions of the lattice points using `lattice_positions`.
 3. Computes the supercell lattice vectors.
-4. Computes the neighbors of each lattice point using `compute_neighbors`.
+4. Computes the neighbors of each lattice point using `compute_neighbors`, passing the `image_multiplicity` keyword through.
 
 Throws an `ArgumentError` if the number of components does not match `C`.
 
@@ -204,7 +319,8 @@ Throws an `ArgumentError` if the number of components does not match `C`.
                                periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
                                cutoff_radii::Vector{Float64}=[1.1, 1.5],
                                components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
-                               adsorptions::Union{Vector{Int},Symbol}=:full)
+                               adsorptions::Union{Vector{Int},Symbol}=:full,
+                               image_multiplicity::Bool=false)
 
     MLattice{C,TriangularLattice}(; lattice_constant::Float64=1.0,
                                   basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)],
@@ -212,11 +328,25 @@ Throws an `ArgumentError` if the number of components does not match `C`.
                                   periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
                                   cutoff_radii::Vector{Float64}=[1.1, 1.8],
                                   components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
-                                  adsorptions::Union{Vector{Int},Symbol}=:full)
+                                  adsorptions::Union{Vector{Int},Symbol}=:full,
+                                  image_multiplicity::Bool=false)
 
 Constructs a square/triangular lattice with the specified parameters. The `components` and `adsorptions` arguments can be a vector of integers specifying
-the indices of the occupied sites, or a symbol. If `components` is `:equal`, the lattice is divided into `C` equal components when possible, or 
+the indices of the occupied sites, or a symbol. If `components` is `:equal`, the lattice is divided into `C` equal components when possible, or
 nearest to equal components otherwise. If `adsorptions` is `:full`, all sites are classified as adsorption sites.
+
+The `image_multiplicity` keyword selects the neighbor-counting convention of
+[`compute_neighbors`](@ref): under the default minimum-image convention each
+site pair is counted once and a warning reports any shells that wrap the
+periodic cell; with `image_multiplicity=true` every in-cutoff periodic image
+is counted, self-image entries included (the cluster-expansion small-cell
+convention, under which the cell's energy equals the bulk energy per cell of
+the tiled configuration). The duplicated entries compose correctly
+downstream: the energy kernels add `coupling/2` per ordered-pair entry, so a
+doubled bond reaches the full bond energy and a self-image entry passes the
+occupation test exactly when the site is occupied; geometric-cluster growth
+reads only the first shell, and growth across a duplicated bond remains a
+configuration-independent symmetric proposal.
 
 ## Returns
 - `MLattice{C,G}`: A square/triangular lattice object with `C` components.
@@ -240,7 +370,8 @@ mutable struct MLattice{C,G} <: AbstractLattice
         periodicity::Tuple{Bool, Bool, Bool},
         cutoff_radii::Vector{Float64},
         components::Vector{Vector{Bool}},
-        adsorptions::Vector{Bool},
+        adsorptions::Vector{Bool};
+        image_multiplicity::Bool=false,
     ) where {C,G}
 
         num_components = length(components)
@@ -252,7 +383,8 @@ mutable struct MLattice{C,G} <: AbstractLattice
         positions = lattice_positions(lattice_vectors, basis, supercell_dimensions)
 
         supercell_lattice_vectors = lattice_vectors * Diagonal([supercell_dimensions[1], supercell_dimensions[2], supercell_dimensions[3]])
-        neighbors = compute_neighbors(supercell_lattice_vectors, positions, periodicity, cutoff_radii)
+        neighbors = compute_neighbors(supercell_lattice_vectors, positions, periodicity, cutoff_radii;
+                                      image_multiplicity=image_multiplicity)
         
         return new{C,G}(lattice_vectors, positions, basis, supercell_dimensions, periodicity, cutoff_radii, components, neighbors, adsorptions)
     end
@@ -366,12 +498,14 @@ function MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
                                     cutoff_radii::Vector{Float64}=[1.1, 1.5],
                                     components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
                                     adsorptions::Union{Vector{Int},Symbol}=:full,
+                                    image_multiplicity::Bool=false,
                                 ) where C
 
     lattice_vectors = [lattice_constant 0.0 0.0; 0.0 lattice_constant 0.0; 0.0 0.0 1.0]
     lattice_comp, lattice_adsorptions = mlattice_setup(C, basis, supercell_dimensions, components, adsorptions)
 
-    return MLattice{C,SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, cutoff_radii, lattice_comp, lattice_adsorptions)
+    return MLattice{C,SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, cutoff_radii, lattice_comp, lattice_adsorptions;
+                                     image_multiplicity=image_multiplicity)
 end
 
 function MLattice{C,TriangularLattice}(; lattice_constant::Float64=1.0,
@@ -383,13 +517,15 @@ function MLattice{C,TriangularLattice}(; lattice_constant::Float64=1.0,
                                         cutoff_radii::Vector{Float64}=[1.1, 1.8],
                                         components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
                                         adsorptions::Union{Vector{Int},Symbol}=:full,
+                                        image_multiplicity::Bool=false,
                                     ) where C
 
     lattice_vectors = [lattice_constant 0.0 0.0; 0.0 sqrt(3)*lattice_constant 0.0; 0.0 0.0 1.0]
     lattice_comp, lattice_adsorptions = mlattice_setup(C, basis, supercell_dimensions, components, adsorptions)
 
-    return MLattice{C,TriangularLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, cutoff_radii, lattice_comp, lattice_adsorptions)
-    
+    return MLattice{C,TriangularLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, cutoff_radii, lattice_comp, lattice_adsorptions;
+                                         image_multiplicity=image_multiplicity)
+
 end
 
 

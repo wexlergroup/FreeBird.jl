@@ -416,7 +416,7 @@
     @testset "multi-shell pair couplings (shell-count validation, sign-mixed sets)" begin
         using Random
 
-        function shell_lattice(L, cutoffs)
+        function shell_lattice(L, cutoffs; image_multiplicity::Bool=false)
             MLattice{1,SquareLattice}(
                 lattice_constant=1.0,
                 basis=[(0.0, 0.0, 0.0)],
@@ -424,7 +424,8 @@
                 periodicity=(true, true, false),
                 cutoff_radii=cutoffs,
                 components=[[false for _ in 1:L*L]],
-                adsorptions=:full)
+                adsorptions=:full,
+                image_multiplicity=image_multiplicity)
         end
 
         # Square-lattice shells at distances 1, √2, 2, √5, 2√2, 3, √10, √13, 4
@@ -571,6 +572,105 @@
             @test nrow(df) > 0
             # Live-set energies match direct recomputation up to the
             # tie-breaking perturbation
+            for w in final_ls.walkers
+                @test isapprox(w.energy.val,
+                               interacting_energy(w.configuration, ham).val;
+                               atol=1e-8)
+            end
+        end
+
+        # ------------------------------------------------------------
+        @testset "image multiplicity: faithful cells unchanged" begin
+            # On cells faithful for every shell (circumference > 2 x outermost
+            # cutoff) the two conventions must agree element-for-element, and
+            # neither construction may warn
+            for (L, cutoffs) in ((4, [1.1, 1.5]), (8, cut4), (16, cut9))
+                lat_def = @test_logs min_level = Base.CoreLogging.Warn shell_lattice(L, cutoffs)
+                lat_mult = @test_logs min_level = Base.CoreLogging.Warn shell_lattice(
+                    L, cutoffs; image_multiplicity=true)
+                @test lat_mult.neighbors == lat_def.neighbors
+            end
+        end
+
+        # ------------------------------------------------------------
+        @testset "image multiplicity: closed-form energies on wrapped cells" begin
+            # 4x4 with a unit third-shell coupling: the third shell (distance
+            # 2 = L/2) is halved under the minimum-image convention (16 eV),
+            # while multiplicity recovers the bulk-tiled 32 eV
+            ham3 = GenericLatticeHamiltonian(0.0, [0.0, 0.0, 1.0], u"eV")
+            sq_def = @test_logs (:warn, r"wrap the periodic cell") match_mode = :any shell_lattice(
+                4, [1.1, 1.5, 2.1])
+            sq_def.components[1] .= true
+            @test all(length.(sq_def.neighbors[i]) == [4, 4, 2] for i in 1:16)
+            @test interacting_energy(sq_def, ham3).val ≈ 16.0 atol = 1e-10
+            sq_mult = @test_logs min_level = Base.CoreLogging.Warn shell_lattice(
+                4, [1.1, 1.5, 2.1]; image_multiplicity=true)
+            sq_mult.components[1] .= true
+            @test all(length.(sq_mult.neighbors[i]) == [4, 4, 4] for i in 1:16)
+            @test interacting_energy(sq_mult, ham3).val ≈ 32.0 atol = 1e-10
+
+            # Shipped triangular (4, 2, 1) cell with a unit second-shell
+            # coupling: the 5-bond vs 6-bond per-site closed forms
+            ham2 = GenericLatticeHamiltonian(0.0, [0.0, 1.0], u"eV")
+            tri_def = @test_logs (:warn, r"wrap the periodic cell") match_mode = :any MLattice{1,TriangularLattice}()
+            tri_def.components[1] .= true
+            @test interacting_energy(tri_def, ham2).val ≈ 40.0 atol = 1e-10
+            tri_mult = @test_logs min_level = Base.CoreLogging.Warn MLattice{1,TriangularLattice}(
+                image_multiplicity=true)
+            tri_mult.components[1] .= true
+            @test interacting_energy(tri_mult, ham2).val ≈ 48.0 atol = 1e-10
+
+            # Bulk-tiled chain closed forms, periodicity (true, false, false)
+            chain(d1, cutoffs; kwargs...) = MLattice{1,SquareLattice}(;
+                lattice_constant=1.0,
+                basis=[(0.0, 0.0, 0.0)],
+                supercell_dimensions=(d1, 1, 1),
+                periodicity=(true, false, false),
+                cutoff_radii=cutoffs,
+                components=[[true for _ in 1:d1]],
+                adsorptions=:full,
+                kwargs...)
+
+            # (4,1,1) with a unit second-shell coupling: one wrapped
+            # second-shell bond per site by default, two when tiled
+            hamc = GenericLatticeHamiltonian(0.0, [0.0, 1.0], u"eV")
+            c4_def = @test_logs (:warn, r"wrap the periodic cell") match_mode = :any chain(4, [1.1, 2.1])
+            @test interacting_energy(c4_def, hamc).val ≈ 2.0 atol = 1e-10
+            c4_mult = chain(4, [1.1, 2.1]; image_multiplicity=true)
+            @test interacting_energy(c4_mult, hamc).val ≈ 4.0 atol = 1e-10
+
+            # (2,1,1) with J1 = J2 = 1: multiplicity counts the doubled
+            # nearest-neighbor bond (2 eV, shell 1) plus the self-image bonds
+            # (2 eV, shell 2) — the bulk-tiled chain value; the minimum-image
+            # convention sees a single bond in total
+            hamcc = GenericLatticeHamiltonian(0.0, [1.0, 1.0], u"eV")
+            c2_def = @test_logs (:warn, r"wrap the periodic cell") match_mode = :any chain(2, [1.1, 2.1])
+            @test interacting_energy(c2_def, hamcc).val ≈ 1.0 atol = 1e-10
+            c2_mult = chain(2, [1.1, 2.1]; image_multiplicity=true)
+            @test interacting_energy(c2_mult, hamcc).val ≈ 4.0 atol = 1e-10
+        end
+
+        # ------------------------------------------------------------
+        @testset "multiplicity lattice through GC-NS end-to-end" begin
+            Random.seed!(2081)
+            ham = GenericLatticeHamiltonian(-0.05, [0.292, 0.090, -0.050], u"eV")
+            lat = shell_lattice(4, [1.1, 1.5, 2.1]; image_multiplicity=true)
+            walkers = [LatticeWalker(deepcopy(lat), energy=0.0u"eV", iter=0)
+                       for _ in 1:20]
+            ls = LatticeGasWalkers(walkers, ham; assign_energy=false)
+            params = IdealGasReferencedGCNSParameters(
+                mc_steps=20, reference_fugacity=1.0, energy_perturbation=1e-9)
+            save = SaveEveryN("t_mult.csv", "t_mult.traj", "t_mult.ls",
+                              1000000, 1000000, 1000000)
+            df, final_ls, _ = ideal_gas_referenced_nested_sampling(
+                ls, params, Int64(100),
+                MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3), save)
+            rm.(["t_mult.csv", "t_mult.traj", "t_mult.ls"], force=true)
+
+            @test nrow(df) > 0
+            # Live-set energies stay consistent with direct recomputation on
+            # the duplicated neighbor lists, up to the tie-breaking
+            # perturbation
             for w in final_ls.walkers
                 @test isapprox(w.energy.val,
                                interacting_energy(w.configuration, ham).val;

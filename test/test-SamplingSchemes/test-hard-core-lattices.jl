@@ -308,4 +308,79 @@
         # diagnostic every reweighted grid point must be gated on.
         @test stats.N_eff[4, 1] < stats.N_eff[2, 1]
     end
+
+    # ================================================================
+    @testset "igref route vs exact (hard hexagons, z0 = 1)" begin
+        # The 18-site cell's close-packed states are exactly the three pure
+        # √3×√3 sublattice states: zero energy and maximal order parameter.
+        # A deterministic tie between g_tr's close-packing degeneracy 3 and
+        # the sublattice geometry, independent of the sampled run below.
+        let lat = hc_tri()
+            for c in 0:2
+                lat.components[1] .= [
+                    begin
+                        b = (s - 1) % 2
+                        ci = ((s - 1) ÷ 2) % 3
+                        (b == 0 ? ci % 3 : (ci + 2) % 3) == c
+                    end for s in 1:M_tr]
+                @test interacting_energy(lat, ham_hc) ≈ 0.0u"eV" atol=1e-12u"eV"
+                @test order_parameter_sqrt3(lat) == 1 / 3
+            end
+        end
+
+        # Full-compression depth M·ln(1 + z0) = 18·ln 2 ≈ 12.5 nats at K = 100
+        # wants ≈ 1.15·K·D ≈ 1440 iterations; 1800 adds margin (the square
+        # testset's 1500 at D ≈ 11.1, scaled).
+        Random.seed!(22)
+        K = 100
+        template = hc_tri()
+        template.components[1] .= false
+        walkers = [LatticeWalker(deepcopy(template), energy=0.0u"eV", iter=0)
+                   for _ in 1:K]
+        liveset = LatticeGasWalkers(walkers, ham_hc; assign_energy=false)
+        params = IdealGasReferencedGCNSParameters(
+            mc_steps=100, reference_fugacity=1.0,
+            energy_perturbation=1e-9, allowed_fail_count=100_000)
+        mc_routine = MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3)
+        df, final_ls, _ = ideal_gas_referenced_nested_sampling(
+            liveset, params, Int64(1800), mc_routine, save_strategy)
+        hc_cleanup()
+
+        @test nrow(df) > 0
+        @test issorted(df.emax, rev=true)
+        # The ladder reached the allowed manifold and the live set sits in it
+        @test minimum(df.emax) < J / 2
+        live_E = [w.energy.val for w in final_ls.walkers]
+        live_N = [sum(w.configuration.components[1]) for w in final_ls.walkers]
+        @test all(e -> e < J / 2, live_E)
+
+        # Any close-packed live walker must be one of the three sublattice
+        # states (the only N = 6 members of the allowed manifold). At z0 = 1
+        # their prior weight is 3/418 per walker, so this is usually
+        # vacuously true; the deterministic check above is the real tie.
+        for w in final_ls.walkers
+            sum(w.configuration.components[1]) == 6 || continue
+            @test order_parameter_sqrt3(w.configuration) == 1 / 3
+        end
+
+        T_ath = 150.0
+        zs = [0.7, 1.0, 1.5, 2.0]
+        μs = [kb * T_ath * log(z) for z in zs]
+        stats = gc_thermodynamic_stats_ideal_ref(
+            df, M_tr, 1.0, μs, [T_ath], K;
+            ω0=(K + 1) / K, live_emax=live_E, live_numbers=live_N)
+
+        # Tolerances ≥ 3σ of the evidence noise, sized from three-seed
+        # scatter at this configuration (max observed |ΔlogΞ| 0.37,
+        # |Δ⟨N⟩| 0.24); a dropped (1+z0)^M normalization would shift logΞ
+        # by 18·ln 2 ≈ 12.5 — still cleanly discriminating.
+        for (i, z) in enumerate(zs[1:3])  # z = 2.0 is the N_eff check below
+            ex = exact_hc_stats(g_tr, z)
+            @test isapprox(stats.logXi[i, 1], ex.logXi, atol=0.75)
+            @test isapprox(stats.mean_N[i, 1], ex.mean_N, atol=0.5)
+        end
+
+        # Kish N_eff degrades away from the run's z0
+        @test stats.N_eff[4, 1] < stats.N_eff[2, 1]
+    end
 end

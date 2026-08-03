@@ -176,7 +176,8 @@
     # to the E = 0 manifold; gc_thermodynamic_stats_fixed_N assembles Ξ(z).
     # This is the primary route for athermal models: every z is an exact
     # polynomial evaluation in the per-N evidence (no reweighting window).
-    function fixed_N_hard_core(make, N_max; K, n_iters, mc_steps, seed)
+    function fixed_N_hard_core(make, N_max; K, n_iters, mc_steps, seed,
+                               routine=MCRandomWalkClone())
         Random.seed!(seed)
         dfs = Vector{DataFrame}(undef, N_max + 1)
         live = Vector{Vector{Float64}}(undef, N_max + 1)
@@ -195,7 +196,7 @@
                 energy_perturbation=1e-9,
                 allowed_fail_count=100_000)
             df, final_ls, _ = nested_sampling(
-                liveset, ns_params, n_iters, MCRandomWalkClone(), save_strategy)
+                liveset, ns_params, n_iters, routine, save_strategy)
             dfs[N + 1] = df
             live[N + 1] = [ustrip(u"eV", w.energy) for w in final_ls.walkers]
         end
@@ -257,6 +258,54 @@
                 end
             end
         end
+    end
+
+    # ================================================================
+    # Cluster-move A/B: the triangular geometric cluster move is variance
+    # reduction only, so mixed-move ladders must reproduce the same exact
+    # per-N evidence as the local-move reference above. Unbiasedness is the
+    # assertion; a hard variance comparison over a few seeds would be
+    # F-statistics noise and is deliberately not asserted.
+    @testset "fixed-N route with cluster moves (hard hexagons)" begin
+        K = 60
+        n_iters = 900
+        T_ath = 150.0
+        routine = MCMixedMoves(walks_freq=1, clusters_freq=1)
+        dfs, live = fixed_N_hard_core(hc_tri, 6;
+            K=K, n_iters=n_iters, mc_steps=100, seed=4000, routine=routine)
+
+        # Every mixed-move ladder still descends into the E = 0 manifold
+        for N in 1:6
+            @test issorted(dfs[N + 1].emax, rev=true)
+            @test all(e -> e < J / 2, live[N + 1])
+        end
+
+        stats = gc_thermodynamic_stats_fixed_N(
+            dfs, collect(0:6), M_tr, [0.0] .* u"eV", [T_ath * u"K"];
+            n_walkers=K, n_cull=1, ω0=(K + 1) / K, live_emax=live)
+
+        # Same per-sector tolerance as the local-move reference (≥ 3σ)
+        for N in 0:6
+            @test isapprox(stats.log_Z_N[N + 1, 1], log(g_tr[N + 1]), atol=1.5)
+        end
+
+        # Wiring: the mixed step exercised cluster moves, tuned cluster_p
+        # adaptively, and conserved N through the full NS machinery
+        Random.seed!(4001)
+        walkers = [
+            begin
+                lat = lattice_at(hc_tri, 4)
+                generate_random_new_lattice_sample!(lat)
+                LatticeWalker(lat)
+            end for _ in 1:20]
+        liveset = LatticeGasWalkers(walkers, ham_hc, perturb_energy=1e-9)
+        ns_params = LatticeNestedSamplingParameters(
+            mc_steps=40, energy_perturbation=1e-9, allowed_fail_count=100_000)
+        _, ls_out, params_out = nested_sampling(
+            liveset, ns_params, 200, routine, save_strategy)
+        hc_cleanup()
+        @test !isempty(params_out.cluster_p_history)
+        @test all(sum(w.configuration.components[1]) == 4 for w in ls_out.walkers)
     end
 
     # ================================================================

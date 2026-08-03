@@ -1052,4 +1052,374 @@
             @test isapprox(st_ig.observables[:psi][4, 2], ψ_at(β450), atol=0.05)
         end
     end
+
+    # ================================================================
+    @testset "end-to-end: J1-J2 stripe model (4x4), igref + omega-sorted" begin
+        # First multi-shell, mixed-sign end-to-end on both grand-canonical
+        # routes: J1 = -0.1 eV (attractive first shell) with J2 = +0.1 eV
+        # (repulsive second shell) selects the (2x1) superantiferromagnetic
+        # stripe at half filling [Binder & Landau, PRB 21, 1941 (1980)].
+        # Both shells are image-faithful at L = 4 (diagonal circumference
+        # bound 2*sqrt(2) < 4), so the stock lattice fixture applies.
+        # Statistical NS checks: seed the global RNG (the random_seed field
+        # on the NS parameters is not consumed); the seeds are planted after
+        # the enumeration block, which consumes RNG. Tolerances sized at or
+        # above 3x the maximum three-seed deviation at this configuration
+        # (max observed over the six Kish-gated points: |dlnXi| 0.201,
+        # |dN| 0.218, |dU| 0.0223, |dvarU| 0.00256, |dcovUN| 0.0143 against
+        # the exactly-zero mu = 0 covariance, |dpsi| 0.0137, all gated
+        # N_eff >= 304), sanity-checked against sigma(lnXi) ~ sqrt(D/K)
+        # ~ 0.27 at the full-compression depth D = 16 ln 2. The var_U and
+        # cov_UN atol floors carry the 3x cushion unconditionally (3 x
+        # 0.00256 -> 0.008; 3 x 0.0143 -> 0.045), independent of which grid
+        # point produced the maximum; the rtol terms track the 600 K scale.
+        kb = 8.617333262e-5
+
+        M = 16
+        ham = GenericLatticeHamiltonian(0.0, [-0.1, 0.1], u"eV")
+        lattice_at(N) = begin
+            lat = obs_square_lattice(4, 4)
+            lat.components[1] .= false
+            lat.components[1][1:N] .= true
+            lat
+        end
+        # Independent stripe psi from the occupations: the two axial
+        # period-2 Bragg amplitudes evaluated as (-1)^x / (-1)^y phase
+        # sums, sharing no code with bragg_amplitude
+        xy_of(s) = ((s - 1) % 4, ((s - 1) ÷ 4) % 4)
+        psi_from_occ(occ) = begin
+            zx = sum(occ[s] ? (-1.0)^xy_of(s)[1] : 0.0 for s in eachindex(occ))
+            zy = sum(occ[s] ? (-1.0)^xy_of(s)[2] : 0.0 for s in eachindex(occ))
+            sqrt(zx^2 + zy^2) / length(occ)
+        end
+
+        # Exact per-configuration (E, N, psi) from fixed-N enumeration of
+        # all 2^16 configurations
+        exact_E = Dict{Int,Vector{Float64}}()
+        exact_psi = Dict{Int,Vector{Float64}}()
+        exact_occ = Dict{Int,Vector{Vector{Bool}}}()
+        for N in 0:M
+            df_exact, _ = exact_enumeration(lattice_at(N), ham)
+            exact_E[N] = [ustrip(u"eV", e) for e in df_exact.energy]
+            exact_psi[N] = [psi_from_occ(cfg[1]) for cfg in df_exact.config]
+            exact_occ[N] = [Vector{Bool}(cfg[1]) for cfg in df_exact.config]
+            @test length(exact_E[N]) == binomial(M, N)
+        end
+
+        # Ground-state pins, in units of the 0.1 eV coupling, over the
+        # whole filling range
+        @test [minimum(exact_E[N]) for N in 0:M] ≈
+              0.1 .* [0, 0, -1, -2, -4, -4, -5, -6, -8,
+                      -6, -5, -4, -4, -2, -1, 0, 0] atol = 1e-9
+        # Shell coordinations and couplings cancel, 4*(-0.1) + 4*(+0.1) = 0,
+        # so the model is exactly particle-hole symmetric: the full fixed-N
+        # spectra mirror about N = 8
+        @test all(isapprox(sort(exact_E[N]), sort(exact_E[M - N]); atol=1e-12)
+                  for N in 0:M)
+        # The N = 8 minimum, -0.8 eV, is attained by exactly the four
+        # single-orientation stripe states (two row, two column), each with
+        # full stripe order and no c(2x2) order
+        gs8 = findall(e -> e <= minimum(exact_E[8]) + 1e-9, exact_E[8])
+        @test length(gs8) == 4
+        stripe_states = Set(
+            Vector{Bool}([pred(xy_of(s)...) for s in 1:M])
+            for pred in [(x, y) -> x % 2 == 0, (x, y) -> x % 2 == 1,
+                         (x, y) -> y % 2 == 0, (x, y) -> y % 2 == 1])
+        @test Set(exact_occ[8][i] for i in gs8) == stripe_states
+        for i in gs8
+            lat = lattice_at(0)
+            lat.components[1] .= exact_occ[8][i]
+            @test order_parameter_stripe(lat) ≈ 1 / 2 atol = 1e-12
+            @test order_parameter_c2x2(lat) == 0.0
+        end
+
+        function exact_stats(μ_val, T_val)
+            β = 1.0 / (kb * T_val)
+            lt = Float64[]; Ns = Float64[]; Es = Float64[]; Ps = Float64[]
+            for N in 0:M, i in eachindex(exact_E[N])
+                push!(lt, N * β * μ_val - β * exact_E[N][i])
+                push!(Ns, N); push!(Es, exact_E[N][i]); push!(Ps, exact_psi[N][i])
+            end
+            w = exp.(lt .- maximum(lt)); sw = sum(w)
+            u = sum(w .* Es) / sw; n = sum(w .* Ns) / sw
+            (logXi=maximum(lt) + log(sw), mean_N=n, mean_U=u,
+             var_U=sum(w .* Es .^ 2) / sw - u^2,
+             cov_UN=sum(w .* Es .* Ns) / sw - u * n,
+             psi=sum(w .* Ps) / sw)
+        end
+
+        # ... and the symmetric chemical potential is mu* = 0: from the
+        # exact grand sums, <N> = 8 exactly at mu = 0 at any temperature
+        @test exact_stats(0.0, 300.0).mean_N ≈ 8.0 atol = 1e-9
+        @test exact_stats(0.0, 600.0).mean_N ≈ 8.0 atol = 1e-9
+
+        # The stripe lobe is stable for mu in (-0.1, +0.1) eV; the grid
+        # sits inside it, centered on the symmetric chemical potential
+        μs = [-0.050, 0.000, 0.050]
+        Ts = [300.0, 600.0]
+
+        # ---- igref route with stripe recording ----
+        Random.seed!(4501)
+        z0 = 1.0
+        K_ig = 150
+        n_ig = ceil(Int, 1.15 * K_ig * M * log1p(1 / z0)) + 2 * K_ig
+        walkers = [LatticeWalker(deepcopy(lattice_at(0)), energy=0.0u"eV", iter=0)
+                   for _ in 1:K_ig]
+        ls = LatticeGasWalkers(walkers, ham; assign_energy=false)
+        params = IdealGasReferencedGCNSParameters(
+            mc_steps=100, reference_fugacity=z0, energy_perturbation=1e-9,
+            allowed_fail_count=100_000)
+        df_ig, final_ig, _ = ideal_gas_referenced_nested_sampling(
+            ls, params, Int64(n_ig), MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3),
+            obs_save; observables=[:stripe => (cfg -> order_parameter_stripe(cfg))])
+        obs_cleanup()
+        live_E_ig = [w.energy.val for w in final_ig.walkers]
+        live_N_ig = [sum(w.configuration.components[1]) for w in final_ig.walkers]
+        live_psi_ig = [order_parameter_stripe(w.configuration) for w in final_ig.walkers]
+
+        st_ig = gc_thermodynamic_stats_ideal_ref(df_ig, M, z0, μs, Ts, K_ig;
+            ω0=(K_ig + 1) / K_ig, live_emax=live_E_ig, live_numbers=live_N_ig,
+            observable_cols=[:stripe], live_observables=Dict(:stripe => live_psi_ig))
+
+        # Ledger integrity: 0 <= Psi <= 1/2 row by row
+        @test names(df_ig) == ["iter", "emax", "num_particles", "stripe"]
+        @test all(0.0 .<= df_ig.stripe .<= 1 / 2)
+
+        n_gated = 0
+        for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
+            st_ig.N_eff[i, j] >= 200 || continue
+            n_gated += 1
+            ex = exact_stats(μ, T)
+            @test isapprox(st_ig.logXi[i, j], ex.logXi, atol=0.7)
+            @test isapprox(st_ig.mean_N[i, j], ex.mean_N, atol=0.7)
+            @test isapprox(st_ig.mean_U[i, j], ex.mean_U, atol=0.07)
+            @test isapprox(st_ig.var_U[i, j], ex.var_U, rtol=0.4, atol=0.008)
+            @test isapprox(st_ig.cov_UN[i, j], ex.cov_UN, rtol=0.55, atol=0.045)
+            @test isapprox(st_ig.observables[:stripe][i, j], ex.psi, atol=0.05)
+        end
+        # z0 = 1 centers the reference on the mu grid: all six points gated
+        # at N_eff >= 304 across the calibration seeds (floor 200); one
+        # point of slack retained, per the square end-to-end precedent
+        @test n_gated >= 5
+
+        # ---- omega-sorted route at mu = 0 eV with stripe recording ----
+        Random.seed!(4501)
+        K_gc = 100
+        μ_gc = 0.0
+        walkers_gc = [LatticeWalker(deepcopy(lattice_at(0)), energy=0.0u"eV", iter=0)
+                      for _ in 1:K_gc]
+        ls_gc = LatticeGasWalkers(walkers_gc, ham; assign_energy=false)
+        gc_params = GrandCanonicalNestedSamplingParameters(
+            mc_steps=100, chemical_potential=μ_gc,
+            energy_perturbation=1e-9, init_occupation_p=0.3)
+        df_gc, _, _ = grand_canonical_nested_sampling(
+            ls_gc, gc_params, Int64(3000),
+            MCGrandCanonicalMoves(p_move=0.5, p_insert=0.25), obs_save;
+            observables=[:stripe => (cfg -> order_parameter_stripe(cfg))])
+        obs_cleanup()
+
+        @test names(df_gc) == ["iter", "omega", "energy", "num_particles", "stripe"]
+        @test all(0.0 .<= df_gc.stripe .<= 1 / 2)
+
+        β300 = 1.0 / (kb * 300.0)
+        β600 = 1.0 / (kb * 600.0)
+        mean_E_gc, _, mean_N_gc = gc_thermodynamic_stats(
+            df_gc, [β300, β600], K_gc, μ_gc)
+        ex300 = exact_stats(μ_gc, 300.0)
+        ex600 = exact_stats(μ_gc, 600.0)
+        @test isapprox(mean_E_gc[1], ex300.mean_U, rtol=0.3)
+        @test isapprox(mean_N_gc[1], ex300.mean_N, rtol=0.3)
+        @test isapprox(mean_E_gc[2], ex600.mean_U, rtol=0.3)
+        @test isapprox(mean_N_gc[2], ex600.mean_N, rtol=0.3)
+
+        # Caller-side <psi> from the documented Ω-weight construction (the
+        # legacy stats function carries no observable machinery by design;
+        # this re-records the recipe): w_i ∝ Γ_i·exp(-β·Ω_i)
+        ψ_at(β) = begin
+            w = ωᵢ(df_gc.iter, K_gc) .*
+                exp.(-β .* (df_gc.omega .- minimum(df_gc.omega)))
+            sum(w .* df_gc.stripe) / sum(w)
+        end
+        @test isapprox(ψ_at(β300), ex300.psi, atol=0.025)
+        @test isapprox(ψ_at(β600), ex600.psi, atol=0.03)
+
+        # ---- route consistency at the shared mu = 0 where igref is trusted ----
+        for (j, β) in enumerate([β300, β600])
+            if st_ig.N_eff[2, j] >= 200
+                @test isapprox(st_ig.observables[:stripe][2, j], ψ_at(β), atol=0.05)
+            end
+        end
+    end
+
+    # ================================================================
+    @testset "end-to-end: J1-J3 image-multiplicity model (4x4), igref" begin
+        # First full-stack trip of image-multiplicity neighbor lists through
+        # exact_enumeration, the igref sampler, and the stats layer, on the
+        # nearest-neighbor-attraction plus isotropic third-neighbor-repulsion
+        # model [Landau & Binder, PRB 31, 5946 (1985)]: J1 = -3u and
+        # J3 = +2u with u = 1/30 eV, so every configuration energy is an
+        # integer multiple of u. T = 0 bond count: the axial period-4 double
+        # stripe pays (-3|J1| + 2*J3)/2 per site — three occupied NN entries
+        # at J1/2 each plus two multiplicity-2 third-shell entries at J3/2 —
+        # i.e. -1/12 eV per site, -0.6667 eV total at N = 8, strictly above
+        # -0.8 eV; p(2x2) blocks and diagonal period-4 stripes pay -|J1| per
+        # occupied site (two occupied NN entries) with zero third-shell
+        # cost, winning for J3 > |J1|/2. Enumeration remains the arbiter of
+        # every pinned value below.
+        # Statistical NS checks: seed the global RNG (the random_seed field
+        # on the NS parameters is not consumed); the seed is planted after
+        # the enumeration block, which consumes RNG. Tolerances sized at or
+        # above 3x the maximum three-seed deviation at this configuration
+        # (max observed over the gated points: |dlnXi| 0.520, |dN| 0.335,
+        # |dU| 0.0123, |dpsi| 0.0169, all gated N_eff >= 330); the ladder is
+        # deeper than the J1-J2 one — D = 16 ln(1 + 1/0.075) ~ 42.6 nats,
+        # sigma(lnXi) ~ sqrt(D/K) ~ 0.53 — so the lnXi gate is
+        # proportionally looser (atol 1.6 ~ 3 sigma).
+        kb = 8.617333262e-5
+
+        M = 16
+        uJ = 1 / 30                  # eV; J1 = -3*uJ, J3 = +2*uJ
+        ham = GenericLatticeHamiltonian(0.0, [-0.1, 0.0, 1 / 15], u"eV")
+        j3_lattice() = MLattice{1,SquareLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)],
+            supercell_dimensions=(4, 4, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1, 1.5, 2.1],
+            components=[[false for _ in 1:16]],
+            adsorptions=:full,
+            image_multiplicity=true)
+        lattice_at(N) = begin
+            lat = j3_lattice()
+            lat.components[1] .= false
+            lat.components[1][1:N] .= true
+            lat
+        end
+
+        # Structural pins: per-site shell coordinations exactly [4, 4, 4] —
+        # the third shell reaches 2 distinct partner sites, each through 2
+        # periodic images at L = 4
+        tpl = j3_lattice()
+        @test all(length.(tpl.neighbors[s]) == [4, 4, 4] for s in 1:M)
+        @test all(length(unique(tpl.neighbors[s][3])) == 2 for s in 1:M)
+
+        # Independent diagonal quadrature from the occupations, evaluated
+        # as i^phase class sums, sharing no code with bragg_amplitude
+        xy_of(s) = ((s - 1) % 4, ((s - 1) ÷ 4) % 4)
+        psi_from_occ(occ) = begin
+            zp = sum(occ[s] ? im^mod(xy_of(s)[1] + xy_of(s)[2], 4) : 0.0im
+                     for s in eachindex(occ))
+            zm = sum(occ[s] ? im^mod(xy_of(s)[1] - xy_of(s)[2], 4) : 0.0im
+                     for s in eachindex(occ))
+            sqrt(abs(zp)^2 + abs(zm)^2) / length(occ)
+        end
+        # The recorded observable: the diagonal k = (pi/2, +-pi/2)
+        # quadrature composed caller-side from bragg_amplitude (the hook's
+        # arbitrary-callable contract)
+        diag_quad(cfg) = sqrt(bragg_amplitude(cfg, 1, 1)^2 +
+                              bragg_amplitude(cfg, 1, -1)^2)
+
+        # Exact per-configuration (E, N, psi) from fixed-N enumeration of
+        # all 2^16 configurations, through the multiplicity neighbor lists
+        exact_E = Dict{Int,Vector{Float64}}()
+        exact_psi = Dict{Int,Vector{Float64}}()
+        exact_occ = Dict{Int,Vector{Vector{Bool}}}()
+        for N in 0:M
+            df_exact, _ = exact_enumeration(lattice_at(N), ham)
+            exact_E[N] = [ustrip(u"eV", e) for e in df_exact.energy]
+            exact_psi[N] = [psi_from_occ(cfg[1]) for cfg in df_exact.config]
+            exact_occ[N] = [Vector{Bool}(cfg[1]) for cfg in df_exact.config]
+            @test length(exact_E[N]) == binomial(M, N)
+        end
+
+        # Every configuration energy is an integer multiple of u
+        @test all(all(isapprox(e / uJ, round(e / uJ); atol=1e-9)
+                      for e in exact_E[N]) for N in 0:M)
+        # Ground-state pins, in units of u, over the whole filling range
+        @test [minimum(exact_E[N]) for N in 0:M] ≈
+              uJ .* [0, 0, -3, -6, -12, -12, -15, -18, -24,
+                     -22, -23, -24, -28, -26, -27, -28, -32] atol = 1e-9
+        # The N = 8 minimum, -0.8 eV (-24u), has degeneracy exactly 16 —
+        # the k = (pi/2, +-pi/2) manifold of p(2x2) blocks and diagonal
+        # period-4 stripes; every member carries the full diagonal
+        # quadrature and exactly no axial period-4 stripe order
+        gs8 = findall(e -> e <= minimum(exact_E[8]) + 1e-9, exact_E[8])
+        @test length(gs8) == 16
+        for i in gs8
+            lat = j3_lattice()
+            lat.components[1] .= exact_occ[8][i]
+            @test diag_quad(lat) ≈ sqrt(2) / 4 atol = 1e-12
+            @test order_parameter_stripe(lat, period=4) == 0.0
+            @test psi_from_occ(exact_occ[8][i]) ≈ sqrt(2) / 4 atol = 1e-12
+        end
+
+        # Grand-canonical stability from the E_min(N) convex hull: the
+        # N = 8 phase is stable for mu in (-0.1, -1/30) eV, centered at
+        # -1/15 eV — the igref grid below sits inside the lobe
+        emin = [minimum(exact_E[N]) for N in 0:M]
+        @test maximum((emin[9] - emin[N + 1]) / (8 - N) for N in 0:7) ≈
+              -0.1 atol = 1e-9
+        @test minimum((emin[N + 1] - emin[9]) / (N - 8) for N in 9:16) ≈
+              -1 / 30 atol = 1e-9
+
+        function exact_stats(μ_val, T_val)
+            β = 1.0 / (kb * T_val)
+            lt = Float64[]; Ns = Float64[]; Es = Float64[]; Ps = Float64[]
+            for N in 0:M, i in eachindex(exact_E[N])
+                push!(lt, N * β * μ_val - β * exact_E[N][i])
+                push!(Ns, N); push!(Es, exact_E[N][i]); push!(Ps, exact_psi[N][i])
+            end
+            w = exp.(lt .- maximum(lt)); sw = sum(w)
+            u = sum(w .* Es) / sw; n = sum(w .* Ns) / sw
+            (logXi=maximum(lt) + log(sw), mean_N=n, mean_U=u,
+             psi=sum(w .* Ps) / sw)
+        end
+
+        μs = [-0.08, -1 / 15, -0.05]
+        Ts = [300.0]
+
+        # ---- igref route with the composed :psi_diag recording ----
+        Random.seed!(4601)
+        z0 = 0.075                   # ln z0 ~ beta*mu at the lobe center at 300 K
+        K_ig = 150
+        n_ig = ceil(Int, 1.15 * K_ig * M * log1p(1 / z0)) + 2 * K_ig
+        walkers = [LatticeWalker(deepcopy(lattice_at(0)), energy=0.0u"eV", iter=0)
+                   for _ in 1:K_ig]
+        ls = LatticeGasWalkers(walkers, ham; assign_energy=false)
+        params = IdealGasReferencedGCNSParameters(
+            mc_steps=100, reference_fugacity=z0, energy_perturbation=1e-9,
+            allowed_fail_count=100_000)
+        df_ig, final_ig, _ = ideal_gas_referenced_nested_sampling(
+            ls, params, Int64(n_ig), MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3),
+            obs_save; observables=[:psi_diag => diag_quad])
+        obs_cleanup()
+        live_E_ig = [w.energy.val for w in final_ig.walkers]
+        live_N_ig = [sum(w.configuration.components[1]) for w in final_ig.walkers]
+        live_psi_ig = [diag_quad(w.configuration) for w in final_ig.walkers]
+
+        st_ig = gc_thermodynamic_stats_ideal_ref(df_ig, M, z0, μs, Ts, K_ig;
+            ω0=(K_ig + 1) / K_ig, live_emax=live_E_ig, live_numbers=live_N_ig,
+            observable_cols=[:psi_diag],
+            live_observables=Dict(:psi_diag => live_psi_ig))
+
+        # Ledger integrity: the class-count bound (n0 - n2)^2 + (n1 - n3)^2
+        # <= 32 per quadrature component caps the diagonal quadrature at 1/2
+        @test names(df_ig) == ["iter", "emax", "num_particles", "psi_diag"]
+        @test all(0.0 .<= df_ig.psi_diag .<= 1 / 2 + 1e-12)
+
+        n_gated = 0
+        for (i, μ) in enumerate(μs)
+            st_ig.N_eff[i, 1] >= 200 || continue
+            n_gated += 1
+            ex = exact_stats(μ, 300.0)
+            @test isapprox(st_ig.logXi[i, 1], ex.logXi, atol=1.6)
+            @test isapprox(st_ig.mean_N[i, 1], ex.mean_N, atol=1.1)
+            @test isapprox(st_ig.mean_U[i, 1], ex.mean_U, atol=0.04)
+            @test isapprox(st_ig.observables[:psi_diag][i, 1], ex.psi, atol=0.06)
+        end
+        # ln z0 matched to the lobe center: all three points gated at
+        # N_eff >= 330 across the calibration seeds (floor 200); one point
+        # of slack retained, per the square end-to-end precedent
+        @test n_gated >= 2
+    end
 end

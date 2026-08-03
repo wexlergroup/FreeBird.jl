@@ -214,9 +214,10 @@ MLattice{C,G}(
     basis::Vector{Tuple{Float64, Float64, Float64}},
     supercell_dimensions::Tuple{Int64, Int64, Int64},
     periodicity::Tuple{Bool, Bool, Bool},
-    components::Vector{Vector{Bool}},
-    adsorptions::Vector{Bool},
     cutoff_radii::Vector{Float64},
+    components::Vector{Vector{Bool}},
+    adsorptions::Vector{Bool};
+    image_multiplicity::Bool=false,
 ) where {C,G}
 ```
 The `C` parameter is the number of components in the system, and the `G` parameter defines the geometry of the lattice.
@@ -239,7 +240,8 @@ MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
     periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
     cutoff_radii::Vector{Float64}=[1.1, 1.5],
     components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
-    adsorptions::Union{Vector{Int},Symbol}=:full)
+    adsorptions::Union{Vector{Int},Symbol}=:full,
+    image_multiplicity::Bool=false)
 ```
 
 You may notice that the code above returns a `SLattice` type.

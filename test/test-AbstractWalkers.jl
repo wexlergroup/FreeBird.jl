@@ -277,7 +277,13 @@
                 periodicity = (true, true, true)
                 cutoff_radii = [1.1, 1.5, 1.8]
 
-                neighbors = AbstractWalkers.compute_neighbors(lattice_vectors, positions, periodicity, cutoff_radii)
+                # Every cutoff exceeds half the cell edge on this one-cell
+                # torus, so pairs are connected through several images: the
+                # pinned per-site counts below are the documented
+                # minimum-image convention, and the collapsed-image warning
+                # fires
+                neighbors = @test_logs (:warn, r"wrap the periodic cell") match_mode=:any AbstractWalkers.compute_neighbors(
+                    lattice_vectors, positions, periodicity, cutoff_radii)
                 
                 for i in 1:5
                     if i == 1
@@ -294,6 +300,103 @@
                         @test length(neighbors[i][3]) == 0
                     end
                 end
+            end
+        end
+
+
+        @testset "image multiplicity and cutoff_radii validation" begin
+
+            # Full-occupancy single-component square builder
+            sq_lattice(dims, per, cutoffs; kwargs...) = MLattice{1,SquareLattice}(;
+                lattice_constant=1.0,
+                basis=[(0.0, 0.0, 0.0)],
+                supercell_dimensions=dims,
+                periodicity=per,
+                cutoff_radii=cutoffs,
+                components=[[true for _ in 1:prod(dims)]],
+                adsorptions=:full,
+                kwargs...)
+
+            @testset "wrapped 4x4 three-shell coordination pins" begin
+                # The third shell (distance 2 = L/2) wraps: the +2 and -2
+                # images of the same site collapse to one entry under the
+                # minimum-image convention ...
+                lat_def = @test_logs (:warn, r"wrap the periodic cell") match_mode=:any sq_lattice(
+                    (4, 4, 1), (true, true, false), [1.1, 1.5, 2.1])
+                @test all(length.(lat_def.neighbors[i]) == [4, 4, 2] for i in 1:16)
+                # ... while multiplicity restores the bulk-tiled coordination,
+                # with no warning
+                lat_mult = @test_logs min_level=Base.CoreLogging.Warn sq_lattice(
+                    (4, 4, 1), (true, true, false), [1.1, 1.5, 2.1], image_multiplicity=true)
+                @test all(length.(lat_mult.neighbors[i]) == [4, 4, 4] for i in 1:16)
+                # Element-pinned lists for the corner site: entries ascending
+                # in j, multiplicity entries grouped by j
+                @test lat_def.neighbors[1] == [[2, 4, 5, 13], [6, 8, 14, 16], [3, 9]]
+                @test lat_mult.neighbors[1] == [[2, 4, 5, 13], [6, 8, 14, 16], [3, 3, 9, 9]]
+            end
+
+            @testset "L = 2r degeneracy and warning content: triangular (4, 2, 1)" begin
+                # The a2 circumference 2√3 equals exactly twice the
+                # second-neighbor distance √3, so the degenerate image
+                # distances are bit-identical — no tolerance involved — and
+                # the warning names the wrapped shell with its exact
+                # collapsed-image count
+                warnpat = r"neighbor shell\(s\) \[2 \(cutoff 1\.8\): 16 collapsed image bond\(s\)\] wrap the periodic cell"
+                lat_def = @test_logs (:warn, warnpat) match_mode=:any MLattice{1,TriangularLattice}()
+                M = length(lat_def.components[1])
+                @test M == 16
+                @test all(length(lat_def.neighbors[i][1]) == 6 for i in 1:M)
+                @test all(length(lat_def.neighbors[i][2]) == 5 for i in 1:M)
+
+                lat_mult = @test_logs min_level=Base.CoreLogging.Warn MLattice{1,TriangularLattice}(
+                    image_multiplicity=true)
+                @test all(length(lat_mult.neighbors[i][1]) == 6 for i in 1:M)
+                @test all(length(lat_mult.neighbors[i][2]) == 6 for i in 1:M)
+                # Exactly one second-shell neighbor per site — the a2-wrapped
+                # one — is doubled
+                @test all(length(unique(lat_mult.neighbors[i][2])) == 5 for i in 1:M)
+                # The faithful first shell agrees between the conventions
+                @test all(lat_mult.neighbors[i][1] == lat_def.neighbors[i][1] for i in 1:M)
+            end
+
+            @testset "1D chains, periodicity (true, false, false)" begin
+                # (4,1,1): the second shell (distance 2 = L/2) wraps
+                ch_def = @test_logs (:warn, r"wrap the periodic cell") match_mode=:any sq_lattice(
+                    (4, 1, 1), (true, false, false), [1.1, 2.1])
+                @test [n[1] for n in ch_def.neighbors] == [[2, 4], [1, 3], [2, 4], [1, 3]]
+                @test [n[2] for n in ch_def.neighbors] == [[3], [4], [1], [2]]
+                ch_mult = @test_logs min_level=Base.CoreLogging.Warn sq_lattice(
+                    (4, 1, 1), (true, false, false), [1.1, 2.1], image_multiplicity=true)
+                @test [n[1] for n in ch_mult.neighbors] == [[2, 4], [1, 3], [2, 4], [1, 3]]
+                @test [n[2] for n in ch_mult.neighbors] == [[3, 3], [4, 4], [1, 1], [2, 2]]
+
+                # (2,1,1): first-shell multiplicity 2 through the ±1 images of
+                # the other site, plus two second-shell self-image entries
+                # (j == i) through the ±2 self-images
+                ch2_def = @test_logs (:warn, r"wrap the periodic cell") match_mode=:any sq_lattice(
+                    (2, 1, 1), (true, false, false), [1.1, 2.1])
+                @test ch2_def.neighbors == [[[2], Int[]], [[1], Int[]]]
+                ch2_mult = @test_logs min_level=Base.CoreLogging.Warn sq_lattice(
+                    (2, 1, 1), (true, false, false), [1.1, 2.1], image_multiplicity=true)
+                @test ch2_mult.neighbors == [[[2, 2], [1, 1]], [[1, 1], [2, 2]]]
+            end
+
+            @testset "ArgumentError on invalid cutoff_radii ladders" begin
+                lv = [4.0 0.0 0.0; 0.0 4.0 0.0; 0.0 0.0 1.0]
+                pos = [0.0 0.0 0.0; 1.0 0.0 0.0]
+                per = (true, true, false)
+                for bad in ([1.5, 1.1], [1.1, 1.1], [-1.0], Float64[], [Inf], [1.1, Inf], [NaN])
+                    @test_throws ArgumentError AbstractWalkers.compute_neighbors(lv, pos, per, bad)
+                end
+                err = try
+                    AbstractWalkers.compute_neighbors(lv, pos, per, [1.5, 1.1])
+                catch e
+                    e
+                end
+                @test occursin("nested cutoff ladder", err.msg)
+                # ... and the validation is reached through the constructors
+                @test_throws ArgumentError MLattice{1,SquareLattice}(cutoff_radii=[1.5, 1.1])
+                @test_throws ArgumentError MLattice{1,TriangularLattice}(cutoff_radii=Float64[])
             end
         end
 

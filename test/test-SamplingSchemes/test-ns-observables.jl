@@ -240,6 +240,149 @@
         @test names(df2) == ["iter", "emax"]
     end
 
+    # ================================================================
+    @testset "bragg_amplitude and order_parameter_stripe" begin
+        lat = obs_square_lattice(4, 4)
+        # Occupation from a predicate on the integer coordinates; site
+        # ordering: dimension 1 fastest, so x = (s-1) % d1, y = (s-1) ÷ d1
+        function fill_xy!(l, pred)
+            d1, d2 = l.supercell_dimensions[1], l.supercell_dimensions[2]
+            l.components[1] .= [pred((s - 1) % d1, ((s - 1) ÷ d1) % d2)
+                                for s in 1:d1*d2]
+            l
+        end
+
+        # k = (π, π) is order_parameter_c2x2: the two code paths agree on
+        # random occupations, and indices wrap modulo the dimensions
+        Random.seed!(1234)
+        for _ in 1:20
+            lat.components[1] .= rand(Bool, 16)
+            @test bragg_amplitude(lat, 2, 2) == order_parameter_c2x2(lat)
+            @test bragg_amplitude(lat, 1, 3) == bragg_amplitude(lat, 5, 3)
+            @test bragg_amplitude(lat, 1, 3) == bragg_amplitude(lat, -3, 3)
+        end
+
+        # Perfect (2x1) stripes, both orientations, both phases: 1/2, with
+        # order_parameter_c2x2 blind to all four (the :49 anti-case, from
+        # the other side); the perfect checkerboard is the converse
+        for pred in [(x, y) -> x % 2 == 0, (x, y) -> x % 2 == 1,
+                     (x, y) -> y % 2 == 0, (x, y) -> y % 2 == 1]
+            fill_xy!(lat, pred)
+            @test order_parameter_stripe(lat) ≈ 1 / 2 atol = 1e-12
+            @test order_parameter_c2x2(lat) == 0.0
+        end
+        fill_xy!(lat, (x, y) -> iseven(x + y))
+        @test order_parameter_stripe(lat) == 0.0
+
+        # Period-4 axial double stripes, both orientations, all four phases,
+        # on 4x4 and 8x8: sqrt(2)/4 at the stripe harmonic, exactly 0 at the
+        # period-2 harmonic (wrong-harmonic blindness)
+        for (d1, d2) in [(4, 4), (8, 8)]
+            latp = obs_square_lattice(d1, d2)
+            for p in 0:3, pred in [(x, y) -> mod(x - p, 4) < 2,
+                                   (x, y) -> mod(y - p, 4) < 2]
+                fill_xy!(latp, pred)
+                @test order_parameter_stripe(latp, period=4) ≈ sqrt(2) / 4 atol = 1e-12
+                @test order_parameter_stripe(latp, period=2) == 0.0
+            end
+        end
+
+        # Block and diagonal period-4 states: the axial stripe order
+        # parameter is exactly 0 while the documented diagonal quadrature
+        # resolves the k = (π/2, ±π/2) manifold at sqrt(2)/4
+        diag_quad(cfg) = sqrt(bragg_amplitude(cfg, 1, 1)^2 +
+                              bragg_amplitude(cfg, 1, -1)^2)
+        fill_xy!(lat, (x, y) -> x ÷ 2 == y ÷ 2)
+        @test order_parameter_stripe(lat, period=4) == 0.0
+        @test bragg_amplitude(lat, 1, 1) ≈ 1 / 4 atol = 1e-12
+        @test bragg_amplitude(lat, 1, -1) ≈ 1 / 4 atol = 1e-12
+        @test diag_quad(lat) ≈ sqrt(2) / 4 atol = 1e-12
+        fill_xy!(lat, (x, y) -> mod(x + y, 4) < 2)
+        @test order_parameter_stripe(lat, period=4) == 0.0
+        @test bragg_amplitude(lat, 1, 1) ≈ sqrt(2) / 4 atol = 1e-12
+        @test bragg_amplitude(lat, 1, -1) == 0.0
+        @test diag_quad(lat) ≈ sqrt(2) / 4 atol = 1e-12
+
+        # Empty and full lattices scatter nothing off the (0, 0) rod
+        lat.components[1] .= false
+        @test bragg_amplitude(lat, 1, 0) == 0.0
+        @test order_parameter_stripe(lat) == 0.0
+        lat.components[1] .= true
+        for (m, n) in [(1, 0), (0, 1), (2, 2), (3, 1)]
+            @test bragg_amplitude(lat, m, n) == 0.0
+        end
+        @test order_parameter_stripe(lat) == 0.0
+        @test order_parameter_stripe(lat, period=4) == 0.0
+
+        # Single particle: 1/M at any k, sqrt(2)/M in quadrature
+        lat.components[1] .= false
+        lat.components[1][1] = true
+        @test bragg_amplitude(lat, 1, 0) == 1 / 16
+        @test bragg_amplitude(lat, 2, 3) == 1 / 16
+        @test order_parameter_stripe(lat) ≈ sqrt(2) / 16 atol = 1e-12
+
+        # Two-site basis
+        lat2b = MLattice{1,SquareLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0), (0.5, 0.5, 0.0)],
+            supercell_dimensions=(4, 4, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[0.8],
+            components=[[false for _ in 1:32]],
+            adsorptions=:full)
+        @test_throws ArgumentError bragg_amplitude(lat2b, 1, 0)
+        @test_throws ArgumentError order_parameter_stripe(lat2b)
+
+        # Three-dimensional supercell
+        lat3d = MLattice{1,SquareLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)],
+            supercell_dimensions=(4, 4, 2),
+            periodicity=(true, true, true),
+            cutoff_radii=[1.1, 1.5],
+            components=[[false for _ in 1:32]],
+            adsorptions=:full)
+        @test_throws ArgumentError bragg_amplitude(lat3d, 1, 0)
+        @test_throws ArgumentError order_parameter_stripe(lat3d)
+
+        # Incommensurate and degenerate periods
+        @test_throws ArgumentError order_parameter_stripe(
+            obs_square_lattice(4, 4), period=3)
+        @test_throws ArgumentError order_parameter_stripe(
+            obs_square_lattice(6, 4), period=4)
+        @test_throws ArgumentError order_parameter_stripe(
+            obs_square_lattice(4, 4), period=1)
+        @test_throws ArgumentError order_parameter_stripe(
+            obs_square_lattice(4, 4), period=0)
+
+        # A short seeded canonical NS run records the stripe Binder moments
+        # through the moment-callback pattern from the docstring
+        Random.seed!(23)
+        walkers = [LatticeWalker(deepcopy(obs_square_lattice(4, 4)),
+                                 energy=0.0u"eV", iter=0) for _ in 1:20]
+        # Fixed-N ladder at N = 6: place 6 particles per walker
+        for w in walkers
+            occ = vcat(fill(true, 6), fill(false, 10))
+            shuffle!(occ)
+            w.configuration.components[1] .= occ
+        end
+        ls = LatticeGasWalkers(walkers, obs_ham; perturb_energy=1e-9)
+        params = LatticeNestedSamplingParameters(mc_steps=30,
+            energy_perturbation=1e-9, allowed_fail_count=100000)
+
+        df, _, _ = nested_sampling(ls, params, Int64(200),
+            MCRandomWalkClone(), obs_save;
+            observables=[:stripe => order_parameter_stripe,
+                         :stripe2 => (cfg -> order_parameter_stripe(cfg)^2),
+                         :stripe4 => (cfg -> order_parameter_stripe(cfg)^4)])
+        obs_cleanup()
+
+        @test names(df) == ["iter", "emax", "stripe", "stripe2", "stripe4"]
+        @test all(0.0 .<= df.stripe .<= 1 / 2)
+        @test all(isapprox.(df.stripe2, df.stripe .^ 2; rtol=1e-12))
+        @test all(isapprox.(df.stripe4, df.stripe .^ 4; rtol=1e-12))
+    end
+
     @testset "observable hook: validation" begin
         lat = obs_square_lattice(4, 4)
         walkers = [LatticeWalker(deepcopy(lat), energy=0.0u"eV", iter=0) for _ in 1:8]

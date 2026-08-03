@@ -47,7 +47,8 @@ function geometric_cluster_swap!(lattice::MLattice{C,SquareLattice}, p::Float64)
     seed = rand(1:n_sites)
 
     # Build cluster via BFS with fixed growth probability
-    cluster = _build_geometric_cluster(lattice, seed, pivot_gx, pivot_gy, Lx, Ly, Lz, p)
+    reflect = s -> _reflect_site(s, pivot_gx, pivot_gy, Lx, Ly, Lz)
+    cluster = _build_geometric_cluster(lattice, seed, reflect, p)
 
     # Swap occupation states for each (site, reflected_site) pair
     for (a, b) in cluster
@@ -103,16 +104,17 @@ is preserved (no reflection in the non-periodic z direction).
 end
 
 """
-    _build_geometric_cluster(lattice, seed, pivot_gx, pivot_gy, Lx, Ly, Lz, p) -> Vector{Tuple{Int,Int}}
+    _build_geometric_cluster(lattice, seed, reflect, p) -> Vector{Tuple{Int,Int}}
 
-Grow a geometric cluster from `seed` using BFS with fixed growth probability `p`.
+Grow a geometric cluster from `seed` using BFS with fixed growth probability `p`,
+pairing each visited site with its image under the `reflect` closure (a
+self-inverse site-index map supplied by the geometry-specific caller).
 Returns a vector of (site, reflected_site) pairs.
 """
-function _build_geometric_cluster(lattice::MLattice{C,SquareLattice},
+function _build_geometric_cluster(lattice::MLattice,
                                   seed::Int,
-                                  pivot_gx::Int, pivot_gy::Int,
-                                  Lx::Int, Ly::Int, Lz::Int,
-                                  p::Float64) where C
+                                  reflect::F,
+                                  p::Float64) where {F}
     visited = Set{Int}()
     stack = Int[seed]
     cluster = Tuple{Int,Int}[]
@@ -123,7 +125,7 @@ function _build_geometric_cluster(lattice::MLattice{C,SquareLattice},
         s in visited && continue
 
         push!(visited, s)
-        r = _reflect_site(s, pivot_gx, pivot_gy, Lx, Ly, Lz)
+        r = reflect(s)
         push!(visited, r)
         push!(cluster, (s, r))
 
@@ -136,4 +138,124 @@ function _build_geometric_cluster(lattice::MLattice{C,SquareLattice},
     end
 
     return cluster
+end
+
+# --- Triangular lattice (two-site centered-rectangular basis) ---
+
+"""
+    _tri_site_to_halfgrid(site::Int, nx::Int) -> Tuple{Int,Int}
+
+Half-grid coordinates (hx, hy) = (2·ci + b, 2·cj + b) of a site on the
+two-site-basis triangular lattice, in units of a/2 and √3·a/2, where
+b = basis index and (ci, cj) the 0-indexed cell. Under the standard site
+ordering (basis innermost, dimension 1 next), the site set is exactly
+{(hx, hy) : hx ≡ hy (mod 2)} on the (2·nx, 2·ny) torus — the
+centered-rectangular condition.
+"""
+@inline function _tri_site_to_halfgrid(site::Int, nx::Int)
+    s = site - 1
+    b = s % 2
+    cell = s ÷ 2
+    ci = cell % nx
+    cj = cell ÷ nx
+    return (2 * ci + b, 2 * cj + b)
+end
+
+"""
+    _tri_halfgrid_to_site(hx::Int, hy::Int, nx::Int) -> Int
+
+Inverse of [`_tri_site_to_halfgrid`](@ref) for in-range half-grid
+coordinates with hx ≡ hy (mod 2).
+"""
+@inline function _tri_halfgrid_to_site(hx::Int, hy::Int, nx::Int)
+    b = hx & 1
+    ci = (hx - b) >> 1
+    cj = (hy - b) >> 1
+    return b + 2 * (ci + nx * cj) + 1
+end
+
+"""
+    _tri_reflect_site(site::Int, hpx::Int, hpy::Int, nx::Int, ny::Int) -> Int
+
+Point inversion of `site` through the pivot whose doubled half-grid
+position is (hpx, hpy) = h(s₁) + h(s₂) for two pivot sites s₁, s₂, with
+periodic wrapping: σ(h) = (hpx, hpy) − h mod (2·nx, 2·ny). Both pivot
+sites satisfy hx ≡ hy (mod 2), so hpx ≡ hpy (mod 2) and σ preserves the
+parity difference — the reflected point is always a site. Site pivots
+(s₁ = s₂, hpx even) preserve each site's basis index; midpoint pivots
+with hpx odd exchange the two basis sublattices. σ is an involution:
+σ(σ(h)) = h.
+"""
+@inline function _tri_reflect_site(site::Int, hpx::Int, hpy::Int, nx::Int, ny::Int)
+    hx, hy = _tri_site_to_halfgrid(site, nx)
+    rx = mod(hpx - hx, 2 * nx)
+    ry = mod(hpy - hy, 2 * ny)
+    return _tri_halfgrid_to_site(rx, ry, nx)
+end
+
+"""
+    geometric_cluster_swap!(lattice::MLattice{C,TriangularLattice}, p::Float64) where C
+
+Geometric cluster move on the two-site-basis triangular lattice by point
+inversion through a random centrosymmetry center.
+
+The pivot is the midpoint of two random sites drawn with replacement,
+which covers exactly the two families of inversion centers of the
+triangular lattice (sites and half-lattice midpoints) and can never
+produce an invalid pivot: plaquette centers, whose doubled position is
+not a lattice vector, are unreachable by construction. The reflection
+runs in integer half-grid coordinates ((hx, hy) = (2·ci + b, 2·cj + b) on
+the (2·nx, 2·ny) torus), so no floating-point rounding or lookup table is
+involved. Cluster growth and the pair swap are shared with the square
+method via [`_build_geometric_cluster`](@ref).
+
+Detailed balance holds exactly as in the square case: the reflection is
+an involution on site indices, cluster growth is
+configuration-independent, and the swap is symmetric, so the proposal
+needs no Metropolis correction and nested sampling keeps its bare
+energy-ceiling accept test (Heringa & Blöte, Phys. Rev. E 57, 4976
+(1998)).
+
+Requires the two-site basis and a strictly two-dimensional supercell
+(`supercell_dimensions[3] == 1`); violations throw an `ArgumentError`.
+"""
+function geometric_cluster_swap!(lattice::MLattice{C,TriangularLattice}, p::Float64) where C
+    if length(lattice.basis) != 2
+        throw(ArgumentError("geometric_cluster_swap! on a triangular lattice " *
+            "requires the two-site centered-rectangular basis, got " *
+            "$(length(lattice.basis)) basis sites"))
+    end
+    nx, ny, nz = lattice.supercell_dimensions
+    if nz != 1
+        throw(ArgumentError("geometric_cluster_swap! on a triangular lattice " *
+            "requires a two-dimensional supercell " *
+            "(supercell_dimensions[3] == 1), got $nz layers"))
+    end
+    n_sites = num_sites(lattice)
+
+    # Pivot: midpoint of two random sites (with replacement); keep its
+    # doubled half-grid position so all arithmetic stays integer
+    h1 = _tri_site_to_halfgrid(rand(1:n_sites), nx)
+    h2 = _tri_site_to_halfgrid(rand(1:n_sites), nx)
+    hpx = h1[1] + h2[1]
+    hpy = h1[2] + h2[2]
+
+    # Choose random seed site (1-indexed)
+    seed = rand(1:n_sites)
+
+    # Build cluster via BFS with fixed growth probability
+    reflect = s -> _tri_reflect_site(s, hpx, hpy, nx, ny)
+    cluster = _build_geometric_cluster(lattice, seed, reflect, p)
+
+    # Swap occupation states for each (site, reflected_site) pair
+    for (a, b) in cluster
+        if a != b
+            for comp in 1:C
+                lattice.components[comp][a], lattice.components[comp][b] =
+                    lattice.components[comp][b], lattice.components[comp][a]
+            end
+        end
+    end
+
+    return lattice
 end

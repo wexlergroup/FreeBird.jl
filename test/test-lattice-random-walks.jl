@@ -228,5 +228,178 @@
             @test changed
         end
 
+        # ---- triangular lattice (two-site centered-rectangular basis) ----
+
+        @testset "triangular reflection: half-grid round-trip" begin
+            for (nx, ny) in ((3, 3), (6, 4))
+                M = 2 * nx * ny
+                for s in 1:M
+                    hx, hy = MonteCarloMoves._tri_site_to_halfgrid(s, nx)
+                    # The centered-rectangular condition: hx ≡ hy (mod 2)
+                    @test (hx & 1) == (hy & 1)
+                    @test 0 <= hx < 2 * nx
+                    @test 0 <= hy < 2 * ny
+                    @test MonteCarloMoves._tri_halfgrid_to_site(hx, hy, nx) == s
+                end
+            end
+        end
+
+        @testset "triangular reflection: involution and bijection" begin
+            using Random
+            Random.seed!(5)
+            for (nx, ny) in ((3, 3), (6, 4))
+                M = 2 * nx * ny
+                for _ in 1:25
+                    h1 = MonteCarloMoves._tri_site_to_halfgrid(rand(1:M), nx)
+                    h2 = MonteCarloMoves._tri_site_to_halfgrid(rand(1:M), nx)
+                    hpx, hpy = h1[1] + h2[1], h1[2] + h2[2]
+                    σ = [MonteCarloMoves._tri_reflect_site(s, hpx, hpy, nx, ny)
+                         for s in 1:M]
+                    @test sort(σ) == collect(1:M)          # bijection on sites
+                    @test all(σ[σ[s]] == s for s in 1:M)   # involution
+                end
+            end
+        end
+
+        @testset "triangular reflection is a lattice symmetry" begin
+            # Geometric check against the stored positions, independent of
+            # the half-grid index arithmetic: 2·pivot − r(s) − r(σ(s)) must
+            # be a supercell lattice vector (periods Ax = nx·a, Ay = ny·√3·a)
+            using Random
+            Random.seed!(6)
+            for (nx, ny) in ((3, 3), (6, 4))
+                lat = MLattice{1,TriangularLattice}(
+                    supercell_dimensions=(nx, ny, 1),
+                    cutoff_radii=[1.1],
+                    components=[[1]],
+                    adsorptions=:full)
+                M = 2 * nx * ny
+                Ax = nx * 1.0
+                Ay = ny * sqrt(3)
+                for _ in 1:10
+                    s1 = rand(1:M)
+                    s2 = rand(1:M)
+                    h1 = MonteCarloMoves._tri_site_to_halfgrid(s1, nx)
+                    h2 = MonteCarloMoves._tri_site_to_halfgrid(s2, nx)
+                    px = (lat.positions[s1, 1] + lat.positions[s2, 1]) / 2
+                    py = (lat.positions[s1, 2] + lat.positions[s2, 2]) / 2
+                    for s in 1:M
+                        r = MonteCarloMoves._tri_reflect_site(
+                            s, h1[1] + h2[1], h1[2] + h2[2], nx, ny)
+                        fx = (2 * px - lat.positions[s, 1] - lat.positions[r, 1]) / Ax
+                        fy = (2 * py - lat.positions[s, 2] - lat.positions[r, 2]) / Ay
+                        @test isapprox(fx, round(fx), atol=1e-9)
+                        @test isapprox(fy, round(fy), atol=1e-9)
+                    end
+                end
+            end
+        end
+
+        @testset "triangular basis-sublattice rule" begin
+            nx, ny = 3, 3
+            M = 2 * nx * ny
+            basis_of(s) = (s - 1) % 2
+            # Site pivots (s1 == s2, parity sum even): basis index preserved
+            for s1 in (1, 4, 18)
+                h = MonteCarloMoves._tri_site_to_halfgrid(s1, nx)
+                for s in 1:M
+                    r = MonteCarloMoves._tri_reflect_site(s, 2 * h[1], 2 * h[2], nx, ny)
+                    @test basis_of(r) == basis_of(s)
+                end
+            end
+            # Midpoint pivot with odd parity sum: basis 0 and basis 1 exchange
+            h1 = MonteCarloMoves._tri_site_to_halfgrid(1, nx)   # basis 0
+            h2 = MonteCarloMoves._tri_site_to_halfgrid(2, nx)   # basis 1
+            @test isodd(h1[1] + h2[1])
+            for s in 1:M
+                r = MonteCarloMoves._tri_reflect_site(
+                    s, h1[1] + h2[1], h1[2] + h2[2], nx, ny)
+                @test basis_of(r) == 1 - basis_of(s)
+            end
+        end
+
+        @testset "particle count preserved (triangular, C=1)" begin
+            sl = SLattice{TriangularLattice}(
+                supercell_dimensions=(6, 4, 1),
+                cutoff_radii=[1.1],
+                components=[[1, 2, 5, 10, 17, 24, 33, 40]],
+                adsorptions=:full)
+            original_count = occupied_site_count(sl)
+            for _ in 1:50
+                geometric_cluster_swap!(sl, 0.3)
+                @test occupied_site_count(sl) == original_count
+            end
+        end
+
+        @testset "particle count preserved (triangular, C=2)" begin
+            ml = MLattice{2,TriangularLattice}(
+                supercell_dimensions=(3, 3, 1),
+                cutoff_radii=[1.1],
+                components=[[1, 3, 5, 7], [2, 4, 6, 8]],
+                adsorptions=:full)
+            original_counts = occupied_site_count(ml)
+            for _ in 1:50
+                geometric_cluster_swap!(ml, 0.4)
+                @test occupied_site_count(ml) == original_counts
+            end
+        end
+
+        @testset "self-inverse for fixed cluster (triangular)" begin
+            using Random
+            sl = SLattice{TriangularLattice}(
+                supercell_dimensions=(6, 4, 1),
+                cutoff_radii=[1.1],
+                components=[[1, 5, 10, 20, 30, 40]],
+                adsorptions=:full)
+            original_components = deepcopy(sl.components)
+
+            seed = 42
+            Random.seed!(seed)
+            geometric_cluster_swap!(sl, 0.3)
+            Random.seed!(seed)
+            geometric_cluster_swap!(sl, 0.3)
+
+            @test sl.components == original_components
+        end
+
+        @testset "cluster move can change configuration (triangular)" begin
+            sl = SLattice{TriangularLattice}(
+                supercell_dimensions=(6, 4, 1),
+                cutoff_radii=[1.1],
+                components=[[1, 2, 3, 4, 5, 6]],
+                adsorptions=:full)
+            original_components = deepcopy(sl.components)
+            changed = false
+            for _ in 1:100
+                test_sl = deepcopy(sl)
+                geometric_cluster_swap!(test_sl, 0.5)
+                if test_sl.components != original_components
+                    changed = true
+                    break
+                end
+            end
+            @test changed
+        end
+
+        @testset "triangular guards" begin
+            # One-site basis: the half-grid index arithmetic does not apply
+            lat1b = MLattice{1,TriangularLattice}(
+                basis=[(0.0, 0.0, 0.0)],
+                supercell_dimensions=(3, 3, 1),
+                cutoff_radii=[1.1],
+                components=[[1]],
+                adsorptions=:full)
+            @test_throws ArgumentError geometric_cluster_swap!(lat1b, 0.3)
+
+            # Three-dimensional supercell: not supported on triangular
+            lat3d = MLattice{1,TriangularLattice}(
+                supercell_dimensions=(3, 3, 2),
+                periodicity=(true, true, true),
+                cutoff_radii=[1.1],
+                components=[[1]],
+                adsorptions=:full)
+            @test_throws ArgumentError geometric_cluster_swap!(lat3d, 0.3)
+        end
+
     end
 end

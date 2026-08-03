@@ -697,6 +697,144 @@ function order_parameter_sqrt3(lattice::MLattice{1,TriangularLattice})
 end
 
 """
+    bragg_amplitude(lattice::MLattice{1,SquareLattice}, m::Int, n::Int) -> Float64
+
+Normalized Bragg-peak amplitude of the occupation pattern on a
+single-component square lattice:
+
+    |ρ(k)| = |Σ_{occupied sites} e^{ik·r}| / M,   k = 2π·(m/d₁, n/d₂),
+
+in units of the inverse lattice constant, where `(d₁, d₂)` are the in-plane
+supercell dimensions and `M = d₁·d₂` is the number of sites. This is the
+LEED-intensity convention of Zhang, Blum & Reuter
+[PRB **75**, 235406 (2007)]; [`order_parameter_c2x2`](@ref) is the
+k = (π, π) member of the family, and
+`bragg_amplitude(lat, d1 ÷ 2, d2 ÷ 2) == order_parameter_c2x2(lat)` on
+even-dimension cells. Integer indices on the supercell reciprocal grid make
+every representable k commensurate by construction; indices wrap modulo the
+dimensions, so negative and out-of-range values are valid:
+`bragg_amplitude(lat, m, n) == bragg_amplitude(lat, m + d1, n)`. The empty
+and the full lattice give `0` for any `(m, n)` not both `≡ 0` modulo the
+dimensions; a single particle gives `1/M`.
+
+Like the named order parameters, |ρ(k)| is not a function of `(E, N)` and
+must be evaluated on configurations (e.g. per culled walker, via the
+`observables` keyword of the nested-sampling loops); see
+[`order_parameter_stripe`](@ref) for the composed-observable recipes.
+
+Requires a single-site basis and a strictly two-dimensional supercell
+(`supercell_dimensions[3] == 1`); violations throw an `ArgumentError`.
+"""
+function bragg_amplitude(lattice::MLattice{1,SquareLattice}, m::Int, n::Int)
+    if length(lattice.basis) != 1
+        throw(ArgumentError("bragg_amplitude requires a single-site " *
+            "basis, got $(length(lattice.basis)) basis sites"))
+    end
+    d1, d2, d3 = lattice.supercell_dimensions
+    if d3 != 1
+        throw(ArgumentError("bragg_amplitude requires a two-dimensional " *
+            "supercell (supercell_dimensions[3] == 1), got $d3 layers"))
+    end
+    # Phase tables over mod-reduced cispi arguments: half-turn phases are
+    # exactly ±1.0 and quarter-turn phases exactly ±1.0/±1.0im, so the c2x2
+    # identity and the period-4 values hold to full precision
+    col = [cispi(2 * mod(m * x, d1) / d1) for x in 0:d1-1]
+    row = [cispi(2 * mod(n * y, d2) / d2) for y in 0:d2-1]
+    occ = lattice.components[1]
+    z = 0.0 + 0.0im
+    for s in eachindex(occ)
+        if occ[s]
+            # lattice_positions ordering: basis innermost, dimension 1 fastest
+            i0 = (s - 1) % d1
+            j0 = ((s - 1) ÷ d1) % d2
+            z += col[i0+1] * row[j0+1]
+        end
+    end
+    return abs(z) / (d1 * d2)
+end
+
+"""
+    order_parameter_stripe(lattice::MLattice{1,SquareLattice}; period::Int = 2) -> Float64
+
+Orientation-degenerate axial stripe order parameter on a single-component
+square lattice: the quadrature sum of the two axial Bragg amplitudes at
+wavevector 2π/P, with P = `period` in lattice constants,
+
+    Ψ = √(|ρ(2π/P, 0)|² + |ρ(0, 2π/P)|²),
+
+i.e. `sqrt(bragg_amplitude(lat, d1 ÷ period, 0)^2 +
+bragg_amplitude(lat, 0, d2 ÷ period)^2)` with the normalized amplitudes of
+[`bragg_amplitude`](@ref). A perfect single-orientation period-P stripe
+with the half-period filled attains `1/(P·sin(π/P))`: each of the `d₂` rows
+contributes `d₁/P` copies of the geometric phasor sum
+`Σ_{x=0}^{P/2−1} e^{2πix/P}`, of modulus `1/sin(π/P)`, and dividing by
+`M = d₁·d₂` leaves `1/(P·sin(π/P))`. That gives `1/2` at P = 2 (matching
+the c(2×2) = 1/2 convention at half filling) and `√2/4` at P = 4; the
+perpendicular component vanishes on a perfect stripe, so the quadrature
+maximum equals the single-orientation value. `period = 2` detects the (2×1)
+row and column stripes — the superantiferromagnetic phase of the square
+lattice with nearest- and next-nearest-neighbor couplings [Binder & Landau,
+PRB **21**, 1941 (1980)] — `period = 4` the axial period-4 phases that
+appear with third-neighbor couplings [Landau & Binder, PRB **31**, 5946
+(1985)], and `period = 2h` the width-h stripes of dipolar-frustrated
+ferromagnets [MacIsaac, Whitehead, Robinson & De'Bell, PRB **51**, 16033
+(1995)]. The perfect checkerboard and the empty and the full lattice
+give `0`.
+
+Ψ is not a function of `(E, N)` — degenerate energy levels contain ordered
+and disordered configurations alike — so it must be evaluated on
+configurations (e.g. per culled walker, via the `observables` keyword of
+the nested-sampling loops). Higher moments for Binder-cumulant analysis are
+composed caller-side, with no library change:
+
+    observables = [:stripe  => order_parameter_stripe,
+                   :stripe2 => cfg -> order_parameter_stripe(cfg)^2,
+                   :stripe4 => cfg -> order_parameter_stripe(cfg)^4]
+
+Diagonal period-4 order is composed the same way, from the k = (π/2, ±π/2)
+quadrature
+
+    cfg -> sqrt(bragg_amplitude(cfg, d1 ÷ 4, d2 ÷ 4)^2 +
+                bragg_amplitude(cfg, d1 ÷ 4, -(d2 ÷ 4))^2)
+
+which equals `√2/4` on every member of the k = (π/2, ±π/2) ground manifold
+of the nearest-neighbor-attraction plus isotropic third-neighbor-repulsion
+model — p(2×2) blocks and diagonal period-4 stripes alike — while
+`order_parameter_stripe(period=4)` is exactly `0` there; the two
+observables separate the axial and diagonal period-4 phases.
+
+Requires a single-site basis, a strictly two-dimensional supercell
+(`supercell_dimensions[3] == 1`), `period >= 2`, and `period` dividing both
+in-plane dimensions (both orientations are evaluated, and an incommensurate
+orientation leaks a spurious amplitude); violations throw an
+`ArgumentError`.
+"""
+function order_parameter_stripe(lattice::MLattice{1,SquareLattice}; period::Int=2)
+    if length(lattice.basis) != 1
+        throw(ArgumentError("order_parameter_stripe requires a single-site " *
+            "basis, got $(length(lattice.basis)) basis sites"))
+    end
+    d1, d2, d3 = lattice.supercell_dimensions
+    if d3 != 1
+        throw(ArgumentError("order_parameter_stripe requires a two-dimensional " *
+            "supercell (supercell_dimensions[3] == 1), got $d3 layers"))
+    end
+    if period < 2
+        throw(ArgumentError("order_parameter_stripe requires period >= 2, " *
+            "got $period"))
+    end
+    if d1 % period != 0 || d2 % period != 0
+        bad = d1 % period != 0 ? d1 : d2
+        throw(ArgumentError("order_parameter_stripe requires the period to " *
+            "divide both in-plane supercell dimensions, since both stripe " *
+            "orientations are evaluated and an incommensurate orientation " *
+            "leaks a spurious amplitude; period $period does not divide $bad"))
+    end
+    return sqrt(bragg_amplitude(lattice, d1 ÷ period, 0)^2 +
+                bragg_amplitude(lattice, 0, d2 ÷ period)^2)
+end
+
+"""
     motif_distances(coords::AbstractVector{<:Tuple}) -> Vector{Float64}
 
 Sorted multiset of the pairwise Euclidean distances of a coordinate

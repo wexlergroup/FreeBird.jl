@@ -478,6 +478,89 @@ function order_parameter_c2x2(lattice::MLattice{1,SquareLattice})
 end
 
 """
+    order_parameter_sqrt3(lattice::MLattice{1,TriangularLattice}) -> Float64
+
+Three-sublattice order parameter for (√3×√3)R30° ordering on a
+single-component triangular lattice:
+
+    Ψ = |Σ_{occupied sites} ω^{c(s)}| / M,   ω = e^{2πi/3},
+
+where `c(s) ∈ {0,1,2}` is the site's sublattice label under the standard
+tripartition of the triangular lattice and `M` is the number of sites. This
+is the modulus of the complex three-state Potts order parameter: the Z₃
+phase distinguishing the three degenerate ordered states is divided out, so
+all three give the same value. A perfect √3×√3 arrangement at coverage 1/3
+gives `1/3`; the empty and the full lattice give `0` (1 + ω + ω² = 0).
+
+Ψ is not a function of `(E, N)`: degenerate energy levels contain ordered
+and disordered configurations alike, so it must be evaluated on
+configurations (e.g. per culled walker, via the `observables` keyword of
+the nested-sampling loops). Higher moments for Binder-cumulant analysis are
+composed caller-side, with no library change:
+
+    observables = [:psi  => order_parameter_sqrt3,
+                   :psi2 => cfg -> order_parameter_sqrt3(cfg)^2,
+                   :psi4 => cfg -> order_parameter_sqrt3(cfg)^4]
+
+after which ⟨Ψ⟩, ⟨Ψ²⟩, ⟨Ψ⁴⟩ come from `observable_cols=[:psi, :psi2, :psi4]`
+in the grand-canonical stats functions.
+
+Requires the standard two-site centered-rectangular triangular basis
+`[(0, 0, 0), (a/2, √3·a/2, 0)]` consistent with the lattice vectors, a
+strictly two-dimensional supercell (`supercell_dimensions[3] == 1`), and
+`supercell_dimensions[1]` divisible by 3 (the tripartition closes on the
+periodic cell iff the a₁ circumference is a multiple of 3; the a₂ dimension
+is unconstrained); violations throw an `ArgumentError`. Note the shipped
+default `supercell_dimensions = (4, 2, 1)` is *not* commensurate.
+"""
+function order_parameter_sqrt3(lattice::MLattice{1,TriangularLattice})
+    if length(lattice.basis) != 2
+        throw(ArgumentError("order_parameter_sqrt3 requires the two-site " *
+            "centered-rectangular triangular basis, got " *
+            "$(length(lattice.basis)) basis sites"))
+    end
+    ax, ay = lattice.lattice_vectors[1, 1], lattice.lattice_vectors[2, 2]
+    b1, b2 = lattice.basis
+    if !(isapprox(b1[1], 0.0, atol=1e-9) && isapprox(b1[2], 0.0, atol=1e-9) &&
+         isapprox(b2[1], ax / 2, atol=1e-9) && isapprox(b2[2], ay / 2, atol=1e-9))
+        throw(ArgumentError("order_parameter_sqrt3 requires the standard " *
+            "triangular basis [(0, 0, 0), (a/2, √3·a/2, 0)] consistent with " *
+            "the lattice vectors, got $(lattice.basis)"))
+    end
+    d1, d2, d3 = lattice.supercell_dimensions
+    if d3 != 1
+        throw(ArgumentError("order_parameter_sqrt3 requires a two-dimensional " *
+            "supercell (supercell_dimensions[3] == 1), got $d3 layers"))
+    end
+    if d1 % 3 != 0
+        throw(ArgumentError("order_parameter_sqrt3 requires " *
+            "supercell_dimensions[1] divisible by 3 so the three √3×√3 " *
+            "sublattices close on the periodic cell, got $d1"))
+    end
+    occ = lattice.components[1]
+    # Sublattice occupations n[c+1], c ∈ {0,1,2}. lattice_positions ordering:
+    # basis innermost, dimension 1 next. In triangular integer coordinates
+    # (m, n) with r = m·t₁ + n·t₂, a valid tripartition is c = (m − n) mod 3;
+    # the basis-0 site of cell column ci sits at (ci − cj, 2cj), giving
+    # c = ci mod 3, and the basis-1 site adds one t₂ step, giving
+    # c = (ci + 2) mod 3. Wrapping the a₁ circumference shifts c by d1 mod 3,
+    # hence the commensurability guard above.
+    n = zeros(Int, 3)
+    for s in eachindex(occ)
+        occ[s] || continue
+        b = (s - 1) % 2
+        ci = ((s - 1) ÷ 2) % d1
+        c = b == 0 ? ci % 3 : (ci + 2) % 3
+        n[c+1] += 1
+    end
+    M = 2 * d1 * d2
+    # |n₀ + n₁·ω + n₂·ω²|² = n₀² + n₁² + n₂² − n₀n₁ − n₁n₂ − n₂n₀, exact in
+    # integers; one final square root, no complex arithmetic.
+    s2 = n[1]^2 + n[2]^2 + n[3]^2 - n[1] * n[2] - n[2] * n[3] - n[3] * n[1]
+    return sqrt(Float64(s2)) / M
+end
+
+"""
     motif_distances(coords::AbstractVector{<:Tuple}) -> Vector{Float64}
 
 Sorted multiset of the pairwise Euclidean distances of a coordinate

@@ -13,6 +13,17 @@
             adsorptions=:full)
     end
 
+    # Shared single-component triangular-lattice builder (NN shell only)
+    function obs_tri_lattice(d1, d2)
+        MLattice{1,TriangularLattice}(
+            lattice_constant=1.0,
+            supercell_dimensions=(d1, d2, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1],
+            components=[[false for _ in 1:2*d1*d2]],
+            adsorptions=:full)
+    end
+
     # ================================================================
     @testset "order_parameter_c2x2" begin
         lat = obs_square_lattice(4, 4)
@@ -75,17 +86,6 @@
 
     # ================================================================
     @testset "order_parameter_sqrt3" begin
-        # Shared single-component triangular-lattice builder (NN shell only)
-        function obs_tri_lattice(d1, d2)
-            MLattice{1,TriangularLattice}(
-                lattice_constant=1.0,
-                supercell_dimensions=(d1, d2, 1),
-                periodicity=(true, true, false),
-                cutoff_radii=[1.1],
-                components=[[false for _ in 1:2*d1*d2]],
-                adsorptions=:full)
-        end
-
         # Independent geometric decoder: recover the triangular integer
         # coordinates (m, n) by inverting [t1 t2] on the stored positions and
         # color with c = (m - n) mod 3, so the labels are derived from the
@@ -757,6 +757,156 @@
                            st_fn.observables[:psi][i, j], atol=0.07)
             @test isapprox(st_ig.var_U[i, j], st_fn.var_U[i, j],
                            rtol=0.5, atol=0.005)
+        end
+    end
+
+    # ================================================================
+    @testset "end-to-end: triangular (3x3), NN repulsion, igref + omega-sorted" begin
+        # First triangular coverage of both grand-canonical routes and the
+        # first omega-sorted observable ledger. Tolerances sized at or above
+        # 3 sigma of three-seed scatter at this configuration (max observed
+        # over Kish-gated points: |dlnXi| 0.61, |dN| 0.18, |dU| 0.0038,
+        # |dvar_U| 4.7e-4, |dcov_UN| 0.0075, |dpsi| 0.013, all gated
+        # N_eff >= 206; sigma(lnXi) ≈ √(D/K) ≈ 0.29 at the full-compression
+        # depth D = 18·ln 2, so atol = 0.9 ≈ 3.1σ).
+        Random.seed!(11)
+        kb = 8.617333262e-5
+
+        M = 18
+        J = 0.1                      # eV, repulsive nearest-neighbor coupling
+        tri_ham = GenericLatticeHamiltonian(0.0, [J], u"eV")
+        tri_at(N) = begin
+            lat = obs_tri_lattice(3, 3)
+            lat.components[1] .= false
+            lat.components[1][1:N] .= true
+            lat
+        end
+        # Independent psi: geometric labels from the positions (inverting
+        # [t1 t2]) and the sublattice sum evaluated with complex arithmetic,
+        # sharing no code with order_parameter_sqrt3's integer identity
+        tri_labels = let tpl = obs_tri_lattice(3, 3), a = 1.0
+            map(1:size(tpl.positions, 1)) do s
+                x, y = tpl.positions[s, 1], tpl.positions[s, 2]
+                n = round(Int, 2 * y / (sqrt(3) * a))
+                m = round(Int, x / a - n / 2)
+                mod(m - n, 3)
+            end
+        end
+        tri_psi(occ) = abs(sum(occ[s] ? cis(2π * tri_labels[s] / 3) : 0.0im
+                               for s in eachindex(occ))) / length(occ)
+
+        # Exact per-configuration (E, N, psi) from fixed-N enumeration of all
+        # 2^18 configurations
+        exact_E = Dict{Int,Vector{Float64}}()
+        exact_psi = Dict{Int,Vector{Float64}}()
+        for N in 0:M
+            df_exact, _ = exact_enumeration(tri_at(N), tri_ham)
+            exact_E[N] = [ustrip(u"eV", e) for e in df_exact.energy]
+            exact_psi[N] = [tri_psi(cfg[1]) for cfg in df_exact.config]
+            @test length(exact_E[N]) == binomial(M, N)
+        end
+
+        function exact_stats_tri(μ_val, T_val)
+            β = 1.0 / (kb * T_val)
+            lt = Float64[]; Ns = Float64[]; Es = Float64[]; Ps = Float64[]
+            for N in 0:M, i in eachindex(exact_E[N])
+                push!(lt, N * β * μ_val - β * exact_E[N][i])
+                push!(Ns, N); push!(Es, exact_E[N][i]); push!(Ps, exact_psi[N][i])
+            end
+            w = exp.(lt .- maximum(lt)); sw = sum(w)
+            u = sum(w .* Es) / sw; n = sum(w .* Ns) / sw
+            (logXi=maximum(lt) + log(sw), mean_N=n, mean_U=u,
+             var_U=sum(w .* Es .^ 2) / sw - u^2,
+             cov_UN=sum(w .* Es .* Ns) / sw - u * n,
+             psi=sum(w .* Ps) / sw)
+        end
+
+        # μ = 0.05 eV probes the Kish-window edge: it fails the gate at
+        # 300 K (N_eff ≈ 20-50 across seeds) and passes at 450 K in most
+        # seeds — the trust-window behavior the gate exists to detect
+        μs = [-0.010, 0.000, 0.010, 0.050]
+        Ts = [300.0, 450.0]
+
+        # ---- igref route with psi recording ----
+        z0 = 1.0
+        K_ig = 150
+        n_ig = ceil(Int, 1.15 * K_ig * M * log1p(1 / z0)) + 2 * K_ig
+        walkers = [LatticeWalker(deepcopy(tri_at(0)), energy=0.0u"eV", iter=0)
+                   for _ in 1:K_ig]
+        ls = LatticeGasWalkers(walkers, tri_ham; assign_energy=false)
+        params = IdealGasReferencedGCNSParameters(
+            mc_steps=100, reference_fugacity=z0, energy_perturbation=1e-9,
+            allowed_fail_count=100_000)
+        df_ig, final_ig, _ = ideal_gas_referenced_nested_sampling(
+            ls, params, Int64(n_ig), MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3),
+            obs_save; observables=[:psi => order_parameter_sqrt3])
+        obs_cleanup()
+        live_E_ig = [w.energy.val for w in final_ig.walkers]
+        live_N_ig = [sum(w.configuration.components[1]) for w in final_ig.walkers]
+        live_psi_ig = [order_parameter_sqrt3(w.configuration) for w in final_ig.walkers]
+
+        st_ig = gc_thermodynamic_stats_ideal_ref(df_ig, M, z0, μs, Ts, K_ig;
+            ω0=(K_ig + 1) / K_ig, live_emax=live_E_ig, live_numbers=live_N_ig,
+            observable_cols=[:psi], live_observables=Dict(:psi => live_psi_ig))
+
+        # Ledger integrity: on this cell every configuration obeys psi <= 1/3
+        @test names(df_ig) == ["iter", "emax", "num_particles", "psi"]
+        @test all(0.0 .<= df_ig.psi .<= 1 / 3)
+
+        n_gated = 0
+        for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
+            st_ig.N_eff[i, j] >= 200 || continue
+            n_gated += 1
+            ex = exact_stats_tri(μ, T)
+            @test isapprox(st_ig.logXi[i, j], ex.logXi, atol=0.9)
+            @test isapprox(st_ig.mean_N[i, j], ex.mean_N, atol=0.5)
+            @test isapprox(st_ig.mean_U[i, j], ex.mean_U, atol=0.01)
+            @test isapprox(st_ig.var_U[i, j], ex.var_U, rtol=0.4, atol=0.001)
+            @test isapprox(st_ig.cov_UN[i, j], ex.cov_UN, rtol=0.4, atol=0.015)
+            @test isapprox(st_ig.observables[:psi][i, j], ex.psi, atol=0.025)
+        end
+        # The inner window (μ = 0, ±0.01) sits inside the z0 trust region
+        @test n_gated >= 4
+
+        # ---- omega-sorted route at μ = 0.05 eV with psi recording ----
+        Random.seed!(11)
+        K_gc = 100
+        μ_gc = 0.05
+        walkers_gc = [LatticeWalker(deepcopy(tri_at(0)), energy=0.0u"eV", iter=0)
+                      for _ in 1:K_gc]
+        ls_gc = LatticeGasWalkers(walkers_gc, tri_ham; assign_energy=false)
+        gc_params = GrandCanonicalNestedSamplingParameters(
+            mc_steps=100, chemical_potential=μ_gc,
+            energy_perturbation=1e-9, init_occupation_p=0.3)
+        df_gc, _, _ = grand_canonical_nested_sampling(
+            ls_gc, gc_params, Int64(3000),
+            MCGrandCanonicalMoves(p_move=0.5, p_insert=0.25), obs_save;
+            observables=[:psi => order_parameter_sqrt3])
+        obs_cleanup()
+
+        @test names(df_gc) == ["iter", "omega", "energy", "num_particles", "psi"]
+        @test all(0.0 .<= df_gc.psi .<= 1 / 3)
+
+        β300 = 1.0 / (kb * 300.0)
+        mean_E_gc, _, mean_N_gc = gc_thermodynamic_stats(df_gc, [β300], K_gc, μ_gc)
+        ex300 = exact_stats_tri(μ_gc, 300.0)
+        @test isapprox(mean_E_gc[1], ex300.mean_U, rtol=0.3)
+        @test isapprox(mean_N_gc[1], ex300.mean_N, rtol=0.3)
+
+        # Caller-side <psi> from the documented Ω-weight construction (the
+        # legacy stats function carries no observable machinery by design;
+        # this records the recipe): w_i ∝ Γ_i·exp(-β·Ω_i)
+        ψ_at(β) = begin
+            w = ωᵢ(df_gc.iter, K_gc) .*
+                exp.(-β .* (df_gc.omega .- minimum(df_gc.omega)))
+            sum(w .* df_gc.psi) / sum(w)
+        end
+        @test isapprox(ψ_at(β300), ex300.psi, atol=0.025)
+
+        # ---- route consistency at the shared (μ, T) where igref is trusted ----
+        β450 = 1.0 / (kb * 450.0)
+        if st_ig.N_eff[4, 2] >= 200
+            @test isapprox(st_ig.observables[:psi][4, 2], ψ_at(β450), atol=0.05)
         end
     end
 end

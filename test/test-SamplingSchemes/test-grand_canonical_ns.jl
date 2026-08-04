@@ -50,6 +50,10 @@
         @test gc_params.cluster_accept_history == Float64[]
         @test gc_params.cluster_adjust_iterations == Int[]
 
+        # move_stats defaults (issue #158)
+        @test gc_params.move_stats isa Dict{Symbol,Int}
+        @test isempty(gc_params.move_stats)
+
         # Cluster field mutability
         gc_params.cluster_p = 0.5
         @test gc_params.cluster_p == 0.5
@@ -85,6 +89,29 @@
         # Invalid probabilities
         @test_throws ArgumentError MCGrandCanonicalMoves(p_move=0.8, p_insert=0.3)
         @test_throws ArgumentError MCGrandCanonicalMoves(p_move=-0.1, p_insert=0.3)
+
+        # Bias field defaults (issue #158)
+        @test mc.p_bias == 0.0
+        @test mc.bias_predicate == :contact
+        @test mc.bias_shells == 1
+
+        # Bias-enabled construction
+        mc4 = MCGrandCanonicalMoves(p_bias=0.5, bias_predicate=:cavity, bias_shells=2)
+        @test mc4.p_bias == 0.5
+        @test mc4.bias_predicate == :cavity
+        @test mc4.bias_shells == 2
+
+        # Invalid bias parameters
+        @test_throws ArgumentError MCGrandCanonicalMoves(p_bias=-0.1)
+        @test_throws ArgumentError MCGrandCanonicalMoves(p_bias=1.5)
+        @test_throws ArgumentError MCGrandCanonicalMoves(bias_shells=0)
+        @test_throws ArgumentError MCGrandCanonicalMoves(bias_predicate=:nonsense)
+
+        # p_bias = 1.0 constructs but warns (reducible kernel; see the
+        # non-ergodicity pin in test-ideal-gas-ref-gcns.jl) ...
+        @test_logs (:warn, r"p_bias") match_mode = :any MCGrandCanonicalMoves(p_bias=1.0)
+        # ... and stays silent below 1
+        @test_logs min_level = Base.CoreLogging.Warn MCGrandCanonicalMoves(p_bias=0.99)
     end
  
     # ================================================================
@@ -189,6 +216,64 @@
         # Invalid probability should throw
         @test_throws ArgumentError MC_grand_canonical_walk!(
             10, walker, ham, omega_max, mu; p_move=0.8, p_insert=0.3)
+
+        # ---- Move counters: 6th return element (issue #158) ----
+        walker6 = LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV", iter=0)
+        assign_energy!(walker6, ham)
+        _, _, walker6, _, _, counters = MC_grand_canonical_walk!(
+            100, walker6, ham, 1e3, mu;
+            p_move=0.5, p_insert=0.25, energy_perturb=0.0)
+        @test counters isa NamedTuple
+        @test keys(counters) == (
+            :swap_attempted, :swap_accepted, :cluster_attempted, :cluster_accepted,
+            :insert_uniform_attempted, :insert_uniform_accepted,
+            :insert_biased_attempted, :insert_biased_accepted,
+            :delete_attempted, :delete_accepted)
+        # Default path: the bias and cluster families never fire
+        @test counters.insert_biased_attempted == 0
+        @test counters.insert_biased_accepted == 0
+        @test counters.cluster_attempted == 0
+        # accepted <= attempted per family
+        @test counters.swap_accepted <= counters.swap_attempted
+        @test counters.insert_uniform_accepted <= counters.insert_uniform_attempted
+        @test counters.delete_accepted <= counters.delete_attempted
+    end
+
+    # ================================================================
+    @testset "MC_grand_canonical_walk! counters: exact bookkeeping" begin
+        ham0 = GenericLatticeHamiltonian(0.0, [0.0, 0.0], u"eV")
+        # Skip-free by construction: N starts at 8, |dN| <= 1 per step, so
+        # over 8 steps N stays in [1, 15]: insert-at-full and delete-at-empty
+        # can never fire, and with 0 < N < M on a connected lattice the
+        # :contact set is never empty, so the biased branch cannot skip.
+        # Every step assigns a move type, for any RNG stream:
+        # sum(attempted) == n_steps exactly.
+        lat_bk = deepcopy(square_lattice)
+        lat_bk.components[1] .= false
+        lat_bk.components[1][1:8] .= true
+        walker_bk = LatticeWalker(lat_bk, energy=0.0u"eV", iter=0)
+        _, _, _, _, _, c = MC_grand_canonical_walk!(
+            8, walker_bk, ham0, 1e3, 0.0;
+            p_move=0.5, p_insert=0.25, energy_perturb=0.0,
+            p_bias=0.5, bias_predicate=:contact, bias_shells=1)
+        attempted = c.swap_attempted + c.cluster_attempted +
+                    c.insert_uniform_attempted + c.insert_biased_attempted +
+                    c.delete_attempted
+        accepted = c.swap_accepted + c.cluster_accepted +
+                   c.insert_uniform_accepted + c.insert_biased_accepted +
+                   c.delete_accepted
+        @test attempted == 8
+        @test accepted <= attempted
+
+        # kwarg validation on the walk
+        w2 = LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV", iter=0)
+        @test_throws ArgumentError MC_grand_canonical_walk!(1, w2, ham0, 1e3, 0.0; p_bias=-0.1)
+        @test_throws ArgumentError MC_grand_canonical_walk!(1, w2, ham0, 1e3, 0.0; p_bias=1.5)
+        @test_throws ArgumentError MC_grand_canonical_walk!(1, w2, ham0, 1e3, 0.0; bias_shells=0)
+        @test_throws ArgumentError MC_grand_canonical_walk!(1, w2, ham0, 1e3, 0.0; bias_predicate=:nonsense)
+        # bias_shells beyond the lattice fires only when the channel is active
+        @test_throws ArgumentError MC_grand_canonical_walk!(
+            1, w2, ham0, 1e3, 0.0; p_bias=0.5, bias_shells=3)
     end
 
     # ================================================================
@@ -240,6 +325,22 @@
         @test n_par isa Union{Missing,Int}
         @test length(updated_liveset.walkers) == 5
         @test updated_params.fail_count >= 0
+
+        # ---- move_stats accumulation through one NS step (issue #158) ----
+        attempted_keys = (:swap_attempted, :cluster_attempted,
+                          :insert_uniform_attempted, :insert_biased_attempted,
+                          :delete_attempted)
+        ms = updated_params.move_stats
+        @test ms isa Dict{Symbol,Int}
+        @test all(v >= 0 for v in values(ms))
+        att = sum(get(ms, k, 0) for k in attempted_keys)
+        # One NS step walks one replacement walker for mc_steps steps; skips
+        # require a boundary configuration, so at least one step attempts
+        @test 1 <= att <= gc_params.mc_steps
+        @test get(ms, :swap_accepted, 0) <= get(ms, :swap_attempted, 0)
+        @test get(ms, :insert_uniform_accepted, 0) <= get(ms, :insert_uniform_attempted, 0)
+        @test get(ms, :insert_biased_accepted, 0) <= get(ms, :insert_biased_attempted, 0)
+        @test get(ms, :delete_accepted, 0) <= get(ms, :delete_attempted, 0)
     end
  
     # ================================================================
@@ -276,7 +377,35 @@
         rm("test_gc.traj", force=true)
         rm("test_gc.ls", force=true)
     end
- 
+
+    # ================================================================
+    @testset "move_stats: accumulated per run, reset between runs" begin
+        walkers_ms = [LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV", iter=0) for _ in 1:10]
+        liveset_ms = LatticeGasWalkers(walkers_ms, ham; assign_energy=false)
+        params_ms = GrandCanonicalNestedSamplingParameters(
+            mc_steps=50, chemical_potential=-0.05)
+        save_ms = SaveEveryN("test_ms_df.csv", "test_ms.traj", "test_ms.ls", 1000, 1000, 1000)
+        attempted_keys = (:swap_attempted, :cluster_attempted,
+                          :insert_uniform_attempted, :insert_biased_attempted,
+                          :delete_attempted)
+
+        _, _, params1 = grand_canonical_nested_sampling(
+            liveset_ms, params_ms, Int64(20), MCGrandCanonicalMoves(), save_ms)
+        s1 = sum(get(params1.move_stats, k, 0) for k in attempted_keys)
+        @test 0 < s1 <= 20 * 50   # per-run ceiling: n_iters x mc_steps
+
+        # Re-running with the RETURNED params must reset the accumulator: a
+        # carried-over dict would exceed the single-run ceiling
+        _, _, params2 = grand_canonical_nested_sampling(
+            liveset_ms, params1, Int64(20), MCGrandCanonicalMoves(), save_ms)
+        s2 = sum(get(params2.move_stats, k, 0) for k in attempted_keys)
+        @test 0 < s2 <= 20 * 50
+
+        rm("test_ms_df.csv", force=true)
+        rm("test_ms.traj", force=true)
+        rm("test_ms.ls", force=true)
+    end
+
     # ================================================================
     @testset "gc_thermodynamic_stats basic" begin
         # Hand-crafted test: 2 microstates

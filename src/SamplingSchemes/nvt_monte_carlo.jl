@@ -83,6 +83,7 @@ function nvt_monte_carlo(
     # No liveset is built on this path, so run the setup checks here
     AbstractLiveSets._warn_uncoupled_shells(lattice, h)
     AbstractLiveSets._check_cluster_sites(h, lattice)
+    AbstractLiveSets._check_field_length(h, lattice)
 
     energies = Vector{Float64}(undef, num_steps)
     configurations = Vector{typeof(lattice)}(undef, num_steps)

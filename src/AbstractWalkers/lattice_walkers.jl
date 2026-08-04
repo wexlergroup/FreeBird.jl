@@ -314,6 +314,7 @@ Throws an `ArgumentError` if the number of components does not match `C`.
 # Outer Constructors
 
     MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
+                               interlayer_spacing::Union{Nothing,Float64}=nothing,
                                basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0)],
                                supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 4, 1),
                                periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
@@ -323,6 +324,7 @@ Throws an `ArgumentError` if the number of components does not match `C`.
                                image_multiplicity::Bool=false)
 
     MLattice{C,TriangularLattice}(; lattice_constant::Float64=1.0,
+                                  interlayer_spacing::Union{Nothing,Float64}=nothing,
                                   basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)],
                                   supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 2, 1),
                                   periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
@@ -347,6 +349,29 @@ doubled bond reaches the full bond energy and a self-image entry passes the
 occupation test exactly when the site is occupied; geometric-cluster growth
 reads only the first shell, and growth across a duplicated bond remains a
 configuration-independent symmetric proposal.
+
+The `interlayer_spacing` keyword sets the out-of-plane (third-axis) lattice
+spacing. The default `nothing` means isotropic spacing: the third lattice
+vector is `[0, 0, lattice_constant]`. Note this is a behavior change on one
+previously broken path: 3D cells built with `lattice_constant ≠ 1` used to
+mix scales (the out-of-plane spacing was fixed at 1.0, so a "nearest-neighbor"
+cutoff could select only interlayer bonds without warning); such cells now
+default to isotropic spacing. Pass `interlayer_spacing = 1.0` to reproduce
+the old geometry. An explicit value `c` gives a tetragonal cell whose
+square-lattice distance ladder is a, c, √2·a, √(a² + c²), 2a, …, so a
+suitable cutoff ladder separates in-plane from interlayer nearest neighbors
+into distinct shells: with a = 1.0, c = 1.25 and `cutoff_radii = [1.1, 1.35]`,
+shell 1 is in-plane only and shell 2 interlayer only (the next distance
+√2 ≈ 1.414 is excluded), so a `GenericLatticeHamiltonian` with couplings
+`[J∥, J⊥]` expresses direction-resolved nearest-neighbor interactions with no
+other library changes. Avoid degenerate spacings that alias the two bond
+classes into one shell (c = √2·a puts interlayer bonds at the in-plane
+second-neighbor distance, c = 2a at the third); the strictly-increasing
+cutoff-ladder validation and the empty-shell warning of
+[`compute_neighbors`](@ref) are the runtime backstops. The keyword composes
+with `image_multiplicity`; the third axis is non-periodic by default, so
+slabs gain no z-wrap images. Must be finite and strictly positive when given;
+violations throw an `ArgumentError`.
 
 ## Returns
 - `MLattice{C,G}`: A square/triangular lattice object with `C` components.
@@ -491,7 +516,26 @@ function mlattice_setup(C::Int,
     return lattice_comp, lattice_adsorptions
 end
 
+"""
+    _out_of_plane_spacing(lattice_constant, interlayer_spacing)
+
+Resolve the third-axis lattice spacing for the keyword constructors:
+`nothing` means isotropic spacing (the in-plane `lattice_constant`); an
+explicit value must be finite and strictly positive, the cutoff-ladder
+idiom of `compute_neighbors`, and violations throw an `ArgumentError`.
+"""
+function _out_of_plane_spacing(lattice_constant::Float64, interlayer_spacing::Union{Nothing,Float64})
+    interlayer_spacing === nothing && return lattice_constant
+    if !(isfinite(interlayer_spacing) && interlayer_spacing > 0.0)
+        throw(ArgumentError(
+            "interlayer_spacing must be finite and strictly positive, " *
+            "got $interlayer_spacing"))
+    end
+    return interlayer_spacing
+end
+
 function MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
+                                    interlayer_spacing::Union{Nothing,Float64}=nothing,
                                     basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0)],
                                     supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 4, 1),
                                     periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
@@ -501,7 +545,8 @@ function MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
                                     image_multiplicity::Bool=false,
                                 ) where C
 
-    lattice_vectors = [lattice_constant 0.0 0.0; 0.0 lattice_constant 0.0; 0.0 0.0 1.0]
+    c = _out_of_plane_spacing(lattice_constant, interlayer_spacing)
+    lattice_vectors = [lattice_constant 0.0 0.0; 0.0 lattice_constant 0.0; 0.0 0.0 c]
     lattice_comp, lattice_adsorptions = mlattice_setup(C, basis, supercell_dimensions, components, adsorptions)
 
     return MLattice{C,SquareLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, cutoff_radii, lattice_comp, lattice_adsorptions;
@@ -509,6 +554,7 @@ function MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
 end
 
 function MLattice{C,TriangularLattice}(; lattice_constant::Float64=1.0,
+                                        interlayer_spacing::Union{Nothing,Float64}=nothing,
                                         basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0),(1/2, sqrt(3)/2, 0.0)],
                                         supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 2, 1),
                                         periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
@@ -520,7 +566,8 @@ function MLattice{C,TriangularLattice}(; lattice_constant::Float64=1.0,
                                         image_multiplicity::Bool=false,
                                     ) where C
 
-    lattice_vectors = [lattice_constant 0.0 0.0; 0.0 sqrt(3)*lattice_constant 0.0; 0.0 0.0 1.0]
+    c = _out_of_plane_spacing(lattice_constant, interlayer_spacing)
+    lattice_vectors = [lattice_constant 0.0 0.0; 0.0 sqrt(3)*lattice_constant 0.0; 0.0 0.0 c]
     lattice_comp, lattice_adsorptions = mlattice_setup(C, basis, supercell_dimensions, components, adsorptions)
 
     return MLattice{C,TriangularLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, cutoff_radii, lattice_comp, lattice_adsorptions;

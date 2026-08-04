@@ -679,4 +679,159 @@
         end
     end
 
+    @testset "site-field lattice Hamiltonian (exactness, subsumption, setup checks)" begin
+        using Random
+
+        function sf_lattice(L; cutoffs=[1.1, 1.5], ads=:full)
+            MLattice{1,SquareLattice}(
+                lattice_constant=1.0,
+                basis=[(0.0, 0.0, 0.0)],
+                supercell_dimensions=(L, L, 1),
+                periodicity=(true, true, false),
+                cutoff_radii=cutoffs,
+                components=[[false for _ in 1:L*L]],
+                adsorptions=ads)
+        end
+
+        # ------------------------------------------------------------
+        @testset "field-only exactness on hand configurations" begin
+            # Base contributes exactly zero (zero on-site, zero coupling),
+            # so the energy is the masked field sum and nothing else.
+            # Distinct per-site values catch any index permutation.
+            lat = sf_lattice(4; cutoffs=[1.1])
+            base0 = GenericLatticeHamiltonian(0.0, [0.0], u"eV")
+            h = SiteFieldLatticeHamiltonian(base0, collect(1:16) .* 1e-3, u"eV")
+
+            lat.components[1] .= false
+            @test isapprox(interacting_energy(lat, h), 0.0u"eV"; atol=1e-12u"eV")
+            lat.components[1][1] = true
+            @test isapprox(interacting_energy(lat, h), 0.001u"eV"; atol=1e-12u"eV")
+            lat.components[1][7] = true                       # sites {1, 7}
+            @test isapprox(interacting_energy(lat, h), 0.008u"eV"; atol=1e-12u"eV")
+            lat.components[1] .= false
+            lat.components[1][[2, 5, 16]] .= true
+            @test isapprox(interacting_energy(lat, h), 0.023u"eV"; atol=1e-12u"eV")
+            lat.components[1] .= true
+            @test isapprox(interacting_energy(lat, h), 0.136u"eV"; atol=1e-12u"eV")
+        end
+
+        # ------------------------------------------------------------
+        @testset "subsumption identity both ways (20 random 4x4 occupations)" begin
+            # "Both ways": (i) forward, the masked scalar on-site of a bare
+            # GenericLatticeHamiltonian re-expressed as field = eps .* mask
+            # gives identical energies; (ii) reverse, the wrapper with the
+            # bare Hamiltonian as base and an all-zero field is the identity
+            # on its base. Plus the additive contract: base on-site x mask
+            # and a nonuniform field coexist and add.
+            mask = Bool[1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0]  # fixed, 8 sites
+            lat_m = sf_lattice(4; ads=findall(mask))
+            ε = -0.04
+            J = [-0.01, -0.0025]
+            bare = GenericLatticeHamiltonian(ε, J, u"eV")
+            wrapF = SiteFieldLatticeHamiltonian(
+                GenericLatticeHamiltonian(0.0, J, u"eV"), ε .* mask, u"eV")
+            wrap0 = SiteFieldLatticeHamiltonian(bare, zeros(16), u"eV")
+            g = collect(1:16) .* 1e-3
+            wrapB = SiteFieldLatticeHamiltonian(bare, g, u"eV")
+
+            Random.seed!(202)
+            for _ in 1:20
+                occ = rand(Bool, 16)
+                lat_m.components[1] .= occ
+                E_bare = interacting_energy(lat_m, bare)
+                # forward direction of the identity
+                @test isapprox(interacting_energy(lat_m, wrapF), E_bare;
+                               atol=1e-12u"eV")
+                # reverse direction: zero-field wrapper == base
+                @test isapprox(interacting_energy(lat_m, wrap0), E_bare;
+                               atol=1e-12u"eV")
+                # additive contract with the base's on-site x adsorptions term
+                @test isapprox(interacting_energy(lat_m, wrapB),
+                               E_bare + sum(g[occ]) * u"eV"; atol=1e-12u"eV")
+            end
+        end
+
+        # ------------------------------------------------------------
+        @testset "setup-check matrix: field length and delegation" begin
+            lat = sf_lattice(4)   # 16 sites, 2 neighbor shells
+            base2 = GenericLatticeHamiltonian(0.0, [0.1, 0.05], u"eV")
+            h_short = SiteFieldLatticeHamiltonian(base2, fill(-0.01, 15), u"eV")
+            h_long = SiteFieldLatticeHamiltonian(base2, fill(-0.01, 17), u"eV")
+            h_ok = SiteFieldLatticeHamiltonian(base2, fill(-0.01, 16), u"eV")
+
+            # Built-for-a-different-lattice register: ArgumentError at every
+            # setup entry point, mirroring the shell-count matrix above
+            w1 = [LatticeWalker(deepcopy(lat), energy=0.0u"eV", iter=0)]
+            @test_throws ArgumentError LatticeGasWalkers(w1, h_short)
+            w2 = [LatticeWalker(deepcopy(lat), energy=0.0u"eV", iter=0)]
+            @test_throws ArgumentError LatticeGasWalkers(w2, h_long)
+            wl_params = WangLandauParameters(energy_min=-0.5, energy_max=3.0,
+                                             num_energy_bins=30, num_steps=10,
+                                             max_iter=2, random_seed=7)
+            @test_throws ArgumentError wang_landau(deepcopy(lat), h_short, wl_params)
+            @test_throws ArgumentError nvt_monte_carlo(
+                MCNewSample(), deepcopy(lat), h_short, 300.0, 5, 7)
+
+            # Matching length: silent
+            w3 = [LatticeWalker(deepcopy(lat), energy=0.0u"eV", iter=0)]
+            @test_logs min_level = Base.CoreLogging.Warn LatticeGasWalkers(w3, h_ok)
+
+            # A stale field reaching the raw energy path must crash, not
+            # sum a truncated or padded range: eachindex(occupations, field)
+            # raises DimensionMismatch in BOTH directions
+            lat16 = deepcopy(lat)
+            lat16.components[1][16] = true
+            @test_throws DimensionMismatch interacting_energy(lat16, h_short)
+            @test_throws DimensionMismatch interacting_energy(lat16, h_long)
+
+            # The uncoupled-shell warning threads through the wrapper
+            # (_n_coupled_shells delegates to base): 1-shell base, 2-shell lattice
+            h_1shell = SiteFieldLatticeHamiltonian(
+                GenericLatticeHamiltonian(0.0, [0.1], u"eV"), fill(-0.01, 16), u"eV")
+            w4 = [LatticeWalker(deepcopy(lat), energy=0.0u"eV", iter=0)]
+            @test_logs (:warn, r"couples only the first 1") match_mode = :any LatticeGasWalkers(
+                w4, h_1shell)
+            # ... and reaches the raw-lattice sampler entry points too
+            @test_logs (:warn, r"couples only the first 1") match_mode = :any wang_landau(
+                deepcopy(lat), h_1shell, wl_params)
+            @test_logs (:warn, r"couples only the first 1") match_mode = :any nvt_monte_carlo(
+                MCNewSample(), deepcopy(lat), h_1shell, 300.0, 5, 7)
+
+            # The cluster-embedding check threads through the wrapper
+            # (_check_cluster_sites delegates to base): stale embeddings
+            # throw at liveset construction
+            pair = GenericLatticeHamiltonian(0.0, [0.1, 0.05], u"eV")
+            stale = ClusterLatticeHamiltonian(
+                pair, [ClusterInteraction(0.2u"eV", [(1, 2, 17)])])
+            h_stale = SiteFieldLatticeHamiltonian(stale, fill(-0.01, 16), u"eV")
+            w5 = [LatticeWalker(deepcopy(lat), energy=0.0u"eV", iter=0)]
+            @test_throws ArgumentError LatticeGasWalkers(w5, h_stale)
+
+            # A valid wrapped cluster composes additively: pair shells +
+            # trio coupling + field sum, hand closed form. Sites {1, 2, 5}:
+            # (1,2) and (1,5) are first-shell pairs, (2,5) is the sqrt(2)
+            # shell, and the trio (1,2,5) is fully occupied.
+            good = ClusterLatticeHamiltonian(
+                pair, [ClusterInteraction(0.2u"eV", [(1, 2, 5)])])
+            h_good = SiteFieldLatticeHamiltonian(good, collect(1:16) .* 1e-3, u"eV")
+            lat3 = deepcopy(lat)
+            lat3.components[1][[1, 2, 5]] .= true
+            @test isapprox(interacting_energy(lat3, h_good),
+                           (2 * 0.1 + 0.05 + 0.2 + 0.008) * u"eV"; atol=1e-10u"eV")
+
+            # An MLatticeHamiltonian{1} base evaluates through the same
+            # delegation: wrapper energy == bare energy + field sum
+            mlh = MLatticeHamiltonian(1,
+                [GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")])
+            g_m = collect(1:16) .* 1e-3
+            wrapM = SiteFieldLatticeHamiltonian(mlh, g_m, u"eV")
+            lat_m2 = deepcopy(lat)
+            lat_m2.components[1][[1, 2, 5, 11]] .= true
+            @test isapprox(interacting_energy(lat_m2, wrapM),
+                           interacting_energy(lat_m2, mlh) +
+                           sum(g_m[lat_m2.components[1]]) * u"eV";
+                           atol=1e-12u"eV")
+        end
+    end
+
 end

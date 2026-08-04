@@ -835,6 +835,146 @@ function order_parameter_stripe(lattice::MLattice{1,SquareLattice}; period::Int=
 end
 
 """
+    _check_planar_basis(caller::Symbol, lattice::MLattice)
+
+Shared guard for the layer helpers: throw an `ArgumentError`, naming the
+public entry point `caller`, unless all basis z-components are equal.
+Layers along dimension 3 are geometrically well defined only for a planar
+basis.
+"""
+function _check_planar_basis(caller::Symbol, lattice::MLattice)
+    zs = [b[3] for b in lattice.basis]
+    if any(z -> z != zs[1], zs)
+        throw(ArgumentError("$caller requires a planar basis (all basis " *
+            "z-components equal) so layers along dimension 3 are " *
+            "geometrically well defined, got basis z-components $zs"))
+    end
+    return nothing
+end
+
+"""
+    site_layers(lattice::MLattice) -> Vector{Int}
+
+Layer index of every site along the third supercell dimension: site `s`
+belongs to layer `(s − 1) ÷ B + 1` with `B = length(basis) · d₁ · d₂`,
+exact because `lattice_positions` orders sites with dimension 3 outermost
+(basis innermost, dimension 1 fastest), making each layer one contiguous
+block of `B` sites. The result has `num_sites(lattice)` entries with
+values in `1:d₃`.
+
+Requires a planar basis (all basis z-components equal), so that "layer" is
+geometrically unambiguous; violations throw an `ArgumentError`.
+"""
+function site_layers(lattice::MLattice)
+    _check_planar_basis(:site_layers, lattice)
+    d1, d2, d3 = lattice.supercell_dimensions
+    B = length(lattice.basis) * d1 * d2
+    # lattice_positions ordering: dimension 3 outermost, so layers are
+    # contiguous blocks of B sites
+    return [(s - 1) ÷ B + 1 for s in 1:(B * d3)]
+end
+
+"""
+    layer_coverage(lattice::MLattice{1,G}, layer::Int) -> Float64
+
+Occupied fraction of one layer of a single-component lattice: the number
+of occupied sites in layer `layer`'s contiguous block of
+`B = length(basis) · d₁ · d₂` sites (see [`site_layers`](@ref)), divided
+by `B`. This is the layer-resolved complement of the in-plane order
+parameters for three-dimensional supercells; the per-layer coverages
+θ_k are the order parameters of lattice-gas layering transitions. It
+returns a scalar `Real`, so `cfg -> layer_coverage(cfg, k)`
+is directly usable as an `observables` callback in the nested-sampling
+loops: like the shipped order parameters, θ is not a function of `(E, N)`
+and must be evaluated per configuration rather than reconstructed from an
+energy ledger. At `d₃ == 1` it degenerates to the total coverage `N/M`,
+which is legal and intentional, so no two-dimensionality guard applies.
+
+Requires a planar basis (all basis z-components equal) and
+`1 ≤ layer ≤ d₃`; violations throw an `ArgumentError`.
+"""
+function layer_coverage(lattice::MLattice{1,G}, layer::Int) where G
+    _check_planar_basis(:layer_coverage, lattice)
+    d1, d2, d3 = lattice.supercell_dimensions
+    if !(1 <= layer <= d3)
+        throw(ArgumentError("layer_coverage requires 1 <= layer <= $d3 " *
+            "(= supercell_dimensions[3]), got $layer"))
+    end
+    B = length(lattice.basis) * d1 * d2
+    occ = lattice.components[1]
+    n = 0
+    for s in ((layer - 1) * B + 1):(layer * B)
+        n += occ[s] ? 1 : 0
+    end
+    return n / B
+end
+
+"""
+    occupancy_profile(lattice::MLattice{1,G}) -> Vector{Float64}
+
+Vector of layer coverages, `[layer_coverage(lattice, k) for k in 1:d₃]`,
+computed in one pass. Every layer holds `B = length(basis) · d₁ · d₂`
+sites, so `mean(occupancy_profile(lat)) == N/M` exactly (`N` occupied
+sites, `M` total sites).
+
+The return value is a `Vector`, not a scalar, so `occupancy_profile` is
+*not* directly usable as an `observables` callback (callbacks must return
+a `Real`); record per-layer coverages by composing scalar callbacks
+caller-side, with no library change:
+
+    observables = [Symbol(:theta, k) => (cfg -> layer_coverage(cfg, k)) for k in 1:d₃]
+
+after which ⟨θ₁⟩ … ⟨θ_d₃⟩ come from `observable_cols=[:theta1, :theta2, …]`
+in the grand-canonical stats functions.
+
+Requires a planar basis (all basis z-components equal); violations throw
+an `ArgumentError`.
+"""
+function occupancy_profile(lattice::MLattice{1,G}) where G
+    _check_planar_basis(:occupancy_profile, lattice)
+    d1, d2, d3 = lattice.supercell_dimensions
+    B = length(lattice.basis) * d1 * d2
+    occ = lattice.components[1]
+    counts = zeros(Int, d3)
+    for s in eachindex(occ)
+        if occ[s]
+            counts[(s - 1) ÷ B + 1] += 1
+        end
+    end
+    return counts ./ B
+end
+
+"""
+    layer_field(lattice::MLattice, per_layer::AbstractVector) -> Vector
+
+Broadcast a per-layer value over every site of its layer: the result has
+`num_sites(lattice)` entries, with `per_layer[k]` at every site of layer
+`k` (see [`site_layers`](@ref)). The element type of `per_layer` is
+preserved, so a `Unitful` profile feeds a `SiteFieldLatticeHamiltonian`
+directly:
+
+    field = layer_field(lat, [-0.27, -0.03375, -0.01] .* u"eV")
+    h = SiteFieldLatticeHamiltonian(GenericLatticeHamiltonian(0.0, [-0.01], u"eV"), field)
+
+A height profile is physically meaningful only when dimension 3 is
+non-periodic (`periodicity[3] == false`); this is not checked.
+
+Requires a planar basis (all basis z-components equal) and
+`length(per_layer) == d₃` (= `supercell_dimensions[3]`); violations throw
+an `ArgumentError`.
+"""
+function layer_field(lattice::MLattice, per_layer::AbstractVector)
+    _check_planar_basis(:layer_field, lattice)
+    d3 = lattice.supercell_dimensions[3]
+    if length(per_layer) != d3
+        throw(ArgumentError("layer_field requires one value per layer " *
+            "(length(per_layer) == supercell_dimensions[3] == $d3), got " *
+            "$(length(per_layer)) values"))
+    end
+    return per_layer[site_layers(lattice)]
+end
+
+"""
     motif_distances(coords::AbstractVector{<:Tuple}) -> Vector{Float64}
 
 Sorted multiset of the pairwise Euclidean distances of a coordinate

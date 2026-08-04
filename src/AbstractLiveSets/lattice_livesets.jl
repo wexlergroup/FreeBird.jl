@@ -24,6 +24,7 @@ end
 _n_coupled_shells(h::GenericLatticeHamiltonian{N,U}) where {N,U} = N
 _n_coupled_shells(h::MLatticeHamiltonian{C,N,U}) where {C,N,U} = N
 _n_coupled_shells(h::ClusterLatticeHamiltonian{N,U}) where {N,U} = N
+_n_coupled_shells(h::SiteFieldLatticeHamiltonian) = _n_coupled_shells(h.base)
 _n_coupled_shells(h) = nothing
 
 """
@@ -34,7 +35,8 @@ raw-lattice `wang_landau`/`nvt_monte_carlo` entry points): a
 `ClusterLatticeHamiltonian` whose embeddings reference site indices beyond
 the lattice was built for a different lattice; failing here with a
 descriptive `ArgumentError` beats a `BoundsError` from deep inside the
-energy kernel. A no-op for every other Hamiltonian type. The converse
+energy kernel. A `SiteFieldLatticeHamiltonian` delegates the check to its
+wrapped base; a no-op for every other Hamiltonian type. The converse
 mismatch — a Hamiltonian enumerated on a *smaller* lattice, whose indices
 all exist but whose embeddings have wrong geometry — is undetectable from
 indices alone and remains the caller's responsibility: always enumerate on
@@ -52,6 +54,33 @@ function _check_cluster_sites(h::ClusterLatticeHamiltonian, cfg::AbstractLattice
                     "built for a different lattice"))
             end
         end
+    end
+    return nothing
+end
+_check_cluster_sites(h::SiteFieldLatticeHamiltonian, cfg::AbstractLattice) =
+    _check_cluster_sites(h.base, cfg)
+
+"""
+    _check_field_length(hamiltonian, cfg)
+
+One-time check at run setup (the `LatticeGasWalkers` constructor and the
+raw-lattice `wang_landau`/`nvt_monte_carlo` entry points): a
+`SiteFieldLatticeHamiltonian` whose field length differs from the number
+of lattice sites was built for a different lattice; failing here with a
+descriptive `ArgumentError` beats a `DimensionMismatch` from inside the
+energy kernel. A no-op for every other Hamiltonian type. A field of the
+*right* length built for a different lattice of the same size is
+undetectable from the length alone and remains the caller's
+responsibility: always build the field (e.g. with `layer_field`) on the
+lattice being sampled.
+"""
+_check_field_length(hamiltonian, cfg) = nothing
+function _check_field_length(h::SiteFieldLatticeHamiltonian, cfg::AbstractLattice)
+    M = num_sites(cfg)
+    if length(h.field) != M
+        throw(ArgumentError(
+            "the site field has $(length(h.field)) entries but the lattice " *
+            "has $M sites; the Hamiltonian was built for a different lattice"))
     end
     return nothing
 end
@@ -108,6 +137,7 @@ struct  LatticeGasWalkers <: LatticeWalkers
     function LatticeGasWalkers(walkers::Vector{LatticeWalker{C}}, hamiltonian::ClassicalHamiltonian; assign_energy=true, perturb_energy::Float64=0.0) where C
         _warn_uncoupled_shells(walkers, hamiltonian)
         isempty(walkers) || _check_cluster_sites(hamiltonian, walkers[1].configuration)
+        isempty(walkers) || _check_field_length(hamiltonian, walkers[1].configuration)
         if assign_energy
             [assign_energy!(walker, hamiltonian; perturb_energy=perturb_energy) for walker in walkers]
         end

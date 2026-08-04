@@ -24,6 +24,26 @@
             adsorptions=:full)
     end
 
+    # Shared single-component square slab builder, d3 layers of d1 x d2
+    # sites. At d1 = d2 = 2 the first shell wraps the periodic cell (each
+    # in-plane pair is connected through both images), which the default
+    # minimum-image lists warn about at construction; build with
+    # image_multiplicity=true so construction stays silent. The doubled
+    # in-plane bonds are energetically irrelevant everywhere the builder
+    # is used (J = 0 throughout, and the layer helpers never read
+    # neighbor lists).
+    function obs_slab_lattice(d1, d2, d3)
+        MLattice{1,SquareLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)],
+            supercell_dimensions=(d1, d2, d3),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1],
+            components=[[false for _ in 1:d1*d2*d3]],
+            adsorptions=:full,
+            image_multiplicity=true)
+    end
+
     # ================================================================
     @testset "order_parameter_c2x2" begin
         lat = obs_square_lattice(4, 4)
@@ -1421,5 +1441,250 @@
         # N_eff >= 330 across the calibration seeds (floor 200); one point
         # of slack retained, per the square end-to-end precedent
         @test n_gated >= 2
+    end
+
+    # ================================================================
+    @testset "layer helpers: site_layers, layer_coverage, occupancy_profile, layer_field" begin
+        slab = obs_slab_lattice(2, 2, 3)
+
+        # lattice_positions ordering: basis innermost, dimension 1 fastest,
+        # dimension 3 outermost, so layers are contiguous blocks
+        @test site_layers(slab) == [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]
+
+        # Hand coverages: layer 1 full, one site of layer 2, layer 3 empty
+        slab.components[1] .= false
+        slab.components[1][1:4] .= true
+        slab.components[1][6] = true
+        @test layer_coverage(slab, 1) == 1.0
+        @test layer_coverage(slab, 2) == 0.25
+        @test layer_coverage(slab, 3) == 0.0
+        @test occupancy_profile(slab) == [1.0, 0.25, 0.0]
+
+        # mean(occupancy_profile) == N/M holds exactly in Float64: each
+        # n_k/4 is a dyadic rational, their sum is exact, and the single
+        # rounding of /3 equals the single rounding of N/12
+        Random.seed!(29)
+        for _ in 1:20
+            occ = rand(Bool, 12)
+            slab.components[1] .= occ
+            @test mean(occupancy_profile(slab)) == sum(occ) / 12
+        end
+
+        # Two-site planar basis: n_basis enters the layer block size (8/layer)
+        slab2b = MLattice{1,SquareLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0), (0.5, 0.5, 0.0)],
+            supercell_dimensions=(2, 2, 2),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1],
+            components=[[false for _ in 1:16]],
+            adsorptions=:full,
+            image_multiplicity=true)   # d1 = d2 = 2 wraps shell 1; see obs_slab_lattice
+        @test site_layers(slab2b) == vcat(fill(1, 8), fill(2, 8))
+        slab2b.components[1] .= false
+        slab2b.components[1][1:3] .= true
+        @test layer_coverage(slab2b, 1) == 3 / 8
+        @test occupancy_profile(slab2b) == [3 / 8, 0.0]
+
+        # d3 = 1 degenerates to the total coverage (documented, allowed)
+        flat = obs_square_lattice(4, 4)
+        flat.components[1] .= false
+        flat.components[1][1:5] .= true
+        @test site_layers(flat) == fill(1, 16)
+        @test layer_coverage(flat, 1) == 5 / 16
+        @test occupancy_profile(flat) == [5 / 16]
+
+        # layer_field broadcast pins; element type preserved
+        vals = [-0.27, -0.03375, -0.01]
+        @test layer_field(obs_slab_lattice(2, 2, 3), vals) ==
+              vcat(fill(-0.27, 4), fill(-0.03375, 4), fill(-0.01, 4))
+        fu = layer_field(obs_slab_lattice(2, 2, 3), vals .* u"eV")
+        @test eltype(fu) == typeof(1.0u"eV")
+        @test fu == vcat(fill(-0.27, 4), fill(-0.03375, 4), fill(-0.01, 4)) .* u"eV"
+        @test layer_field(flat, [0.5]) == fill(0.5, 16)
+        # ... and the unitful profile feeds SiteFieldLatticeHamiltonian
+        # directly, as the docstring recipe promises
+        @test SiteFieldLatticeHamiltonian(
+            GenericLatticeHamiltonian(0.0, [0.0], u"eV"), fu) isa
+              SiteFieldLatticeHamiltonian
+
+        # Layer bounds: 1 <= layer <= d3
+        @test_throws ArgumentError layer_coverage(obs_slab_lattice(2, 2, 3), 0)
+        @test_throws ArgumentError layer_coverage(obs_slab_lattice(2, 2, 3), 4)
+        @test_throws ArgumentError layer_coverage(flat, 2)
+        # layer_field length must equal d3
+        @test_throws ArgumentError layer_field(obs_slab_lattice(2, 2, 3), [-0.27, -0.01])
+        @test_throws ArgumentError layer_field(flat, [0.5, 0.5])
+        # Non-planar basis: the z-block layer index is ill-defined, so all
+        # four helpers refuse
+        tilted = MLattice{1,SquareLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0), (0.5, 0.5, 0.5)],
+            supercell_dimensions=(2, 2, 2),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1],
+            components=[[false for _ in 1:16]],
+            adsorptions=:full,
+            image_multiplicity=true)
+        @test_throws ArgumentError site_layers(tilted)
+        @test_throws ArgumentError layer_coverage(tilted, 1)
+        @test_throws ArgumentError occupancy_profile(tilted)
+        @test_throws ArgumentError layer_field(tilted, [0.0, 0.0])
+    end
+
+    # ================================================================
+    @testset "end-to-end: inhomogeneous Langmuir slab (2,2,3), site field, igref + theta ledger" begin
+        # J = 0 with the inverse-cube layer profile eps_k = B/k^3,
+        # B = -0.27 eV (the layer_field docstring example): the grand
+        # ensemble factorizes exactly, Xi = prod_k (1 + x_k)^4 with
+        # x_k = e^{beta(mu - eps_k)}, and theta_k = x_k/(1 + x_k), an
+        # independent closed form sharing no code with the field energy
+        # path. First end-to-end trip of a three-dimensional supercell
+        # through enumeration, sampling, and the stats layer.
+        # Statistical NS checks: seed the global RNG (the random_seed field
+        # on the NS parameters is not consumed); the seed is planted after
+        # the enumeration block, which consumes RNG. Tolerances sized at or
+        # above 3x the maximum three-seed deviation at this configuration
+        # (seeds 4701/4702/4703; max observed over the 18 gated points:
+        # |dlnXi| 0.324, |dN| 0.136, |dU| 0.0034, |dtheta| 0.019, every
+        # grid point gated in every seed at N_eff >= 549), sanity-checked
+        # against sigma(lnXi) ~ sqrt(D/K) ~ 0.30 at the full-compression
+        # depth D = 12 log1p(1/0.5) = 13.2 nats.
+        kb = 8.617333262e-5
+
+        M = 12
+        eps_layer = [-0.27, -0.03375, -0.01]     # eV, B/k^3 with B = -0.27
+        slab_at(N) = begin
+            lat = obs_slab_lattice(2, 2, 3)
+            lat.components[1] .= false
+            lat.components[1][1:N] .= true
+            lat
+        end
+        base = GenericLatticeHamiltonian(0.0, [0.0], u"eV")   # J = 0
+        field = layer_field(obs_slab_lattice(2, 2, 3), eps_layer .* u"eV")
+        ham = SiteFieldLatticeHamiltonian(base, field)
+
+        # Independent per-site profile from hardcoded index arithmetic,
+        # sharing no code with site_layers/layer_field
+        site_eps = [eps_layer[(s - 1) ÷ 4 + 1] for s in 1:M]
+        @test field == site_eps .* u"eV"   # welds the two oracles at the entrance
+
+        # Exact per-configuration (E, N, n_k) from fixed-N enumeration of
+        # all 2^12 = 4096 configurations; every energy must be the masked
+        # field sum to 1e-12 eV, the exactness bound applied exhaustively
+        exact_E = Dict{Int,Vector{Float64}}()
+        exact_nk = Dict{Int,Vector{Vector{Int}}}()
+        for N in 0:M
+            df_exact, _ = exact_enumeration(slab_at(N), ham)
+            exact_E[N] = [ustrip(u"eV", e) for e in df_exact.energy]
+            occs = [Vector{Bool}(cfg[1]) for cfg in df_exact.config]
+            @test length(exact_E[N]) == binomial(M, N)
+            for (e, occ) in zip(exact_E[N], occs)
+                @test isapprox(e, sum(site_eps[occ]; init=0.0); atol=1e-12)
+            end
+            exact_nk[N] = [[sum(occ[4k-3:4k]) for k in 1:3] for occ in occs]
+        end
+
+        # Closed forms from the layer factorization
+        langmuir(μ_val, T_val) = begin
+            β = 1 / (kb * T_val)
+            x = exp.(β .* (μ_val .- eps_layer))
+            θ = x ./ (1 .+ x)
+            (logXi=4 * sum(log1p, x), θ=θ,
+             mean_N=4 * sum(θ), mean_U=4 * sum(eps_layer .* θ))
+        end
+
+        # Grand sums from the enumeration, assembled in the log domain
+        function enum_stats(μ_val, T_val)
+            β = 1 / (kb * T_val)
+            lt = Float64[]; Ns = Float64[]; Es = Float64[]
+            th = [Float64[] for _ in 1:3]
+            for N in 0:M, i in eachindex(exact_E[N])
+                push!(lt, N * β * μ_val - β * exact_E[N][i])
+                push!(Ns, N); push!(Es, exact_E[N][i])
+                for k in 1:3
+                    push!(th[k], exact_nk[N][i][k] / 4)
+                end
+            end
+            w = exp.(lt .- maximum(lt)); sw = sum(w)
+            (logXi=maximum(lt) + log(sw),
+             mean_N=sum(w .* Ns) / sw, mean_U=sum(w .* Es) / sw,
+             θ=[sum(w .* th[k]) / sw for k in 1:3])
+        end
+
+        # mu grid inside the igref trust window of z0 = 0.5 at 300 K; the
+        # layers discriminate strongly across it (theta1 ~ 1, theta2 and
+        # theta3 partially filled)
+        μs = [-0.03, -0.015, 0.0]
+        Ts = [300.0, 600.0]
+
+        # Deterministic weld: enumeration == closed form at every grid
+        # point (pure summation, house deterministic tolerance; the
+        # extensive mean_N and mean_U carry a factor-M headroom)
+        for T in Ts, μ in μs
+            ex = langmuir(μ, T); en = enum_stats(μ, T)
+            @test isapprox(en.logXi, ex.logXi; atol=1e-10)
+            @test isapprox(en.mean_N, ex.mean_N; atol=1e-9)
+            @test isapprox(en.mean_U, ex.mean_U; atol=1e-9)
+            @test all(isapprox.(en.θ, ex.θ; atol=1e-10))
+        end
+
+        # ---- igref route recording theta1..theta3 (the sampler-hook
+        # check rides this same run: identical fixture and ledger) ----
+        Random.seed!(4701)
+        z0 = 0.5                     # ln z0 = -0.69 centers the mu grid at 300 K
+        K_ig = 150
+        n_ig = ceil(Int, 1.15 * K_ig * M * log1p(1 / z0)) + 2 * K_ig
+        walkers = [LatticeWalker(deepcopy(slab_at(0)), energy=0.0u"eV", iter=0)
+                   for _ in 1:K_ig]
+        ls = LatticeGasWalkers(walkers, ham; assign_energy=false)
+        params = IdealGasReferencedGCNSParameters(
+            mc_steps=100, reference_fugacity=z0, energy_perturbation=1e-9,
+            allowed_fail_count=100_000)
+        df_ig, final_ig, _ = ideal_gas_referenced_nested_sampling(
+            ls, params, Int64(n_ig), MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3),
+            obs_save;
+            observables=[Symbol(:theta, k) => (cfg -> layer_coverage(cfg, k))
+                         for k in 1:3])
+        obs_cleanup()
+
+        # Ledger integrity: columns, range, and the quarter-integer
+        # lattice of 4-site-layer coverages
+        @test names(df_ig) == ["iter", "emax", "num_particles",
+                               "theta1", "theta2", "theta3"]
+        for col in (df_ig.theta1, df_ig.theta2, df_ig.theta3)
+            @test all(0.0 .<= col .<= 1.0)
+            @test all(isinteger.(4 .* col))
+        end
+
+        live_E = [w.energy.val for w in final_ig.walkers]
+        live_N = [sum(w.configuration.components[1]) for w in final_ig.walkers]
+        live_th = Dict(Symbol(:theta, k) =>
+                       [layer_coverage(w.configuration, k) for w in final_ig.walkers]
+                       for k in 1:3)
+        st = gc_thermodynamic_stats_ideal_ref(df_ig, M, z0, μs, Ts, K_ig;
+            ω0=(K_ig + 1) / K_ig, live_emax=live_E, live_numbers=live_N,
+            observable_cols=[:theta1, :theta2, :theta3], live_observables=live_th)
+
+        # var_U and cov_UN are exercised by the existing end-to-end
+        # testsets; the new code under test here is the field energy and
+        # the theta observables, so those are what the gate asserts
+        n_gated = 0
+        for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
+            st.N_eff[i, j] >= 200 || continue
+            n_gated += 1
+            ex = langmuir(μ, T)
+            @test isapprox(st.logXi[i, j], ex.logXi, atol=1.0)
+            @test isapprox(st.mean_N[i, j], ex.mean_N, atol=0.5)
+            @test isapprox(st.mean_U[i, j], ex.mean_U, atol=0.011)
+            for k in 1:3
+                @test isapprox(st.observables[Symbol(:theta, k)][i, j],
+                               ex.θ[k], atol=0.06)
+            end
+        end
+        # ln z0 centered on the 300 K grid: all six points gated at
+        # N_eff >= 549 across the calibration seeds (floor 200); one
+        # point of slack retained, per the end-to-end precedents
+        @test n_gated >= 5
     end
 end

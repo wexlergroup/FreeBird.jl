@@ -170,4 +170,76 @@
         @test contains(output, "ClusterInteraction{3}")
         @test contains(output, "2 embeddings")
     end
+
+    @testset "SiteFieldLatticeHamiltonian tests" begin
+        base = GenericLatticeHamiltonian(0.0, [0.0], u"eV")
+        h = SiteFieldLatticeHamiltonian(base, [-0.27, -0.03375, -0.01], u"eV")
+        @test h isa SiteFieldLatticeHamiltonian{typeof(base),typeof(1.0u"eV")}
+        @test h.base === base
+        @test h.field == [-0.27, -0.03375, -0.01] .* u"eV"
+        @test length(h.field) == 3
+
+        # The convenience (Float64 + units) and direct (unitful vector)
+        # constructors agree
+        h2 = SiteFieldLatticeHamiltonian(base, [-0.27, -0.03375, -0.01] .* u"eV")
+        @test h2.field == h.field
+
+        # The field is copied, not aliased
+        raw = [-0.1, -0.2] .* u"eV"
+        h_copy = SiteFieldLatticeHamiltonian(base, raw)
+        raw[1] = 0.0u"eV"
+        @test h_copy.field[1] == -0.1u"eV"
+
+        # The field-type rule is "match the base's coupling type", not
+        # "must be eV": an all-meV pairing is legal
+        base_mev = GenericLatticeHamiltonian(-40.0, [-10.0], u"meV")
+        h_mev = SiteFieldLatticeHamiltonian(base_mev, [-1.0, -2.0], u"meV")
+        @test h_mev.field == [-1.0, -2.0] .* u"meV"
+
+        # A cluster Hamiltonian is a legal base (any non-nested
+        # ClassicalHamiltonian with a declared coupling type)
+        pair = GenericLatticeHamiltonian(-1.249, [0.292, 0.090], u"eV")
+        cl = ClusterLatticeHamiltonian(pair, [ClusterInteraction(0.168u"eV", [(1, 2, 3)])])
+        hcl = SiteFieldLatticeHamiltonian(cl, [-0.1, -0.1, -0.1], u"eV")
+        @test hcl.base === cl
+
+        # An MLatticeHamiltonian is a legal base too: the coupling-type
+        # trait reads its shared U parameter
+        mlh = MLatticeHamiltonian(1, [GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")])
+        hml = SiteFieldLatticeHamiltonian(mlh, [-0.1], u"eV")
+        @test hml.base === mlh
+        @test hml isa SiteFieldLatticeHamiltonian{typeof(mlh),typeof(1.0u"eV")}
+
+        # A unitless base is constructible, and the wrapper (including the
+        # delegated base print) shows without error
+        h_unitless = SiteFieldLatticeHamiltonian(
+            GenericLatticeHamiltonian(-0.04, [-0.01]), [0.1, 0.2])
+        buf_u = IOBuffer()
+        show(buf_u, h_unitless)
+        @test contains(String(take!(buf_u)), "field: 2 sites")
+
+        # Empty fields have no meaning: which sites would they cover?
+        @test_throws ArgumentError SiteFieldLatticeHamiltonian(base, Float64[], u"eV")
+        @test_throws ArgumentError SiteFieldLatticeHamiltonian(base, typeof(1.0u"eV")[])
+        # Non-finite entries stall nested sampling silently (Inf >= Inf
+        # ceiling comparisons), the coupling-guard rationale
+        @test_throws ArgumentError SiteFieldLatticeHamiltonian(base, [0.1, Inf], u"eV")
+        @test_throws ArgumentError SiteFieldLatticeHamiltonian(base, [NaN], u"eV")
+        @test_throws ArgumentError SiteFieldLatticeHamiltonian(base, [0.1u"eV", Inf * u"eV"])
+        # Field element type must equal the base coupling type exactly,
+        # mirroring the cluster coupling-type check
+        @test_throws ArgumentError SiteFieldLatticeHamiltonian(base, [0.1, 0.2])
+        @test_throws ArgumentError SiteFieldLatticeHamiltonian(base, [100.0, 200.0] .* u"meV")
+        @test_throws ArgumentError SiteFieldLatticeHamiltonian(base_mev, [-1.0], u"eV")
+        # Nesting is rejected: compose site fields by adding the vectors
+        @test_throws ArgumentError SiteFieldLatticeHamiltonian(h, [-0.1, -0.2, -0.3], u"eV")
+
+        # Show method
+        buf = IOBuffer()
+        show(buf, h)
+        output = String(take!(buf))
+        @test contains(output, "SiteFieldLatticeHamiltonian")
+        @test contains(output, "field: 3 sites")
+        @test contains(output, "base: ")
+    end
 end

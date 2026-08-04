@@ -159,6 +159,42 @@ function interacting_energy(lattice::SLattice, h::ClusterLatticeHamiltonian{N,U}
 end
 
 """
+    site_field_energy(occupations::Vector{Bool}, field::Vector{U})
+
+Energy contribution of a per-site field: the sum of `field[i]` over every
+occupied site `i`. Iteration runs over `eachindex(occupations, field)`, so
+a field whose length differs from the occupation vector (a Hamiltonian
+built for a different lattice) raises a `DimensionMismatch` rather than
+silently summing a truncated or padded range; the liveset constructor and
+the raw-lattice sampler entry points validate the length once up front,
+with a descriptive error.
+"""
+function site_field_energy(occupations::Vector{Bool}, field::Vector{U}) where U
+    e::U = zero(U)
+    for i in eachindex(occupations, field)
+        if occupations[i]
+            e += field[i]
+        end
+    end
+    return e
+end
+
+"""
+    interacting_energy(lattice::SLattice, h::SiteFieldLatticeHamiltonian{H,U})
+
+Total energy under a site-field wrapper: the wrapped base Hamiltonian's
+energy, evaluated exactly as if the base were passed directly (including
+its `on_site_interaction × occupied-adsorption-sites` term), plus the
+occupation-masked field sum of [`site_field_energy`](@ref).
+Single-component (`SLattice`) configurations only.
+"""
+function interacting_energy(lattice::SLattice, h::SiteFieldLatticeHamiltonian{H,U}) where {H,U}
+    e_base::U = interacting_energy(lattice, h.base)
+    e_field::U = site_field_energy(lattice.components[1], h.field)
+    return e_base + e_field
+end
+
+"""
     interacting_energy(lattice::MLattice{C,G}, h::MLatticeHamiltonian{C,N,U})
 
 Compute the interaction energy of a multi-component lattice configuration using the Hamiltonian parameters.

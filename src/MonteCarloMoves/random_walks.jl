@@ -745,13 +745,71 @@ function lattice_delete_particle!(lattice::SLattice)
 end
 
 """
+    lattice_biased_sites(lattice::SLattice; predicate::Symbol=:contact, shells::Int=1)
+
+Return the indices of empty sites selected by an occupancy predicate over
+neighbor shells `1:shells`:
+
+- `:contact`: empty sites with at least one occupied neighbor.
+- `:cavity`: empty sites with no occupied neighbor.
+
+For fixed `shells` the two predicates partition the empty sites:
+`length(contact set) + length(cavity set) == M - N`. Neighbor lists carrying
+periodic-image multiplicity (the same neighbor listed more than once) work
+as-is: any occupied appearance marks contact.
+
+Useful as a nested-sampling observable, e.g.
+`:n_cavity => cfg -> length(lattice_biased_sites(cfg; predicate=:cavity))`.
+
+Throws `ArgumentError` for an unknown predicate, `shells < 1`, or `shells`
+exceeding the lattice's neighbor-shell count.
+"""
+function lattice_biased_sites(lattice::SLattice; predicate::Symbol=:contact, shells::Int=1)
+    if predicate !== :contact && predicate !== :cavity
+        throw(ArgumentError("unknown predicate :$predicate; expected :contact or :cavity"))
+    end
+    if shells < 1
+        throw(ArgumentError("shells must be >= 1, got $shells"))
+    end
+    neighbors = lattice.neighbors
+    n_shells = isempty(neighbors) ? 0 : length(neighbors[1])
+    if shells > n_shells
+        throw(ArgumentError(
+            "the biased-site predicate spans $shells neighbor shells but the " *
+            "lattice provides only $n_shells (= length(cutoff_radii)); " *
+            "extend cutoff_radii so every counted shell exists"))
+    end
+    occ = lattice.components[1]
+    sites = Int[]
+    for site in eachindex(occ)
+        occ[site] && continue
+        has_occupied_neighbor = false
+        for shell in 1:shells
+            for nb in neighbors[site][shell]
+                if occ[nb]
+                    has_occupied_neighbor = true
+                    break
+                end
+            end
+            has_occupied_neighbor && break
+        end
+        if predicate === :contact ? has_occupied_neighbor : !has_occupied_neighbor
+            push!(sites, site)
+        end
+    end
+    return sites
+end
+
+"""
     MC_grand_canonical_walk!(n_steps::Int, lattice::LatticeWalker{1},
                              h::ClassicalHamiltonian, omega_max::Float64,
                              mu::Float64;
                              p_move::Float64=0.5, p_insert::Float64=0.25,
                              energy_perturb::Float64=0.0, n_max::Int=typemax(Int),
                              clusters_freq::Int=0, swaps_freq::Int=1,
-                             cluster_p::Float64=0.3, z0::Float64=1.0)
+                             cluster_p::Float64=0.3, z0::Float64=1.0,
+                             p_bias::Float64=0.0, bias_predicate::Symbol=:contact,
+                             bias_shells::Int=1)
 
 Perform grand-canonical MCMC on a single-component lattice, mixing fixed-N
 moves (local swaps and/or geometric cluster moves) with single-site insertion
@@ -791,6 +849,19 @@ Cluster moves are symmetric (no Metropolis correction), accepted if Ω < Ω_max.
 - `cluster_p::Float64=0.3`: Current cluster growth probability.
 - `z0::Float64=1.0`: Reference fugacity of the prior preserved by insert/delete
   (1.0 = uniform prior over microstates).
+- `p_bias::Float64=0.0`: Probability that an insertion draws its site uniformly
+  from `lattice_biased_sites(x; predicate=bias_predicate, shells=bias_shells)`
+  instead of from all empty sites. The acceptance then uses the composite
+  proposal density evaluated for the actually chosen site, and the deletion
+  acceptance uses the reverse composite density evaluated on the post-deletion
+  configuration (every set quantity on the lower-N member of the pair; the
+  delete ratio's particle count `n` is the pre-delete count), so the
+  `z0`-weighted prior stays invariant. An empty biased set makes the biased
+  sub-channel a null proposal (counted as attempted, nothing changes); a zero
+  reverse density (`p_bias = 1` with the vacated site outside the biased set)
+  is an immediate reject. `0.0` reproduces the legacy sampler bit-for-bit.
+- `bias_predicate::Symbol=:contact`: Biased-set predicate, `:contact` or `:cavity`.
+- `bias_shells::Int=1`: Neighbor shells scanned by the predicate.
 
 # Returns
 - `accept_this_walker::Bool`: Whether at least one move was accepted.
@@ -798,6 +869,11 @@ Cluster moves are symmetric (no Metropolis correction), accepted if Ω < Ω_max.
 - `lattice::LatticeWalker{1}`: The updated walker.
 - `cluster_accepted_count::Int`: Number of accepted cluster moves (for adaptive tuning).
 - `cluster_total_count::Int`: Number of attempted cluster moves (for adaptive tuning).
+- `move_stats::NamedTuple`: Per-move-type attempt/accept counters for the walk:
+  `swap_*`, `cluster_*` (duplicating the two preceding elements),
+  `insert_uniform_*`, `insert_biased_*`, `delete_*`. Attempts are counted at
+  proposal: ceiling rejections included, guard skips excluded, and an
+  empty-biased-set null proposal counts as an attempted biased insert.
 """
 function MC_grand_canonical_walk!(n_steps::Int,
                                   lattice::LatticeWalker{1},
@@ -811,12 +887,34 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                   clusters_freq::Int=0,
                                   swaps_freq::Int=1,
                                   cluster_p::Float64=0.3,
-                                  z0::Float64=1.0)
+                                  z0::Float64=1.0,
+                                  p_bias::Float64=0.0,
+                                  bias_predicate::Symbol=:contact,
+                                  bias_shells::Int=1)
     if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
         throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
     end
     if z0 <= 0.0
         throw(ArgumentError("z0 must be positive"))
+    end
+    if !(0.0 <= p_bias <= 1.0)
+        throw(ArgumentError("p_bias must satisfy 0 <= p_bias <= 1"))
+    end
+    if bias_predicate !== :contact && bias_predicate !== :cavity
+        throw(ArgumentError("unknown bias_predicate :$bias_predicate; expected :contact or :cavity"))
+    end
+    if bias_shells < 1
+        throw(ArgumentError("bias_shells must be >= 1, got $bias_shells"))
+    end
+    if p_bias > 0.0
+        nbrs = lattice.configuration.neighbors
+        n_lattice_shells = isempty(nbrs) ? 0 : length(nbrs[1])
+        if bias_shells > n_lattice_shells
+            throw(ArgumentError(
+                "the biased insertion channel spans $bias_shells neighbor shells but the " *
+                "lattice provides only $n_lattice_shells (= length(cutoff_radii)); " *
+                "extend cutoff_radii so every counted shell exists"))
+        end
     end
 
     n_accept = 0
@@ -832,6 +930,21 @@ function MC_grand_canonical_walk!(n_steps::Int,
 
     cluster_accepted_count = 0
     cluster_total_count = 0
+    swap_attempted = 0
+    swap_accepted = 0
+    insert_uniform_attempted = 0
+    insert_uniform_accepted = 0
+    insert_biased_attempted = 0
+    insert_biased_accepted = 0
+    delete_attempted = 0
+    delete_accepted = 0
+
+    # Reused inside the loop only when p_bias > 0 (the default path never
+    # computes biased sets)
+    biased_set = Int[]
+    insert_site = 0
+    insert_from_biased = false
+    deleted_site = 0
 
     for _ in 1:n_steps
         r = rand()
@@ -849,26 +962,68 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 # Local swap
                 lattice_random_walk!(proposed_lattice)
                 move_type = :move
+                swap_attempted += 1
             end
         elseif r < p_move + p_insert
             # Insertion
             if n >= n_cap || p_insert <= 0.0
-                continue
+                continue                # guard skip: not counted as an attempt
             end
-            success, proposed_lattice = lattice_insert_particle!(proposed_lattice)
-            if !success
-                continue
+            if p_bias > 0.0
+                # Composite channel. S(x) is computed ONCE per attempt and
+                # reused for both the biased draw and the composite proposal
+                # density in the acceptance below.
+                biased_set = lattice_biased_sites(proposed_lattice;
+                                                  predicate=bias_predicate,
+                                                  shells=bias_shells)
+                if rand() < p_bias
+                    insert_biased_attempted += 1
+                    if isempty(biased_set)
+                        continue        # null proposal: counted, no further draws
+                    end
+                    insert_site = rand(biased_set)
+                    insert_from_biased = true
+                else
+                    # Uniform sub-channel: the same single rand(::Vector) draw
+                    # as lattice_insert_particle!, inlined to capture the site
+                    # for the composite density (keep in lockstep with it)
+                    insert_uniform_attempted += 1
+                    empty_sites = findall(.!proposed_lattice.components[1])
+                    insert_site = rand(empty_sites)
+                    insert_from_biased = false
+                end
+                proposed_lattice.components[1][insert_site] = true
+            else
+                # p_bias == 0: legacy path, bit-identical RNG stream (no
+                # channel draw; lattice_insert_particle! draws exactly once)
+                success, proposed_lattice = lattice_insert_particle!(proposed_lattice)
+                if !success
+                    continue
+                end
+                insert_uniform_attempted += 1
+                insert_from_biased = false
             end
             move_type = :insert
         else
-            # Deletion
+            # Deletion: site selection is uniform over occupied sites in both
+            # paths; only the acceptance differs
             if n == 0 || p_delete <= 0.0
-                continue
+                continue                # guard skip: not counted as an attempt
             end
-            success, proposed_lattice = lattice_delete_particle!(proposed_lattice)
-            if !success
-                continue
+            if p_bias > 0.0
+                # Inlined uniform deletion (the same single rand(::Vector)
+                # draw as lattice_delete_particle!) to capture the vacated
+                # site for the reverse composite density (keep in lockstep)
+                occupied_sites = findall(proposed_lattice.components[1])
+                deleted_site = rand(occupied_sites)
+                proposed_lattice.components[1][deleted_site] = false
+            else
+                success, proposed_lattice = lattice_delete_particle!(proposed_lattice)
+                if !success
+                    continue
+                end
             end
+            delete_attempted += 1
             move_type = :delete
         end
 
@@ -886,14 +1041,45 @@ function MC_grand_canonical_walk!(n_steps::Int,
         # Cluster and local swap moves are symmetric — no correction needed
         accept = true
         if move_type == :insert
-            ratio = z0 * (p_delete / p_insert) * (n_sites - n) / (n + 1)
+            if p_bias > 0.0
+                # Composite forward density for the ACTUAL chosen site
+                q_fwd = p_insert * ((insert_site in biased_set ?
+                                         p_bias / length(biased_set) : 0.0) +
+                                    (1.0 - p_bias) / (n_sites - n))
+                ratio = z0 * p_delete / ((n + 1) * q_fwd)
+            else
+                # Legacy expression kept literally: bit-identical arithmetic
+                ratio = z0 * (p_delete / p_insert) * (n_sites - n) / (n + 1)
+            end
             if ratio < 1.0 && rand() >= ratio
                 accept = false
             end
         elseif move_type == :delete
-            ratio = (p_insert / p_delete) * n / (z0 * (n_sites - n + 1))
-            if ratio < 1.0 && rand() >= ratio
-                accept = false
+            if p_bias > 0.0
+                # Reverse composite density on the POST-deletion configuration
+                rev_set = lattice_biased_sites(proposed_lattice;
+                                               predicate=bias_predicate,
+                                               shells=bias_shells)
+                q_rev = p_insert * ((deleted_site in rev_set ?
+                                         p_bias / length(rev_set) : 0.0) +
+                                    (1.0 - p_bias) / (n_sites - n + 1))
+                if q_rev == 0.0
+                    # Only reachable at p_bias == 1 with the vacated site
+                    # outside S(x'): reject with no MH rand draw
+                    accept = false
+                else
+                    # n is the pre-delete particle count (docstring convention)
+                    ratio = n * q_rev / (z0 * p_delete)
+                    if ratio < 1.0 && rand() >= ratio
+                        accept = false
+                    end
+                end
+            else
+                # Legacy expression kept literally: bit-identical arithmetic
+                ratio = (p_insert / p_delete) * n / (z0 * (n_sites - n + 1))
+                if ratio < 1.0 && rand() >= ratio
+                    accept = false
+                end
             end
         end
 
@@ -904,10 +1090,27 @@ function MC_grand_canonical_walk!(n_steps::Int,
             accept_this_walker = true
             if move_type == :cluster
                 cluster_accepted_count += 1
+            elseif move_type == :move
+                swap_accepted += 1
+            elseif move_type == :insert
+                if insert_from_biased
+                    insert_biased_accepted += 1
+                else
+                    insert_uniform_accepted += 1
+                end
+            else # :delete
+                delete_accepted += 1
             end
         end
     end
 
     return accept_this_walker, n_accept / max(n_steps, 1), lattice,
-           cluster_accepted_count, cluster_total_count
+           cluster_accepted_count, cluster_total_count,
+           (swap_attempted=swap_attempted, swap_accepted=swap_accepted,
+            cluster_attempted=cluster_total_count, cluster_accepted=cluster_accepted_count,
+            insert_uniform_attempted=insert_uniform_attempted,
+            insert_uniform_accepted=insert_uniform_accepted,
+            insert_biased_attempted=insert_biased_attempted,
+            insert_biased_accepted=insert_biased_accepted,
+            delete_attempted=delete_attempted, delete_accepted=delete_accepted)
 end

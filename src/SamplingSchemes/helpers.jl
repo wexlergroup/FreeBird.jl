@@ -84,3 +84,19 @@ function _accumulate_cluster_stats!(params::SamplingParameters, mc_routine,
     end
     return params
 end
+
+"""
+    _accumulate_move_stats!(params::SamplingParameters, stats::NamedTuple)
+
+Merge one decorrelation walk's per-move-type attempt/accept counters into
+`params.move_stats` as run totals. Unlike the window-reset cluster counters
+handled by `_accumulate_cluster_stats!`, these are never reset during a run
+(the drivers clear them once at run start). Shared by the grand-canonical
+`nested_sampling_step!` methods.
+"""
+function _accumulate_move_stats!(params::SamplingParameters, stats::NamedTuple)
+    for (key, count) in pairs(stats)
+        params.move_stats[key] = get(params.move_stats, key, 0) + count
+    end
+    return params
+end

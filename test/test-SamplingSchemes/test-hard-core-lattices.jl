@@ -432,4 +432,62 @@
         # Kish N_eff degrades away from the run's z0
         @test stats.N_eff[4, 1] < stats.N_eff[2, 1]
     end
+
+    # ================================================================
+    @testset "biased :cavity walk samples the restricted prior (hard squares)" begin
+        # Fixed ceiling J/2 in (0, J) with mu = 0, z0 = 1: the only reachable
+        # states are independent sets (E = J x violations), and the walk's
+        # stationary law is the RESTRICTED Bernoulli prior
+        # P(N) = g_N / sum(g) = g_N / 743.
+        # A fixed-ceiling walk is used instead of an NS dead-point histogram:
+        # dead points are moving-ceiling order statistics with no closed-form
+        # N-marginal, while this chain has an exact target, and it exercises
+        # the composite kernel directly, including the isolated-particle
+        # delete branch (on an independent set every occupied site is
+        # isolated, so every deletion takes that branch).
+        Random.seed!(158)
+        template_bc = hc_square()
+        template_bc.components[1] .= false
+        walker_bc = LatticeWalker(template_bc, energy=0.0u"eV", iter=0)
+        wcap = J / 2
+        gc_walk!(n) = MC_grand_canonical_walk!(n, walker_bc, ham_hc, wcap, 0.0;
+            p_move=0.4, p_insert=0.3, z0=1.0,
+            p_bias=0.9, bias_predicate=:cavity, bias_shells=1)
+        gc_walk!(500)   # burn-in from the empty (allowed) state
+
+        n_samples = 12_000
+        counts = zeros(Int, M_sq + 1)
+        rate_sum = 0.0
+        all_independent = true
+        for _ in 1:n_samples
+            _, r, _, _, _, _ = gc_walk!(15)   # 15-step decorrelation blocks
+            occ = walker_bc.configuration.components[1]
+            all_independent &= violation_count(masks_sq, occ) == 0
+            counts[sum(occ) + 1] += 1
+            rate_sum += r
+        end
+
+        # The ceiling was never breached: every sample is an independent set
+        @test all_independent
+        @test all(counts[10:end] .== 0)   # g_N = 0 for N > 8
+
+        # Multinomial gates: p_N = g_N/743, sigma = sqrt(p(1-p)/n) at
+        # n = 12000, with mild residual autocorrelation from the 15-step
+        # blocks. Three-seed calibration (seeds 158/159/160): max |dev| =
+        # 2.3 iid-sigma, zero tail counts, acceptance rate 0.70 on every
+        # seed; the shipped k = 7 is >= 3x the maximum. Discrimination: an
+        # uncorrected biased kernel distorts P(N) at the tens-of-percent
+        # level, orders above these gates.
+        Zg = sum(g_sq)   # = 743
+        for N in 0:8
+            p = g_sq[N + 1] / Zg
+            sig = sqrt(p * (1 - p) / n_samples)
+            @test abs(counts[N + 1] / n_samples - p) < 7 * sig
+        end
+
+        # Acceptance sanity: cavity insertions never create a violation, so
+        # the ceiling never rejects the biased branch; only the MH factor
+        # can. A soft floor pins that the kernel is not ceiling-starved.
+        @test rate_sum / n_samples > 0.1
+    end
 end

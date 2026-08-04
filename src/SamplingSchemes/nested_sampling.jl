@@ -277,11 +277,23 @@ particle insertion and deletion.
 - `cluster_adjust_interval::Int`: Number of NS iterations between cluster p adjustments (default 50).
 - `cluster_p_floor::Float64`: Lower bound for adaptive cluster p (default 0.01).
 - `cluster_p_ceiling::Float64`: Upper bound for adaptive cluster p (default 1.0).
+- `p_bias::Float64`: Probability an insertion draws from the biased site set
+  (default 0.0 = legacy uniform insertions).
+- `bias_predicate::Symbol`: Biased-set predicate, `:contact` or `:cavity`
+  (default `:contact`).
+- `bias_shells::Int`: Neighbor shells scanned by the predicate (default 1).
 
 When `clusters_freq == 0` (the default), the fixed-N branch uses only local swaps
 (`lattice_random_walk!`), preserving backward compatibility with existing scripts.
 When `clusters_freq > 0`, the fixed-N branch mixes geometric cluster moves with
 local swaps according to the `clusters_freq:swaps_freq` ratio.
+
+With `p_bias > 0` insertions mix a sub-channel restricted to
+`lattice_biased_sites(x; predicate=bias_predicate, shells=bias_shells)` into
+the uniform proposal; the walk's composite Metropolis-Hastings correction
+keeps the sampled prior unchanged. `p_bias = 1.0` constructs but warns: the
+pure biased channel freezes N whenever the biased set is empty, so the
+uniform sub-channel is what repairs ergodicity.
 """
 struct MCGrandCanonicalMoves <: MCRoutine
     p_move::Float64
@@ -293,6 +305,9 @@ struct MCGrandCanonicalMoves <: MCRoutine
     cluster_adjust_interval::Int
     cluster_p_floor::Float64
     cluster_p_ceiling::Float64
+    p_bias::Float64
+    bias_predicate::Symbol
+    bias_shells::Int
     function MCGrandCanonicalMoves(;
             p_move::Float64=0.5,
             p_insert::Float64=0.25,
@@ -302,13 +317,32 @@ struct MCGrandCanonicalMoves <: MCRoutine
             target_cluster_accept::Float64=0.3,
             cluster_adjust_interval::Int=50,
             cluster_p_floor::Float64=0.01,
-            cluster_p_ceiling::Float64=1.0)
+            cluster_p_ceiling::Float64=1.0,
+            p_bias::Float64=0.0,
+            bias_predicate::Symbol=:contact,
+            bias_shells::Int=1)
         if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
             throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
         end
+        if !(0.0 <= p_bias <= 1.0)
+            throw(ArgumentError("p_bias must satisfy 0 <= p_bias <= 1"))
+        end
+        if bias_predicate !== :contact && bias_predicate !== :cavity
+            throw(ArgumentError("unknown bias_predicate :$bias_predicate; expected :contact or :cavity"))
+        end
+        if bias_shells < 1
+            throw(ArgumentError("bias_shells must be >= 1, got $bias_shells"))
+        end
+        if p_bias == 1.0
+            @warn "p_bias = 1.0: the pure biased insertion channel freezes N whenever " *
+                  "the biased set is empty (every insertion becomes a null proposal and " *
+                  "the matching deletions auto-reject); keep p_bias < 1 so the uniform " *
+                  "sub-channel repairs ergodicity."
+        end
         new(p_move, p_insert, clusters_freq, swaps_freq,
             initial_cluster_p, target_cluster_accept, cluster_adjust_interval,
-            cluster_p_floor, cluster_p_ceiling)
+            cluster_p_floor, cluster_p_ceiling,
+            p_bias, bias_predicate, bias_shells)
     end
 end
 
@@ -336,6 +370,9 @@ for thermodynamic reweighting.
 - `cluster_p_history::Vector{Float64}`: Trajectory of cluster_p after each adjustment.
 - `cluster_accept_history::Vector{Float64}`: Acceptance rate at each adjustment.
 - `cluster_adjust_iterations::Vector{Int}`: NS iteration index at each adjustment.
+- `move_stats::Dict{Symbol,Int}`: Run-total per-move-type attempt/accept counters
+  accumulated from every decorrelation walk (keys match the walk's `move_stats`
+  NamedTuple; cleared once at run start, never window-reset).
 """
 mutable struct GrandCanonicalNestedSamplingParameters <: SamplingParameters
     mc_steps::Int64
@@ -352,6 +389,7 @@ mutable struct GrandCanonicalNestedSamplingParameters <: SamplingParameters
     cluster_p_history::Vector{Float64}
     cluster_accept_history::Vector{Float64}
     cluster_adjust_iterations::Vector{Int}
+    move_stats::Dict{Symbol,Int}
 end
 
 """
@@ -361,7 +399,7 @@ end
         init_occupation_p=0.5, n_max=typemax(Int64),
         cluster_p=0.3, cluster_accepted=0.0, cluster_total=0.0,
         cluster_p_history=Float64[], cluster_accept_history=Float64[],
-        cluster_adjust_iterations=Int[])
+        cluster_adjust_iterations=Int[], move_stats=Dict{Symbol,Int}())
 
 Convenience constructor for `GrandCanonicalNestedSamplingParameters`.
 
@@ -371,6 +409,10 @@ Insertions are rejected when N ≥ n_max. Default is `typemax(Int64)` (no cap).
 The `cluster_*` fields are mutable runtime state for adaptive cluster move tuning.
 They are initialized from the static configuration on `MCGrandCanonicalMoves` at
 the start of `grand_canonical_nested_sampling` when `clusters_freq > 0`.
+
+`move_stats` holds run-total per-move-type attempt/accept counters accumulated
+from every decorrelation walk (keys match the walk's `move_stats` NamedTuple;
+never window-reset, cleared once at the start of each run).
 """
 function GrandCanonicalNestedSamplingParameters(;
     mc_steps::Int64=100,
@@ -387,6 +429,7 @@ function GrandCanonicalNestedSamplingParameters(;
     cluster_p_history::Vector{Float64}=Float64[],
     cluster_accept_history::Vector{Float64}=Float64[],
     cluster_adjust_iterations::Vector{Int}=Int[],
+    move_stats::Dict{Symbol,Int}=Dict{Symbol,Int}(),
 )
     GrandCanonicalNestedSamplingParameters(
         mc_steps, chemical_potential, energy_perturbation,
@@ -394,6 +437,7 @@ function GrandCanonicalNestedSamplingParameters(;
         init_occupation_p, n_max,
         cluster_p, cluster_accepted, cluster_total,
         cluster_p_history, cluster_accept_history, cluster_adjust_iterations,
+        move_stats,
     )
 end
 
@@ -1271,14 +1315,17 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     to_walk = deepcopy(ats[parent_idx])
 
     # Decorrelate via GC MCMC
-    accept, rate, to_walk, cl_accepted, cl_total = MC_grand_canonical_walk!(
+    accept, rate, to_walk, cl_accepted, cl_total, move_stats = MC_grand_canonical_walk!(
         gc_params.mc_steps, to_walk, h, omega_max_val, mu;
         p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
         energy_perturb=gc_params.energy_perturbation,
         n_max=gc_params.n_max,
         clusters_freq=mc_routine.clusters_freq,
         swaps_freq=mc_routine.swaps_freq,
-        cluster_p=gc_params.cluster_p)
+        cluster_p=gc_params.cluster_p,
+        p_bias=mc_routine.p_bias,
+        bias_predicate=mc_routine.bias_predicate,
+        bias_shells=mc_routine.bias_shells)
 
     if accept
         push!(ats, to_walk)
@@ -1295,6 +1342,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
 
     # Accumulate cluster acceptance stats and adapt cluster_p
     _accumulate_cluster_stats!(gc_params, mc_routine, cl_accepted, cl_total, ns_iteration)
+    _accumulate_move_stats!(gc_params, move_stats)
 
     return iter, omega_worst, energy_worst, n_worst, liveset, gc_params
 end
@@ -1345,6 +1393,9 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
         empty!(gc_params.cluster_accept_history)
         empty!(gc_params.cluster_adjust_iterations)
     end
+    # Run-total per-move-type counters: always reset, independent of the
+    # cluster-move configuration above
+    empty!(gc_params.move_stats)
 
     df = DataFrame(iter=Int[], omega=Float64[], energy=Float64[], num_particles=Int[])
     if observables !== nothing
@@ -1462,6 +1513,9 @@ truncate the prior support and bias Ξ.
 - `cluster_p_history::Vector{Float64}`: Trajectory of cluster_p after each adjustment.
 - `cluster_accept_history::Vector{Float64}`: Acceptance rate at each adjustment.
 - `cluster_adjust_iterations::Vector{Int}`: NS iteration index at each adjustment.
+- `move_stats::Dict{Symbol,Int}`: Run-total per-move-type attempt/accept counters
+  accumulated from every decorrelation walk (keys match the walk's `move_stats`
+  NamedTuple; cleared once at run start, never window-reset).
 """
 mutable struct IdealGasReferencedGCNSParameters <: SamplingParameters
     mc_steps::Int64
@@ -1476,6 +1530,7 @@ mutable struct IdealGasReferencedGCNSParameters <: SamplingParameters
     cluster_p_history::Vector{Float64}
     cluster_accept_history::Vector{Float64}
     cluster_adjust_iterations::Vector{Int}
+    move_stats::Dict{Symbol,Int}
 end
 
 """
@@ -1484,7 +1539,7 @@ end
         random_seed=1234, fail_count=0, allowed_fail_count=10,
         cluster_p=0.3, cluster_accepted=0.0, cluster_total=0.0,
         cluster_p_history=Float64[], cluster_accept_history=Float64[],
-        cluster_adjust_iterations=Int[])
+        cluster_adjust_iterations=Int[], move_stats=Dict{Symbol,Int}())
 
 Convenience constructor for `IdealGasReferencedGCNSParameters`.
 
@@ -1496,6 +1551,10 @@ degrades as `|βμ − ln z0|` grows (roughly beyond `1/√Var(N)`).
 The `cluster_*` fields are mutable runtime state for adaptive cluster move
 tuning, initialized from the static configuration on `MCGrandCanonicalMoves`
 at the start of `ideal_gas_referenced_nested_sampling` when `clusters_freq > 0`.
+
+`move_stats` holds run-total per-move-type attempt/accept counters accumulated
+from every decorrelation walk (keys match the walk's `move_stats` NamedTuple;
+never window-reset, cleared once at the start of each run).
 """
 function IdealGasReferencedGCNSParameters(;
     mc_steps::Int64=100,
@@ -1510,6 +1569,7 @@ function IdealGasReferencedGCNSParameters(;
     cluster_p_history::Vector{Float64}=Float64[],
     cluster_accept_history::Vector{Float64}=Float64[],
     cluster_adjust_iterations::Vector{Int}=Int[],
+    move_stats::Dict{Symbol,Int}=Dict{Symbol,Int}(),
 )
     if reference_fugacity <= 0.0
         throw(ArgumentError("reference_fugacity must be positive"))
@@ -1523,6 +1583,7 @@ function IdealGasReferencedGCNSParameters(;
         random_seed, fail_count, allowed_fail_count,
         cluster_p, cluster_accepted, cluster_total,
         cluster_p_history, cluster_accept_history, cluster_adjust_iterations,
+        move_stats,
     )
 end
 
@@ -1597,14 +1658,17 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     # Decorrelate via GC MCMC: with mu = 0 the Ω ceiling reduces to an energy
     # ceiling, and z0 weights the insert/delete acceptance to preserve the
     # Bernoulli(z0/(1+z0)) prior
-    accept, rate, to_walk, cl_accepted, cl_total = MC_grand_canonical_walk!(
+    accept, rate, to_walk, cl_accepted, cl_total, move_stats = MC_grand_canonical_walk!(
         params.mc_steps, to_walk, h, emax_val, 0.0;
         p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
         energy_perturb=params.energy_perturbation,
         z0=params.reference_fugacity,
         clusters_freq=mc_routine.clusters_freq,
         swaps_freq=mc_routine.swaps_freq,
-        cluster_p=params.cluster_p)
+        cluster_p=params.cluster_p,
+        p_bias=mc_routine.p_bias,
+        bias_predicate=mc_routine.bias_predicate,
+        bias_shells=mc_routine.bias_shells)
 
     if accept
         push!(ats, to_walk)
@@ -1620,6 +1684,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
 
     # Accumulate cluster acceptance stats and adapt cluster_p
     _accumulate_cluster_stats!(params, mc_routine, cl_accepted, cl_total, ns_iteration)
+    _accumulate_move_stats!(params, move_stats)
 
     return iter, emax_worst, n_worst, liveset, params
 end
@@ -1679,6 +1744,9 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
         empty!(params.cluster_accept_history)
         empty!(params.cluster_adjust_iterations)
     end
+    # Run-total per-move-type counters: always reset, independent of the
+    # cluster-move configuration above
+    empty!(params.move_stats)
 
     df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[])
     if observables !== nothing

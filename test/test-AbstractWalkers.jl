@@ -719,7 +719,10 @@
                     adsorptions=custom_adsorptions
                 )
                 
-                @test lattice.lattice_vectors ≈ [2.0 0.0 0.0; 0.0 2.0 0.0; 0.0 0.0 1.0]
+                # Isotropic default: the stored third diagonal now follows
+                # lattice_constant (at d3 = 1 the z axis never enters
+                # positions, so the geometry is unchanged)
+                @test lattice.lattice_vectors ≈ [2.0 0.0 0.0; 0.0 2.0 0.0; 0.0 0.0 2.0]
                 @test lattice.basis == custom_basis
                 @test lattice.supercell_dimensions == custom_dims
                 @test lattice.periodicity == custom_periodicity
@@ -762,13 +765,104 @@
                     adsorptions=custom_adsorptions
                 )
             
-                @test lattice.lattice_vectors ≈ [2.0 0.0 0.0; 0.0 2.0*sqrt(3) 0.0; 0.0 0.0 1.0]
+                # Isotropic default: see the square-constructor twin above
+                @test lattice.lattice_vectors ≈ [2.0 0.0 0.0; 0.0 2.0*sqrt(3) 0.0; 0.0 0.0 2.0]
                 @test lattice.basis == custom_basis
                 @test lattice.supercell_dimensions == custom_dims
                 @test lattice.periodicity == custom_periodicity
                 @test length(lattice.neighbors) == 4
                 @test length(lattice.components) == 2
                 @test count(lattice.adsorptions) == 2
+            end
+
+            @testset "Interlayer spacing" begin
+                # Isotropic fix: with lattice_constant = 2.0 the out-of-plane
+                # spacing now follows it, so the nearest-neighbor shell mixes
+                # in-plane and interlayer bonds at the same distance 2.0
+                # (previously the interlayer bonds sat at 1.0, silently)
+                iso = MLattice{1,SquareLattice}(
+                    lattice_constant=2.0,
+                    supercell_dimensions=(3, 3, 2),
+                    cutoff_radii=[2.2],
+                    components=[[false for _ in 1:18]]
+                )
+                @test iso.lattice_vectors[3, 3] == 2.0
+                # lattice_positions ordering: dimension 3 outermost, so the
+                # second layer is the second block of 9 sites
+                @test iso.positions[:, 3] == vcat(zeros(9), fill(2.0, 9))
+                # 4 in-plane + 1 axial on the two-layer slab (z non-periodic)
+                @test all(length(iso.neighbors[s][1]) == 5 for s in 1:18)
+                @test all((s + 9) in iso.neighbors[s][1] for s in 1:9)
+
+                # Old-geometry reproduction: interlayer_spacing = 1.0 restores
+                # the pre-change mixed-scale positions exactly
+                old = MLattice{1,SquareLattice}(
+                    lattice_constant=2.0,
+                    interlayer_spacing=1.0,
+                    supercell_dimensions=(3, 3, 2),
+                    cutoff_radii=[2.2],
+                    components=[[false for _ in 1:18]]
+                )
+                @test old.lattice_vectors[3, 3] == 1.0
+                @test old.positions[:, 3] == vcat(zeros(9), ones(9))
+
+                # Tetragonal shell separation: a = 1.0, c = 1.25 with the
+                # ladder [1.1, 1.35] puts in-plane bonds alone in shell 1 and
+                # interlayer bonds alone in shell 2 (next distance sqrt(2) ≈
+                # 1.414 excluded); construction is silent (in-plane
+                # circumference 3 > 2*1.1, no collapsed images; no empty shell)
+                tet = @test_logs min_level = Base.CoreLogging.Warn MLattice{1,SquareLattice}(
+                    lattice_constant=1.0,
+                    interlayer_spacing=1.25,
+                    supercell_dimensions=(3, 3, 2),
+                    cutoff_radii=[1.1, 1.35],
+                    components=[[false for _ in 1:18]]
+                )
+                @test all(length(tet.neighbors[s][1]) == 4 for s in 1:18)
+                @test all(length(tet.neighbors[s][2]) == 1 for s in 1:18)
+                @test all(tet.neighbors[s][2] == [s + 9] for s in 1:9)
+                # Three layers: the middle layer has axial neighbors both ways
+                tet3 = MLattice{1,SquareLattice}(
+                    lattice_constant=1.0,
+                    interlayer_spacing=1.25,
+                    supercell_dimensions=(3, 3, 3),
+                    cutoff_radii=[1.1, 1.35],
+                    components=[[false for _ in 1:27]]
+                )
+                @test all(length(tet3.neighbors[s][2]) == 1 for s in 1:9)
+                @test all(length(tet3.neighbors[s][2]) == 2 for s in 10:18)
+                @test all(length(tet3.neighbors[s][2]) == 1 for s in 19:27)
+
+                # Default-path no-change: an explicit spacing equal to
+                # lattice_constant reproduces the default element for element
+                expl = MLattice{1,SquareLattice}(
+                    lattice_constant=2.0,
+                    interlayer_spacing=2.0,
+                    supercell_dimensions=(3, 3, 2),
+                    cutoff_radii=[2.2],
+                    components=[[false for _ in 1:18]]
+                )
+                @test expl.positions == iso.positions
+                @test expl.neighbors == iso.neighbors
+
+                # Guard paths: finite and strictly positive
+                @test_throws ArgumentError MLattice{1,SquareLattice}(
+                    interlayer_spacing=0.0, components=[[false for _ in 1:16]])
+                @test_throws ArgumentError MLattice{1,SquareLattice}(
+                    interlayer_spacing=-1.0, components=[[false for _ in 1:16]])
+                @test_throws ArgumentError MLattice{1,SquareLattice}(
+                    interlayer_spacing=Inf, components=[[false for _ in 1:16]])
+                @test_throws ArgumentError MLattice{1,TriangularLattice}(
+                    interlayer_spacing=0.0, components=[[false for _ in 1:16]])
+
+                # Triangular acceptance: keyword lands in the third vector
+                tri = MLattice{1,TriangularLattice}(
+                    supercell_dimensions=(4, 2, 2),
+                    interlayer_spacing=1.25,
+                    cutoff_radii=[1.1, 1.3],
+                    components=[[false for _ in 1:32]]
+                )
+                @test tri.lattice_vectors ≈ [1.0 0.0 0.0; 0.0 sqrt(3) 0.0; 0.0 0.0 1.25]
             end
 
             @testset "Error handling" begin

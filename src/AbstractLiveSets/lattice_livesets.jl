@@ -3,21 +3,33 @@ abstract type LatticeWalkers <: AbstractLiveSet end
 
 
 """
-    assign_energy!(walker::LatticeWalker{C}, hamiltonian::LatticeGasHamiltonian; perturb_energy::Float64=0.0)
+    assign_energy!(walker::LatticeWalker{C}, hamiltonian::ClassicalHamiltonian; perturb_energy::Float64=0.0)
 
 Assigns energy to the given `walker` based on the `hamiltonian`. If `perturb_energy` is non-zero, a small random perturbation is added to the energy.
 
+The energy comes from `interacting_energy(walker.configuration, hamiltonian)`, which must return an energy-dimensioned `Unitful.Quantity` (eV-convertible); a method returning anything else, e.g. a plain `Float64` from a custom Hamiltonian, raises a descriptive `ArgumentError` here rather than a `DimensionError` from the assignment arithmetic. This is the one return-type obligation of the custom-Hamiltonian extension contract (see the Custom Hamiltonians documentation page).
+
 # Arguments
 - `walker::LatticeWalker{C}`: The walker to assign energy to.
-- `hamiltonian::LatticeGasHamiltonian`: The Hamiltonian used to calculate the energy.
+- `hamiltonian::ClassicalHamiltonian`: The Hamiltonian used to calculate the energy.
 - `perturb_energy::Float64=0.0`: The amount of random perturbation to add to the energy.
 
 # Returns
 - `walker::LatticeWalker{C}`: The walker with the assigned energy.
 """
 function assign_energy!(walker::LatticeWalker{C}, hamiltonian::ClassicalHamiltonian; perturb_energy::Float64=0.0) where C
+    raw = interacting_energy(walker.configuration, hamiltonian)
+    if !(raw isa Unitful.Energy)
+        throw(ArgumentError(
+            "interacting_energy must return an energy-dimensioned " *
+            "Unitful.Quantity (eV-convertible) for walker energies; got " *
+            "$(typeof(raw)) from the $(nameof(typeof(hamiltonian))) " *
+            "Hamiltonian. Custom Hamiltonians subtype ClassicalHamiltonian " *
+            "and return e.g. `x * u\"eV\"` from their interacting_energy " *
+            "method."))
+    end
     # Assign the energy to the walker and, if perturb_energy is non-zero, give all walkers a small random (positive or negative) perturbation
-    walker.energy = interacting_energy(walker.configuration, hamiltonian) + perturb_energy * (rand() - 0.5) * unit(walker.energy)
+    walker.energy = raw + perturb_energy * (rand() - 0.5) * unit(walker.energy)
     return walker
 end
 
@@ -125,10 +137,10 @@ The `LatticeGasWalkers` struct represents a collection of lattice walkers for a 
 
 # Fields
 - `walkers::Vector{LatticeWalker{C}}`: A vector of lattice walkers.
-- `hamiltonian::LatticeGasHamiltonian`: The lattice gas Hamiltonian associated with the walkers.
+- `hamiltonian::ClassicalHamiltonian`: The lattice Hamiltonian associated with the walkers.
 
 # Constructors
-- `LatticeGasWalkers(walkers::Vector{LatticeWalker{C}}, hamiltonian::LatticeGasHamiltonian; assign_energy=true, perturb_energy::Float64=0.0)`: Constructs a new `LatticeGasWalkers` object with the given walkers and Hamiltonian. If `assign_energy` is `true`, the energy of each walker is assigned using the provided Hamiltonian. The optional `perturb_energy` parameter can be used to add a small perturbation to the assigned energy.
+- `LatticeGasWalkers(walkers::Vector{LatticeWalker{C}}, hamiltonian::ClassicalHamiltonian; assign_energy=true, perturb_energy::Float64=0.0)`: Constructs a new `LatticeGasWalkers` object with the given walkers and Hamiltonian. If `assign_energy` is `true`, the energy of each walker is assigned using the provided Hamiltonian. The optional `perturb_energy` parameter can be used to add a small perturbation to the assigned energy.
 
 """
 struct  LatticeGasWalkers <: LatticeWalkers

@@ -8,6 +8,7 @@ module AbstractLiveSets
 
 using Distributed
 
+import Unitful
 import Unitful: unit
 
 using ..AbstractWalkers

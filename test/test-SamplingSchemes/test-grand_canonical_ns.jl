@@ -586,7 +586,7 @@
 
     # ================================================================
     @testset "GC-NS with cluster moves: validation against exact enumeration" begin
-        # Reuse the 4x4 lattice and Hamiltonian from Study B
+        # Same 4x4 lattice and Hamiltonian as the exact-enumeration validation above
         L = 4
         lattice_template_cl = MLattice{1,SquareLattice}(
             lattice_constant=1.0,

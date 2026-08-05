@@ -83,7 +83,7 @@
     # ================================================================
     @testset "wrap-around pathology (torus convention)" begin
         # The 18-site triangular cell: 36 faces plus 6 winding three-cycles,
-        # the Study V5 diagnostic number, with the wrap warning
+        # the wrap-around torus-convention count, with the wrap warning
         tri33 = cluster_triangular(3, 3)   # M = 18
         t = @test_logs (:warn, r"faithful quotient") match_mode = :any enumerate_motif_embeddings(
             tri33, [1.0, 1.0, 1.0])

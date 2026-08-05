@@ -588,4 +588,130 @@
         @test dfA.num_particles == dfB.num_particles
         @test live_EA == live_EB
     end
+
+    # ================================================================
+    @testset "dead-point callback and energy substitution (IG-ref route)" begin
+        using Random
+        dpc_lat = MLattice{1,SquareLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)],
+            supercell_dimensions=(4, 4, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1, 1.5],
+            components=[[false for _ in 1:16]],
+            adsorptions=:full)
+        dpc_ham_a = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+        dpc_ham_b = GenericLatticeHamiltonian(-0.04, [-0.02, -0.0025], u"eV")
+        dpc_save = SaveEveryN("t_dpc_ig.csv", "t_dpc_ig.traj", "t_dpc_ig.ls",
+                              1000000, 1000000, 1000000)
+        dpc_cleanup() = rm.(["t_dpc_ig.csv", "t_dpc_ig.traj", "t_dpc_ig.ls"],
+                            force=true)
+
+        # Exact grand sums for both Hamiltonians by per-sector enumeration
+        # over all 2^16 configurations, computed before any seeding because
+        # exact_enumeration consumes the global RNG
+        dpc_kb = 8.617333262e-5
+        dpc_T = 600.0
+        dpc_mu = 0.0
+        dpc_beta = 1 / (dpc_kb * dpc_T)
+        function dpc_exact_lnXi(h)
+            lnZs = Float64[]
+            for N in 0:16
+                occ = vcat(fill(true, N), fill(false, 16 - N))
+                latN = deepcopy(dpc_lat)
+                latN.components[1] .= occ
+                dfe, _ = exact_enumeration(latN, h)
+                Es = [ustrip(u"eV", e) for e in dfe.energy]
+                Emin = minimum(Es)
+                push!(lnZs, dpc_beta * dpc_mu * N - dpc_beta * Emin +
+                            log(sum(exp.(-dpc_beta .* (Es .- Emin)))))
+            end
+            m = maximum(lnZs)
+            return m + log(sum(exp.(lnZs .- m)))
+        end
+        lnXi_a = dpc_exact_lnXi(dpc_ham_a)
+        lnXi_b = dpc_exact_lnXi(dpc_ham_b)
+
+        # One seeded ladder under Hamiltonian A, configurations collected
+        # through the callback; K = 64, full descent against the
+        # 16·ln 2 ≈ 11.1 nat reference depth
+        dpc_K = 64
+        Random.seed!(4371)
+        walkers = [LatticeWalker(deepcopy(dpc_lat), energy=0.0u"eV", iter=0)
+                   for _ in 1:dpc_K]
+        ls = LatticeGasWalkers(walkers, dpc_ham_a; assign_energy=false)
+        params = IdealGasReferencedGCNSParameters(mc_steps=40,
+            reference_fugacity=1.0, energy_perturbation=1e-9)
+        configs = Vector{Bool}[]
+        seen = Tuple{Int,Float64,Int}[]
+        df, ls_out, _ = ideal_gas_referenced_nested_sampling(ls, params,
+            Int64(820), MCGrandCanonicalMoves(), dpc_save;
+            dead_point_callback=(iter, w) -> begin
+                push!(configs, copy(w.configuration.components[1]))
+                push!(seen, (iter, w.energy.val,
+                             sum(w.configuration.components[1])))
+            end)
+        dpc_cleanup()
+
+        # Invocation count equals nrow(df); the (iter, energy, N) triple seen
+        # by the callback matches the ledger row bit-exactly
+        @test nrow(df) > 0
+        @test length(seen) == nrow(df)
+        @test [t[1] for t in seen] == df.iter
+        @test [t[2] for t in seen] == df.emax
+        @test [t[3] for t in seen] == df.num_particles
+
+        # Energy faithfulness: recomputing Hamiltonian A on a collected
+        # configuration matches the ledger energy within the perturbation
+        # half-width (uniform on ±energy_perturbation/2)
+        dpc_probe = deepcopy(dpc_lat)
+        function dpc_recompute(h, c)
+            dpc_probe.components[1] .= c
+            return ustrip(u"eV", interacting_energy(dpc_probe, h))
+        end
+        @test all(abs(dpc_recompute(dpc_ham_a, c) - e) <= 5.1e-10
+                  for (c, e) in zip(configs, df.emax))
+
+        # Substitution closure: Hamiltonian B's energies, recomputed offline
+        # from the collected configurations, replace the ledger column and
+        # the live tail, and gc_thermodynamic_stats_ideal_ref then closes
+        # against Hamiltonian B's exact grand sum with the SAME Skilling
+        # weights; the control route closes against Hamiltonian A's.
+        # Tolerances calibrated at seeds 4371/4372/4373: max |dev| 0.236 (A)
+        # and 0.343 (B) against σ = √(16·ln 2/64) ≈ 0.42; shipped at ≥ 3×.
+        live_Ea = [w.energy.val for w in ls_out.walkers]
+        live_N = [Int(sum(w.configuration.components[1])) for w in ls_out.walkers]
+        sa = gc_thermodynamic_stats_ideal_ref(df, 16, 1.0, [dpc_mu], [dpc_T],
+            dpc_K; ω0=(dpc_K + 1) / dpc_K, live_emax=live_Ea, live_numbers=live_N)
+        df_b = copy(df)
+        df_b.emax = [dpc_recompute(dpc_ham_b, c) for c in configs]
+        live_Eb = [dpc_recompute(dpc_ham_b, w.configuration.components[1])
+                   for w in ls_out.walkers]
+        sb = gc_thermodynamic_stats_ideal_ref(df_b, 16, 1.0, [dpc_mu], [dpc_T],
+            dpc_K; ω0=(dpc_K + 1) / dpc_K, live_emax=live_Eb, live_numbers=live_N)
+        @test abs(sa.logXi[1, 1] - lnXi_a) < 0.75
+        @test abs(sb.logXi[1, 1] - lnXi_b) < 1.1
+        # The substituted estimator's Kish N_eff is a real diagnostic: finite,
+        # positive, and no larger than the control's at the same grid point
+        @test 0 < sb.N_eff[1, 1] <= sa.N_eff[1, 1]
+
+        # Stream neutrality: same-seed A/B with and without the callback
+        function dpc_ab(seed, cb)
+            Random.seed!(seed)
+            ws = [LatticeWalker(deepcopy(dpc_lat), energy=0.0u"eV", iter=0)
+                  for _ in 1:16]
+            l = LatticeGasWalkers(ws, dpc_ham_a; assign_energy=false)
+            p = IdealGasReferencedGCNSParameters(mc_steps=20,
+                reference_fugacity=1.0, energy_perturbation=1e-9)
+            d, _, _ = ideal_gas_referenced_nested_sampling(l, p, Int64(100),
+                MCGrandCanonicalMoves(), dpc_save; dead_point_callback=cb)
+            dpc_cleanup()
+            return d
+        end
+        dfA = dpc_ab(4373, nothing)
+        dfB = dpc_ab(4373, (iter, w) -> nothing)
+        @test dfA.iter == dfB.iter
+        @test dfA.emax == dfB.emax
+        @test dfA.num_particles == dfB.num_particles
+    end
 end

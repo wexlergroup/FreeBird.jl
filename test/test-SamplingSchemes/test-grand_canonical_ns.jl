@@ -658,4 +658,44 @@
         rm("test_val_cl.traj", force=true)
         rm("test_val_cl.ls", force=true)
     end
+
+    @testset "dead-point callback (Ω-sorted route)" begin
+        using Random
+        dpc_save = SaveEveryN("t_dpc_gc.csv", "t_dpc_gc.traj", "t_dpc_gc.ls",
+                              1000000, 1000000, 1000000)
+        dpc_cleanup() = rm.(["t_dpc_gc.csv", "t_dpc_gc.traj", "t_dpc_gc.ls"],
+                            force=true)
+
+        function dpc_run(seed, cb)
+            Random.seed!(seed)
+            walkers = [LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV",
+                                     iter=0) for _ in 1:10]
+            ls = LatticeGasWalkers(walkers, ham; assign_energy=false)
+            gc = GrandCanonicalNestedSamplingParameters(mc_steps=30,
+                chemical_potential=-0.05, energy_perturbation=1e-9)
+            d, _, _ = grand_canonical_nested_sampling(ls, gc, Int64(150),
+                MCGrandCanonicalMoves(), dpc_save; dead_point_callback=cb)
+            dpc_cleanup()
+            return d
+        end
+
+        # Invocation count equals nrow(df); the (iter, energy, N) triple seen
+        # by the callback matches the ledger row bit-exactly
+        seen = Tuple{Int,Float64,Int}[]
+        df = dpc_run(4271, (iter, w) -> push!(seen,
+            (iter, w.energy.val, sum(w.configuration.components[1]))))
+        @test nrow(df) > 0
+        @test length(seen) == nrow(df)
+        @test [t[1] for t in seen] == df.iter
+        @test [t[2] for t in seen] == df.energy
+        @test [t[3] for t in seen] == df.num_particles
+
+        # Stream neutrality: same-seed A/B with and without the callback
+        dfA = dpc_run(4272, nothing)
+        dfB = dpc_run(4272, (iter, w) -> nothing)
+        @test dfA.iter == dfB.iter
+        @test dfA.omega == dfB.omega
+        @test dfA.energy == dfB.energy
+        @test dfA.num_particles == dfB.num_particles
+    end
 end

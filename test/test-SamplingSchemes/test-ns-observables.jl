@@ -1687,4 +1687,633 @@
         # point of slack retained, per the end-to-end precedents
         @test n_gated >= 5
     end
+
+    # ================================================================
+    @testset "end-to-end: contact-substrate slab (3,3,2), igref + fixed-N + omega-sorted" begin
+        # First three-dimensional end-to-end on the grand-canonical
+        # routes, and the first three-route closure (ideal-gas-referenced,
+        # fixed-N stitching, omega-sorted) on a single model: a bilayer
+        # lattice gas with nearest-neighbor attraction and a strictly
+        # contact substrate, the short-range-substrate layering regime of
+        # [Pandit, Schick & Wortis, PRB 26, 5112 (1982)] in the
+        # simple-cubic lattice-gas setting of [Binder & Landau, PRB 37,
+        # 1745 (1988)]. The isotropic cell merges the in-plane and axial
+        # nearest neighbors into one shell at distance 1.0; the in-plane
+        # circumference 3 > 2 x 1.1 keeps the default minimum-image lists
+        # bulk-tiled faithful, so construction is silent (contrast the
+        # (2,2,3) fixtures, which need image multiplicity).
+        # The igref row sits at 1450 K, the temperature that centers the
+        # reference fugacity z0 = e^{beta mu} ~ 0.074 on the inter-step
+        # midpoint: the reference walk's insertion acceptance scales as
+        # z0 while ceiling-blocked deletions freeze the constrained walk,
+        # so the route only mixes in N for z0 in the ~0.05-1 window every
+        # shipped igref regression uses. Matching that window at the
+        # staircase (mu ~ -0.33 eV) fixes the sampled row's temperature;
+        # a 600 K row (z0 ~ 1.9e-3) reproducibly collapses onto the
+        # full-lattice tail, <N> high by ~8. The crisp staircase physics
+        # is carried at 300 K by the fixed-N and omega-sorted routes
+        # below, which have no fugacity constraint.
+        # Statistical NS checks: seed the global RNG (the random_seed
+        # field on the NS parameters is not consumed); the seed is
+        # planted after the enumeration block, which consumes RNG, and
+        # re-planted at the start of each route so the three legs are
+        # stream-independent. Tolerances sized at or above 3x the
+        # maximum three-seed deviation at this configuration (seeds
+        # 4801/4802/4803; igref maxima over the nine Kish-gated grid
+        # evaluations: |dlnXi| 1.10, |dN| 1.10, |dU| 0.38,
+        # |dtheta| 0.084, all gated N_eff >= 2767 on a floor of 200;
+        # fixed-N maxima |dlnXi| 0.45, |dN| 0.18, |dU| 0.062,
+        # |dtheta| 0.017; omega-route maxima |dE| 0.17, |dN| 0.49,
+        # |dtheta| 7e-4 on the 300 K row and 0.041 (theta1) / 0.017
+        # (theta2) on the 600 K row, gated per column; route-consistency
+        # maxima |dtheta| 0.086 igref vs fixed-N and 0.134 igref vs
+        # omega), sanity-checked against sigma(lnXi) ~
+        # sqrt(D/K) ~ 0.57 at the reference-ladder depth
+        # D = 18 log1p(1/z0) ~ 48 nats (worst igref |dlnXi| = 1.9
+        # sigma).
+        kb = 8.617333262e-5
+
+        M = 18
+        slab_a() = MLattice{1,SquareLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)],
+            supercell_dimensions=(3, 3, 2),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1],
+            components=[[false for _ in 1:18]],
+            adsorptions=:full)
+        lattice_at(N) = begin
+            lat = slab_a()
+            lat.components[1] .= false
+            lat.components[1][1:N] .= true
+            lat
+        end
+        field = layer_field(slab_a(), [-0.15, 0.0] .* u"eV")
+        ham = SiteFieldLatticeHamiltonian(
+            GenericLatticeHamiltonian(0.0, [-0.1], u"eV"), field)
+
+        # Independent per-site field from hardcoded index arithmetic,
+        # sharing no code with site_layers/layer_field: contact binding
+        # on the nine layer-1 sites only
+        site_eps = [s <= 9 ? -0.15 : 0.0 for s in 1:M]
+        @test field == site_eps .* u"eV"
+
+        # Faithfulness pins: one merged shell of five distinct partners
+        # (4 in-plane + 1 axial) on every site, no image-doubled entries
+        tpl = slab_a()
+        @test all(length.(tpl.neighbors[s]) == [5] for s in 1:M)
+        @test all(length(unique(tpl.neighbors[s][1])) == 5 for s in 1:M)
+        @test site_layers(tpl) == vcat(fill(1, 9), fill(2, 9))
+
+        # Exact per-configuration (E, N, n_k) from fixed-N enumeration
+        # of all 2^18 configurations
+        exact_E = Dict{Int,Vector{Float64}}()
+        exact_nk = Dict{Int,Vector{Vector{Int}}}()
+        for N in 0:M
+            df_exact, _ = exact_enumeration(lattice_at(N), ham)
+            exact_E[N] = [ustrip(u"eV", e) for e in df_exact.energy]
+            exact_nk[N] = [[sum(cfg[1][1:9]), sum(cfg[1][10:18])]
+                           for cfg in df_exact.config]
+            @test length(exact_E[N]) == binomial(M, N)
+        end
+
+        # T = 0 ladder. In-plane bond maxima on the 3x3 torus:
+        # b(n) = [0, 0, 1, 3, 4, 6, 9, 11, 14, 18] for n = 0..9 (a full
+        # row of three wraps into a 3-cycle; the complement identity
+        # b(9 - k) = 18 - 4k + b_holes(k) fills in the rest). For N <= 9
+        # the contact field wins and layer-1 packing is optimal:
+        # E_min = -0.15 N - 0.1 b(N); for N = 9 + m the full first layer
+        # is kept and each layer-2 site adds its axial bond:
+        # E_min = -3.15 - 0.1 m - 0.1 b(m). Every value is a multiple of
+        # 0.05 eV = gcd(|J|, eps_s); enumeration is the arbiter.
+        emin = [minimum(exact_E[N]) for N in 0:M]
+        @test emin ≈ 0.05 .* [0, -3, -8, -15, -20, -27, -36, -43, -52, -63,
+                              -65, -69, -75, -79, -85, -93, -99, -107, -117] atol = 1e-9
+        # The N = 9 ground state is unique and is exactly the full first
+        # layer
+        gs9 = findall(e -> e <= minimum(exact_E[9]) + 1e-9, exact_E[9])
+        @test length(gs9) == 1
+        @test exact_nk[9][only(gs9)] == [9, 0]
+
+        # T = 0 staircase from the convex hull of E_min(N) (vertices
+        # N = 0, 9, 18, so the isotherm has exactly two steps):
+        # mu_1 = 2J - eps_s, the per-site cost of the first layer (18
+        # in-plane bonds over 9 sites plus the contact field), and
+        # mu_2 = 3J, the per-site cost of the second layer (two in-plane
+        # bonds plus the axial bond, the T = 0 bulk-coexistence value).
+        # Only the first step is substrate-shifted: the structural
+        # signature of a strictly contact substrate.
+        μ1h = maximum((emin[10] - emin[N + 1]) / (9 - N) for N in 0:8)
+        μ2h = minimum((emin[N + 1] - emin[10]) / (N - 9) for N in 10:18)
+        @test μ1h ≈ -0.35 atol = 1e-9
+        @test μ2h ≈ -0.30 atol = 1e-9
+        @test μ1h < μ2h
+        μ_mid = (μ1h + μ2h) / 2
+
+        # Grand sums on flat arrays built once (2^18 entries; the
+        # isotherm scan below evaluates 51 grid points)
+        flat_E = Float64[]; flat_N = Float64[]
+        flat_t1 = Float64[]; flat_t2 = Float64[]
+        for N in 0:M, i in eachindex(exact_E[N])
+            push!(flat_E, exact_E[N][i]); push!(flat_N, N)
+            push!(flat_t1, exact_nk[N][i][1] / 9)
+            push!(flat_t2, exact_nk[N][i][2] / 9)
+        end
+        function exact_stats(μ_val, T_val)
+            β = 1.0 / (kb * T_val)
+            lt = β .* (μ_val .* flat_N .- flat_E)
+            w = exp.(lt .- maximum(lt)); sw = sum(w)
+            (logXi=maximum(lt) + log(sw),
+             mean_N=sum(w .* flat_N) / sw, mean_U=sum(w .* flat_E) / sw,
+             θ1=sum(w .* flat_t1) / sw, θ2=sum(w .* flat_t2) / sw)
+        end
+
+        # Exact-isotherm plateau gates at 300 K: at the inter-step
+        # midpoint mu = -0.325 the three cheapest excitations off the
+        # layer-1-full state all cost Delta Omega = 0.225 eV (layer-1
+        # hole 0.15 + 0.4 - 0.325; layer-2 adparticle -0.1 + 0.325;
+        # collective layer-2 condensation 9 x (0.325 - 0.30)), so
+        # exp(-0.225/kT) ~ 1.7e-4 and the 0.99/0.01 gates hold with
+        # ~30x margin (they stay valid up to ~479 K, where the
+        # multiplicity-weighted theta2 crosses 0.01). At the midpoint
+        # the model also has an exact particle-hole x layer-swap
+        # symmetry (2 mu - 5J + eps_s = 0 there), so <N> = 9 and
+        # theta1 + theta2 = 1 identically at every temperature
+        ex_p = exact_stats(μ_mid, 300.0)
+        @test ex_p.θ1 >= 0.99
+        @test ex_p.θ2 <= 0.01
+        @test ex_p.mean_N ≈ 9.0 atol = 0.01
+        @test exact_stats(-0.40, 300.0).mean_N <= 0.01
+        @test exact_stats(-0.25, 300.0).mean_N >= 17.99
+        # Staircase shape on a mu scan: layer ordering everywhere and
+        # <N> nondecreasing (d<N>/dmu = beta var N >= 0 exactly)
+        scan = [exact_stats(μ, 300.0) for μ in -0.45:0.005:-0.20]
+        @test all(s.θ1 >= s.θ2 - 1e-12 for s in scan)
+        @test all(diff([s.mean_N for s in scan]) .>= -1e-9)
+
+        # mu grid straddling both steps (the outer points sit on the
+        # smooth isotherm's risers); the 1450 K row is set by the z0
+        # mixing window (header comment), well above the in-plane
+        # condensation scale (2D Ising mapping kTc = 2.269 |J|/4,
+        # Tc ~ 658 K), so this leg gates the reweighting machinery
+        # against the exact grand sums rather than a sharp staircase
+        μs = [-0.36, μ_mid, -0.29]
+        Ts = [1450.0]
+
+        # ---- igref route with theta recording ----
+        Random.seed!(4801)
+        z0 = exp(μ_mid / (kb * 1450.0))
+        K_ig = 150
+        n_ig = ceil(Int, 1.15 * K_ig * M * log1p(1 / z0)) + 2 * K_ig
+        walkers = [LatticeWalker(deepcopy(lattice_at(0)), energy=0.0u"eV", iter=0)
+                   for _ in 1:K_ig]
+        ls = LatticeGasWalkers(walkers, ham; assign_energy=false)
+        params = IdealGasReferencedGCNSParameters(
+            mc_steps=100, reference_fugacity=z0, energy_perturbation=1e-9,
+            allowed_fail_count=100_000)
+        df_ig, final_ig, _ = ideal_gas_referenced_nested_sampling(
+            ls, params, Int64(n_ig), MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3),
+            obs_save;
+            observables=[Symbol(:theta, k) => (cfg -> layer_coverage(cfg, k))
+                         for k in 1:2])
+        obs_cleanup()
+
+        # Ledger integrity: columns, range, and the ninth-integer
+        # lattice of 9-site-layer coverages
+        @test names(df_ig) == ["iter", "emax", "num_particles", "theta1", "theta2"]
+        for col in (df_ig.theta1, df_ig.theta2)
+            @test all(0.0 .<= col .<= 1.0)
+            @test all(isinteger.(9 .* col))
+        end
+
+        live_E_ig = [w.energy.val for w in final_ig.walkers]
+        live_N_ig = [sum(w.configuration.components[1]) for w in final_ig.walkers]
+        live_th_ig = Dict(Symbol(:theta, k) =>
+                          [layer_coverage(w.configuration, k) for w in final_ig.walkers]
+                          for k in 1:2)
+        st_ig = gc_thermodynamic_stats_ideal_ref(df_ig, M, z0, μs, Ts, K_ig;
+            ω0=(K_ig + 1) / K_ig, live_emax=live_E_ig, live_numbers=live_N_ig,
+            observable_cols=[:theta1, :theta2], live_observables=live_th_ig)
+
+        n_gated = 0
+        for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
+            st_ig.N_eff[i, j] >= 200 || continue
+            n_gated += 1
+            ex = exact_stats(μ, T)
+            @test isapprox(st_ig.logXi[i, j], ex.logXi, atol=3.3)
+            @test isapprox(st_ig.mean_N[i, j], ex.mean_N, atol=3.4)
+            @test isapprox(st_ig.mean_U[i, j], ex.mean_U, atol=1.2)
+            @test isapprox(st_ig.observables[:theta1][i, j], ex.θ1, atol=0.26)
+            @test isapprox(st_ig.observables[:theta2][i, j], ex.θ2, atol=0.26)
+            @test st_ig.observables[:theta1][i, j] >=
+                  st_ig.observables[:theta2][i, j] - 0.05
+        end
+        # z0 centered on the mu grid: all three points gated at
+        # N_eff >= 2767 across the calibration seeds (floor 200); one
+        # point of slack retained, per the end-to-end precedents
+        @test n_gated >= 2
+
+        # ---- fixed-N route with theta recording, stitched over all 19
+        # sectors ----
+        Random.seed!(4801)
+        K_fn = 100
+        n_fn = 1300     # max sector depth ln C(18,9) ~ 10.8 nats -> 1.15 K x 10.8 ~ 1241
+        Ts_fn = [300.0, 1450.0]
+        dfs = Vector{DataFrame}(undef, M + 1)
+        live_E_fn = Vector{Vector{Float64}}(undef, M + 1)
+        live_th_fn = Vector{Dict{Symbol,Vector{Float64}}}(undef, M + 1)
+
+        dfs[1] = DataFrame(iter=Int[], emax=Float64[])
+        live_E_fn[1] = Float64[]
+        live_th_fn[1] = Dict(:theta1 => [0.0], :theta2 => [0.0])   # empty lattice
+
+        for N in 1:(M - 1)
+            walkers = [
+                begin
+                    lat = lattice_at(N)
+                    generate_random_new_lattice_sample!(lat)
+                    LatticeWalker(lat)
+                end for _ in 1:K_fn]
+            liveset = LatticeGasWalkers(walkers, ham, perturb_energy=1e-9)
+            ns_params = LatticeNestedSamplingParameters(
+                mc_steps=60, energy_perturbation=1e-9,
+                allowed_fail_count=100_000)
+            df, final_ls, _ = nested_sampling(
+                liveset, ns_params, n_fn, MCRandomWalkClone(), obs_save;
+                observables=[Symbol(:theta, k) => (cfg -> layer_coverage(cfg, k))
+                             for k in 1:2])
+            dfs[N + 1] = df
+            live_E_fn[N + 1] = [ustrip(u"eV", w.energy) for w in final_ls.walkers]
+            live_th_fn[N + 1] = Dict(
+                Symbol(:theta, k) => [layer_coverage(w.configuration, k)
+                                      for w in final_ls.walkers] for k in 1:2)
+        end
+        obs_cleanup()
+
+        # N = M: single configuration; empty ladder + live tail with K
+        # copies; both layers full
+        dfs[M + 1] = DataFrame(iter=Int[], emax=Float64[])
+        live_E_fn[M + 1] = fill(only(exact_E[M]), K_fn)
+        live_th_fn[M + 1] = Dict(:theta1 => fill(1.0, K_fn),
+                                 :theta2 => fill(1.0, K_fn))
+
+        @test names(dfs[10]) == ["iter", "emax", "theta1", "theta2"]
+
+        st_fn = gc_thermodynamic_stats_fixed_N(dfs, collect(0:M), M,
+            μs .* u"eV", Ts_fn .* u"K";
+            n_walkers=K_fn, n_cull=1, ω0=(K_fn + 1) / K_fn,
+            live_emax=live_E_fn,
+            observable_cols=[:theta1, :theta2], live_observables=live_th_fn)
+
+        # The 300 K row carries the crisp sampled staircase (exact
+        # theta1 = 0.9997, theta2 = 3.4e-4 at the plateau midpoint), a
+        # resolution outside the igref route's fugacity mixing window;
+        # the fixed-N construction has no fugacity constraint. The
+        # 1450 K row doubles as the igref route-consistency row.
+        for (j, T) in enumerate(Ts_fn), (k, μ) in enumerate(μs)
+            ex = exact_stats(μ, T)
+            @test isapprox(st_fn.logXi[k, j], ex.logXi, atol=1.4)
+            @test isapprox(st_fn.mean_N[k, j], ex.mean_N, rtol=0.05, atol=0.6)
+            @test isapprox(st_fn.mean_U[k, j], ex.mean_U, rtol=0.05, atol=0.19)
+            @test isapprox(st_fn.observables[:theta1][k, j], ex.θ1, atol=0.06)
+            @test isapprox(st_fn.observables[:theta2][k, j], ex.θ2, atol=0.06)
+        end
+
+        # ---- omega-sorted route at the inter-step plateau ----
+        Random.seed!(4801)
+        K_gc = 100
+        μ_gc = μ_mid
+        walkers_gc = [LatticeWalker(deepcopy(lattice_at(0)), energy=0.0u"eV", iter=0)
+                      for _ in 1:K_gc]
+        ls_gc = LatticeGasWalkers(walkers_gc, ham; assign_energy=false)
+        gc_params = GrandCanonicalNestedSamplingParameters(
+            mc_steps=100, chemical_potential=μ_gc,
+            energy_perturbation=1e-9, init_occupation_p=0.3)
+        df_gc, _, _ = grand_canonical_nested_sampling(
+            ls_gc, gc_params, Int64(3000),
+            MCGrandCanonicalMoves(p_move=0.5, p_insert=0.25), obs_save;
+            observables=[Symbol(:theta, k) => (cfg -> layer_coverage(cfg, k))
+                         for k in 1:2])
+        obs_cleanup()
+
+        @test names(df_gc) == ["iter", "omega", "energy", "num_particles",
+                               "theta1", "theta2"]
+        for col in (df_gc.theta1, df_gc.theta2)
+            @test all(0.0 .<= col .<= 1.0)
+            @test all(isinteger.(9 .* col))
+        end
+
+        β300 = 1.0 / (kb * 300.0)
+        β600 = 1.0 / (kb * 600.0)
+        β1450 = 1.0 / (kb * 1450.0)
+        mean_E_gc, _, mean_N_gc = gc_thermodynamic_stats(
+            df_gc, [β300, β600], K_gc, μ_gc)
+        ex300 = exact_stats(μ_gc, 300.0)
+        ex600 = exact_stats(μ_gc, 600.0)
+        @test isapprox(mean_E_gc[1], ex300.mean_U, rtol=0.3)
+        @test isapprox(mean_N_gc[1], ex300.mean_N, rtol=0.3)
+        @test isapprox(mean_E_gc[2], ex600.mean_U, rtol=0.3)
+        @test isapprox(mean_N_gc[2], ex600.mean_N, rtol=0.3)
+
+        # Caller-side <theta_k> from the documented Ω-weight construction
+        # (the legacy stats function carries no observable machinery by
+        # design; this re-records the recipe): w_i ∝ Γ_i·exp(-β·Ω_i)
+        θ_at(col, β) = begin
+            w = ωᵢ(df_gc.iter, K_gc) .*
+                exp.(-β .* (df_gc.omega .- minimum(df_gc.omega)))
+            sum(w .* col) / sum(w)
+        end
+        @test isapprox(θ_at(df_gc.theta1, β300), ex300.θ1, atol=0.03)
+        @test isapprox(θ_at(df_gc.theta2, β300), ex300.θ2, atol=0.02)
+        @test isapprox(θ_at(df_gc.theta1, β600), ex600.θ1, atol=0.13)
+        @test isapprox(θ_at(df_gc.theta2, β600), ex600.θ2, atol=0.06)
+        @test θ_at(df_gc.theta1, β300) >= θ_at(df_gc.theta2, β300)
+        @test θ_at(df_gc.theta1, β600) >= θ_at(df_gc.theta2, β600)
+
+        # ---- route consistency ----
+        # igref vs fixed-N on the shared 1450 K row, where the igref
+        # window is healthy
+        for (i, μ) in enumerate(μs)
+            st_ig.N_eff[i, 1] >= 200 || continue
+            @test isapprox(st_ig.observables[:theta1][i, 1],
+                           st_fn.observables[:theta1][i, 2], atol=0.26)
+            @test isapprox(st_ig.observables[:theta2][i, 1],
+                           st_fn.observables[:theta2][i, 2], atol=0.26)
+        end
+        # igref vs omega-sorted at the shared plateau point, with the
+        # omega ladder reweighted to the igref row's temperature
+        if st_ig.N_eff[2, 1] >= 200
+            @test isapprox(st_ig.observables[:theta1][2, 1],
+                           θ_at(df_gc.theta1, β1450), atol=0.41)
+            @test isapprox(st_ig.observables[:theta2][2, 1],
+                           θ_at(df_gc.theta2, β1450), atol=0.41)
+        end
+    end
+
+    # ================================================================
+    @testset "end-to-end: tetragonal inverse-cube slab (2,2,3), igref + contact-biased channel" begin
+        # The inverse-cube substrate staircase itself: nearest-neighbor
+        # attraction [J_par, J_perp] on a tetragonal (2,2,3) slab with
+        # the -eps_s/k^3 layer profile of [de Oliveira & Griffiths,
+        # Surf. Sci. 71, 687 (1978)], whose T = 0 steps
+        # mu_1 = 2 J_par - eps_s and mu_k = 2 J_par + J_perp - eps_s/k^3
+        # are strictly monotone: the splitting of the upper steps that
+        # part (a)'s strictly contact substrate collapses onto the
+        # single bulk value 3J. First slab trip of image-multiplicity
+        # neighbor lists and the interlayer-spacing geometry through
+        # enumeration, sampling, and the stats layer, and the first
+        # end-to-end exercise of the :contact biased insertion channel
+        # and its per-move-type counters.
+        # Statistical NS checks: seed the global RNG (the random_seed
+        # field on the NS parameters is not consumed); the seed is
+        # planted after the enumeration block, which consumes RNG, and
+        # re-planted before the biased rerun. The rerun is identical in
+        # parameters, not in stream: the biased channel consumes extra
+        # RNG draws (the channel coin and the biased-site draw), so the
+        # same seed diverges at the first insertion proposal; both runs
+        # are gated against the same exact sums. The igref rows sit at
+        # 1650 K, the temperature that centers z0 = e^{beta mu} ~ 0.073
+        # on the second-plateau midpoint, inside the ~0.05-1 fugacity
+        # window where the reference walk still mixes in N (see the
+        # (3,3,2) testset's header); the staircase physics is
+        # deterministic-only here. Tolerances sized at or above 3x the
+        # maximum three-seed deviation over BOTH legs at this
+        # configuration (seeds 4901/4902/4903; maxima over the eighteen
+        # Kish-gated evaluations across both legs: |dlnXi| 0.68,
+        # |dN| 0.88, |dU| 0.38, |dtheta| 0.13, all gated
+        # N_eff >= 1623 on a floor of 200), sanity-checked against
+        # sigma(lnXi) ~ sqrt(D/K) ~ 0.57 at the reference-ladder depth
+        # D = 12 log1p(1/z0) ~ 32 nats (worst |dlnXi| = 1.2 sigma).
+        kb = 8.617333262e-5
+
+        M = 12
+        eps_layer = [-0.27, -0.03375, -0.01]     # eV, -eps_s/k^3 with eps_s = 0.27
+        slab_b() = MLattice{1,SquareLattice}(
+            lattice_constant=1.0,
+            interlayer_spacing=1.25,
+            basis=[(0.0, 0.0, 0.0)],
+            supercell_dimensions=(2, 2, 3),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1, 1.35],
+            components=[[false for _ in 1:12]],
+            adsorptions=:full,
+            image_multiplicity=true)
+        slab_at(N) = begin
+            lat = slab_b()
+            lat.components[1] .= false
+            lat.components[1][1:N] .= true
+            lat
+        end
+        base = GenericLatticeHamiltonian(0.0, [-0.1, -0.15], u"eV")   # [J_par, J_perp]
+        field = layer_field(slab_b(), eps_layer .* u"eV")
+        ham = SiteFieldLatticeHamiltonian(base, field)
+
+        # Independent per-site profile from hardcoded index arithmetic,
+        # sharing no code with site_layers/layer_field
+        site_eps = [eps_layer[(s - 1) ÷ 4 + 1] for s in 1:M]
+        @test field == site_eps .* u"eV"
+
+        # Geometry pins. Shell 1 (in-plane, distance 1.0): the 2-wide
+        # cell wraps, and multiplicity restores the bulk-tiled
+        # coordination 4 as two distinct partners counted twice each.
+        # Shell 2 (axial, distance 1.25): one bond on the surface layers,
+        # two in the middle; the in-plane diagonal sqrt(2) and the axial
+        # diagonal sqrt(1 + 1.25^2) = 1.60 both sit outside the cutoffs.
+        tpl = slab_b()
+        sl = site_layers(tpl)
+        @test sl == [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]
+        @test tpl.lattice_vectors[3, 3] == 1.25
+        @test all(length(tpl.neighbors[s][1]) == 4 for s in 1:M)
+        @test all(length(unique(tpl.neighbors[s][1])) == 2 for s in 1:M)
+        @test all(length(tpl.neighbors[s][2]) == (sl[s] == 2 ? 2 : 1) for s in 1:M)
+
+        # Exact per-configuration (E, N, n_k) from fixed-N enumeration
+        # of all 2^12 = 4096 configurations
+        exact_E = Dict{Int,Vector{Float64}}()
+        exact_nk = Dict{Int,Vector{Vector{Int}}}()
+        for N in 0:M
+            df_exact, _ = exact_enumeration(slab_at(N), ham)
+            exact_E[N] = [ustrip(u"eV", e) for e in df_exact.energy]
+            exact_nk[N] = [[sum(cfg[1][4k-3:4k]) for k in 1:3]
+                           for cfg in df_exact.config]
+            @test length(exact_E[N]) == binomial(M, N)
+        end
+
+        # T = 0 ladder in the bulk-tiled doubled-bond convention (a full
+        # 2x2 layer carries 8 in-plane entries = per-site 2 J_par, the
+        # infinite-lattice value the multiplicity lists exist to
+        # restore). In-plane entry counts b(n) on the wrapped 2x2 layer:
+        # [0, 0, 2, 4, 8]. Layers fill bottom-up; each site in layer
+        # k >= 2 adds one axial bond to the full layer below:
+        #   N = 0..4:  E = -0.27 N - 0.1 b(N)
+        #   N = 4+m:   E = E(4) - (0.03375 + 0.15) m - 0.1 b(m)
+        #   N = 8+m:   E = E(8) - (0.01 + 0.15) m - 0.1 b(m)
+        # No clean single unit exists (gcd granularity 1/800 eV), so the
+        # decimal literals are pinned; enumeration is the arbiter.
+        emin = [minimum(exact_E[N]) for N in 0:M]
+        @test emin ≈ [0.0, -0.27, -0.74, -1.21, -1.88,
+                      -2.06375, -2.4475, -2.83125, -3.415,
+                      -3.575, -3.935, -4.295, -4.855] atol = 1e-9
+        # The one- and two-layer film ground states are unique and are
+        # exactly the bottom-up layer fillings
+        gs4 = findall(e -> e <= minimum(exact_E[4]) + 1e-9, exact_E[4])
+        @test length(gs4) == 1
+        @test exact_nk[4][only(gs4)] == [4, 0, 0]
+        gs8 = findall(e -> e <= minimum(exact_E[8]) + 1e-9, exact_E[8])
+        @test length(gs8) == 1
+        @test exact_nk[8][only(gs8)] == [4, 4, 0]
+
+        # Three-step staircase from the hull (vertices N = 0, 4, 8, 12):
+        # mu_1 = 2 J_par - eps_s; mu_k = 2 J_par + J_perp - eps_s/k^3
+        # for k = 2, 3 -- strictly monotone, the inverse-cube splitting
+        # this fixture exists to pin
+        μ1h = maximum((emin[5] - emin[N + 1]) / (4 - N) for N in 0:3)
+        μ2h = maximum((emin[9] - emin[N + 1]) / (8 - N) for N in 0:7)
+        μ3h = minimum((emin[N + 1] - emin[9]) / (N - 8) for N in 9:12)
+        @test μ1h ≈ -0.47 atol = 1e-9
+        @test μ2h ≈ -0.38375 atol = 1e-9
+        @test μ3h ≈ -0.36 atol = 1e-9
+        @test μ1h < μ2h < μ3h
+
+        # Grand sums on flat arrays built once
+        flat_E = Float64[]; flat_N = Float64[]
+        flat_th = [Float64[] for _ in 1:3]
+        for N in 0:M, i in eachindex(exact_E[N])
+            push!(flat_E, exact_E[N][i]); push!(flat_N, N)
+            for k in 1:3
+                push!(flat_th[k], exact_nk[N][i][k] / 4)
+            end
+        end
+        function exact_stats(μ_val, T_val)
+            β = 1.0 / (kb * T_val)
+            lt = β .* (μ_val .* flat_N .- flat_E)
+            w = exp.(lt .- maximum(lt)); sw = sum(w)
+            (logXi=maximum(lt) + log(sw),
+             mean_N=sum(w .* flat_N) / sw, mean_U=sum(w .* flat_E) / sw,
+             θ=[sum(w .* flat_th[k]) / sw for k in 1:3])
+        end
+
+        # Exact-isotherm plateau gates. The resolving temperature is set
+        # by the collective competitor, not the single-site one: on the
+        # second plateau the nearest competing states are N = 4 and
+        # N = 12 at Delta Omega = 4 x (0.02375/2) = 0.0475 eV
+        # (single-site defects cost 0.2119 eV), so the 0.99/0.01 form
+        # needs kT <= 0.0475/ln 100, i.e. T <= 120 K; at 300 K theta_3
+        # reaches 0.121 on this plateau. Shipped at 100 K:
+        # theta_2 = 0.9960, theta_3 = 0.0040, a 2.5x margin.
+        T_iso = 100.0
+        μ_c1 = (μ1h + μ2h) / 2     # first-plateau midpoint, -0.426875
+        μ_c2 = (μ2h + μ3h) / 2     # second-plateau midpoint, -0.371875
+        ex1 = exact_stats(μ_c1, T_iso)
+        @test ex1.θ[1] >= 0.99
+        @test ex1.θ[2] <= 0.01
+        @test ex1.mean_N ≈ 4.0 atol = 0.01
+        ex2 = exact_stats(μ_c2, T_iso)
+        @test ex2.θ[1] >= 0.99
+        @test ex2.θ[2] >= 0.99
+        @test ex2.θ[3] <= 0.01
+        @test ex2.mean_N ≈ 8.0 atol = 0.01
+        @test exact_stats(-0.50, T_iso).mean_N <= 0.01
+        @test exact_stats(-0.33, T_iso).mean_N >= 11.99
+        scan = [exact_stats(μ, T_iso) for μ in -0.50:0.005:-0.315]
+        @test all(s.θ[1] >= s.θ[2] - 1e-12 && s.θ[2] >= s.θ[3] - 1e-12
+                  for s in scan)
+        @test all(diff([s.mean_N for s in scan]) .>= -1e-9)
+
+        # mu grid straddling the second and third steps. The 1650 K row
+        # is set by the z0 mixing window (header comment); the sampled
+        # gates are against the exact grand sums at the same (mu, T),
+        # and the 0.27 eV contact field is ~2 kT there, so the layer
+        # profile stays column-discriminating
+        μs = [-0.40, μ_c2, -0.34]
+        Ts = [1650.0]
+        z0 = exp(μ_c2 / (kb * 1650.0))
+        K_ig = 100
+        n_ig = ceil(Int, 1.15 * K_ig * M * log1p(1 / z0)) + 2 * K_ig
+
+        # One igref run shape for both legs: identical parameters by
+        # construction, only the move routine differs
+        run_igref(mc) = begin
+            walkers = [LatticeWalker(deepcopy(slab_at(0)), energy=0.0u"eV", iter=0)
+                       for _ in 1:K_ig]
+            ls = LatticeGasWalkers(walkers, ham; assign_energy=false)
+            params = IdealGasReferencedGCNSParameters(
+                mc_steps=100, reference_fugacity=z0, energy_perturbation=1e-9,
+                allowed_fail_count=100_000)
+            df, final_ls, params_out = ideal_gas_referenced_nested_sampling(
+                ls, params, Int64(n_ig), mc, obs_save;
+                observables=[Symbol(:theta, k) => (cfg -> layer_coverage(cfg, k))
+                             for k in 1:3])
+            obs_cleanup()
+            (df, final_ls, params_out)
+        end
+
+        # One gate block for both legs: same ledger pins, same Kish
+        # gate, same tolerances
+        function gate_leg(df, final_ls)
+            @test names(df) == ["iter", "emax", "num_particles",
+                                "theta1", "theta2", "theta3"]
+            for col in (df.theta1, df.theta2, df.theta3)
+                @test all(0.0 .<= col .<= 1.0)
+                @test all(isinteger.(4 .* col))
+            end
+            live_E = [w.energy.val for w in final_ls.walkers]
+            live_N = [sum(w.configuration.components[1]) for w in final_ls.walkers]
+            live_th = Dict(Symbol(:theta, k) =>
+                           [layer_coverage(w.configuration, k) for w in final_ls.walkers]
+                           for k in 1:3)
+            st = gc_thermodynamic_stats_ideal_ref(df, M, z0, μs, Ts, K_ig;
+                ω0=(K_ig + 1) / K_ig, live_emax=live_E, live_numbers=live_N,
+                observable_cols=[:theta1, :theta2, :theta3],
+                live_observables=live_th)
+            n_gated = 0
+            for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
+                st.N_eff[i, j] >= 200 || continue
+                n_gated += 1
+                ex = exact_stats(μ, T)
+                @test isapprox(st.logXi[i, j], ex.logXi, atol=2.1)
+                @test isapprox(st.mean_N[i, j], ex.mean_N, atol=2.7)
+                @test isapprox(st.mean_U[i, j], ex.mean_U, atol=1.2)
+                for k in 1:3
+                    @test isapprox(st.observables[Symbol(:theta, k)][i, j],
+                                   ex.θ[k], atol=0.4)
+                end
+                @test st.observables[:theta1][i, j] >=
+                      st.observables[:theta2][i, j] - 0.05
+                @test st.observables[:theta2][i, j] >=
+                      st.observables[:theta3][i, j] - 0.05
+            end
+            # z0 centered on the mu grid: all three points gated at
+            # N_eff >= 1623 across the calibration seeds and both legs
+            # (floor 200); one point of slack retained, per the
+            # end-to-end precedents
+            @test n_gated >= 2
+            st
+        end
+
+        # ---- igref route, uniform insertions ----
+        Random.seed!(4901)
+        df_u, final_u, params_u = run_igref(
+            MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3))
+        gate_leg(df_u, final_u)
+        # The uniform run never touches the biased channel
+        @test get(params_u.move_stats, :insert_biased_attempted, 0) == 0
+
+        # ---- the identical run under the :contact biased channel ----
+        # bias_shells = 2 spans both bond classes (in-plane and axial),
+        # so a contact site is any empty site touching the film
+        Random.seed!(4901)
+        df_b, final_b, params_b = run_igref(MCGrandCanonicalMoves(
+            p_move=0.4, p_insert=0.3, p_bias=0.5,
+            bias_predicate=:contact, bias_shells=2))
+        gate_leg(df_b, final_b)
+        # First end-to-end trip of the biased channel: the run totals
+        # must show the 0.5 split really split, and biased proposals
+        # really accepted
+        @test params_b.move_stats[:insert_biased_attempted] > 0
+        @test params_b.move_stats[:insert_biased_accepted] > 0
+        @test params_b.move_stats[:insert_uniform_attempted] > 0
+        @test params_b.move_stats[:insert_biased_accepted] <=
+              params_b.move_stats[:insert_biased_attempted]
+    end
 end

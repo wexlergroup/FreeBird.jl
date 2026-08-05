@@ -403,6 +403,192 @@
         @test all(isapprox.(df.stripe4, df.stripe .^ 4; rtol=1e-12))
     end
 
+    # ================================================================
+    @testset "triangular bragg_amplitude and order_parameter_p2x2" begin
+        # Axial coordinates from the stored positions: r = i·t₁ + j·t₂ with
+        # t₁ = (1, 0)·a and t₂ = (1/2, √3/2)·a, so j = 2y/(√3·a) and
+        # i = x/a − j/2. Occupation predicates on (i, j) build the ordered
+        # phases geometrically, independent of the index arithmetic under
+        # test: p(2×2) = {i, j both even}, a p(2×1) row phase = {j even}
+        # (plus its two rotations), the √3×√3 state = {(i − j) mod 3 == 0}.
+        function axial_ij(lat)
+            a = lat.lattice_vectors[1, 1]
+            map(1:size(lat.positions, 1)) do s
+                x, y = lat.positions[s, 1], lat.positions[s, 2]
+                j = round(Int, 2 * y / (sqrt(3) * a))
+                i = round(Int, x / a - j / 2)
+                (i, j)
+            end
+        end
+        fill_ij!(lat, pred) = (lat.components[1] .=
+            [pred(i, j) for (i, j) in axial_ij(lat)]; lat)
+
+        # Independent oracle: the raw phasor sum over the stored positions,
+        # sharing no code with the integer-table implementation
+        function tri_oracle(lat, m, n)
+            a = lat.lattice_vectors[1, 1]
+            d1, d2 = lat.supercell_dimensions[1], lat.supercell_dimensions[2]
+            kx = 2 * pi * m / (d1 * a)
+            ky = 2 * pi * n / (sqrt(3) * d2 * a)
+            z = sum(exp(im * (kx * lat.positions[s, 1] + ky * lat.positions[s, 2]))
+                    for s in 1:size(lat.positions, 1) if lat.components[1][s];
+                    init=0.0 + 0.0im)
+            return abs(z) / (2 * d1 * d2)
+        end
+
+        # The three M points on an even-dimension cell
+        mpoints(d1, d2) = [(d1 ÷ 2, -(d2 ÷ 2)), (0, d2), (d1 ÷ 2, d2 ÷ 2)]
+
+        # Oracle agreement on random occupations at the M points and at
+        # generic indices, and the primitive-reciprocal wrapping identities,
+        # exact by the joint mod reduction
+        lat = obs_tri_lattice(6, 4)
+        Random.seed!(4164)
+        for _ in 1:20
+            lat.components[1] .= rand(Bool, 48)
+            for (m, n) in vcat(mpoints(6, 4), [(1, 0), (0, 1), (2, 3), (-1, 2)])
+                @test isapprox(bragg_amplitude(lat, m, n), tri_oracle(lat, m, n);
+                               atol=1e-12)
+                @test bragg_amplitude(lat, m, n) == bragg_amplitude(lat, m + 6, n - 4)
+                @test bragg_amplitude(lat, m, n) == bragg_amplitude(lat, m, n + 8)
+            end
+        end
+
+        # Perfect-phase table on (6, 4) and (12, 6): p(2×2) puts exactly 1/4
+        # on every M point (quadrature √3/4); each p(2×1) orientation puts
+        # exactly 1/2 on one M point and 0 on the other two (quadrature
+        # 1/2); the √3×√3 state scatters off the K points only, and the two
+        # order parameters are blind to each other's phase
+        for (d1, d2) in [(6, 4), (12, 6)]
+            latp = obs_tri_lattice(d1, d2)
+            M = 2 * d1 * d2
+
+            fill_ij!(latp, (i, j) -> iseven(i) && iseven(j))
+            @test count(latp.components[1]) == M ÷ 4
+            for (m, n) in mpoints(d1, d2)
+                @test bragg_amplitude(latp, m, n) == 1 / 4
+            end
+            @test order_parameter_p2x2(latp) ≈ sqrt(3) / 4 atol = 1e-12
+            @test order_parameter_sqrt3(latp) == 0.0
+
+            for pred in [(i, j) -> iseven(j), (i, j) -> iseven(i),
+                         (i, j) -> iseven(i - j)]
+                fill_ij!(latp, pred)
+                @test count(latp.components[1]) == M ÷ 2
+                amps = sort([bragg_amplitude(latp, m, n)
+                             for (m, n) in mpoints(d1, d2)])
+                @test amps[1] == 0.0 && amps[2] == 0.0 && amps[3] == 1 / 2
+                @test order_parameter_p2x2(latp) ≈ 1 / 2 atol = 1e-12
+                @test order_parameter_sqrt3(latp) == 0.0
+            end
+
+            fill_ij!(latp, (i, j) -> mod(i - j, 3) == 0)
+            @test count(latp.components[1]) == M ÷ 3
+            for (m, n) in mpoints(d1, d2)
+                @test bragg_amplitude(latp, m, n) == 0.0
+            end
+            @test order_parameter_p2x2(latp) == 0.0
+            @test order_parameter_sqrt3(latp) == 1 / 3
+        end
+
+        # Empty and full lattices scatter nothing off the reciprocal-lattice
+        # rods: exactly at the M points (half-turn phases are exact), to
+        # roundoff at generic indices (the phase rationals are not
+        # representable); a single particle gives 1/M
+        lat.components[1] .= false
+        for (m, n) in vcat(mpoints(6, 4), [(1, 1)])
+            @test bragg_amplitude(lat, m, n) == 0.0
+        end
+        @test order_parameter_p2x2(lat) == 0.0
+        lat.components[1] .= true
+        for (m, n) in mpoints(6, 4)
+            @test bragg_amplitude(lat, m, n) == 0.0
+        end
+        @test bragg_amplitude(lat, 1, 1) < 1e-15
+        @test order_parameter_p2x2(lat) == 0.0
+        lat.components[1] .= false
+        lat.components[1][1] = true
+        @test bragg_amplitude(lat, 1, 1) == 1 / 48
+        @test bragg_amplitude(lat, 0, 4) == 1 / 48
+        @test order_parameter_p2x2(lat) ≈ sqrt(3) / 48 atol = 1e-12
+
+        # Dispatch separation: the square methods are untouched by the new
+        # triangular method
+        sq = obs_square_lattice(4, 4)
+        Random.seed!(4165)
+        sq.components[1] .= rand(Bool, 16)
+        @test bragg_amplitude(sq, 2, 2) == order_parameter_c2x2(sq)
+        @test order_parameter_stripe(sq) == sqrt(bragg_amplitude(sq, 2, 0)^2 +
+                                                 bragg_amplitude(sq, 0, 2)^2)
+
+        # Guard paths: a three-dimensional supercell rejects both functions;
+        # odd in-plane dimensions reject the quadrature while the
+        # always-representable M₂ amplitude still evaluates; a nonstandard
+        # two-site basis rejects the amplitude
+        lat3d = MLattice{1,TriangularLattice}(
+            lattice_constant=1.0,
+            supercell_dimensions=(6, 4, 2),
+            periodicity=(true, true, true),
+            cutoff_radii=[1.1],
+            components=[[false for _ in 1:96]],
+            adsorptions=:full)
+        @test_throws ArgumentError bragg_amplitude(lat3d, 1, 0)
+        @test_throws ArgumentError order_parameter_p2x2(lat3d)
+        for (d1, d2) in [(3, 3), (5, 4)]
+            lodd = obs_tri_lattice(d1, d2)
+            @test_throws ArgumentError order_parameter_p2x2(lodd)
+            lodd.components[1][1] = true
+            @test bragg_amplitude(lodd, 0, d2) == 1 / (2 * d1 * d2)
+        end
+        latnb = MLattice{1,TriangularLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0), (0.5, 0.5, 0.0)],
+            supercell_dimensions=(6, 4, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[0.75],
+            components=[[false for _ in 1:48]],
+            adsorptions=:full,
+            image_multiplicity=true)
+        @test_throws ArgumentError bragg_amplitude(latnb, 1, 0)
+        @test_throws ArgumentError order_parameter_p2x2(latnb)
+
+        # The shipped default (4, 2, 1) cell passes this function's guards
+        # while order_parameter_sqrt3 rejects it (the docstring claim)
+        latdef = obs_tri_lattice(4, 2)
+        latdef.components[1][1] = true
+        @test order_parameter_p2x2(latdef) ≈ sqrt(3) / 16 atol = 1e-12
+        @test_throws ArgumentError order_parameter_sqrt3(latdef)
+
+        # A short seeded canonical NS run records the Binder moments through
+        # the moment-callback pattern from the docstring
+        Random.seed!(4166)
+        tri_ham1 = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
+        walkers = [LatticeWalker(deepcopy(obs_tri_lattice(6, 2)),
+                                 energy=0.0u"eV", iter=0) for _ in 1:20]
+        # Fixed-N ladder at N = 6: place 6 particles per walker
+        for w in walkers
+            occ = vcat(fill(true, 6), fill(false, 18))
+            shuffle!(occ)
+            w.configuration.components[1] .= occ
+        end
+        ls = LatticeGasWalkers(walkers, tri_ham1; perturb_energy=1e-9)
+        params = LatticeNestedSamplingParameters(mc_steps=30,
+            energy_perturbation=1e-9, allowed_fail_count=100000)
+
+        df, _, _ = nested_sampling(ls, params, Int64(200),
+            MCRandomWalkClone(), obs_save;
+            observables=[:psi => order_parameter_p2x2,
+                         :psi2 => (cfg -> order_parameter_p2x2(cfg)^2),
+                         :psi4 => (cfg -> order_parameter_p2x2(cfg)^4)])
+        obs_cleanup()
+
+        @test names(df) == ["iter", "emax", "psi", "psi2", "psi4"]
+        @test nrow(df) > 0
+        @test all(0.0 .<= df.psi .<= 1 / 2)
+        @test all(isapprox.(df.psi2, df.psi .^ 2; rtol=1e-12))
+        @test all(isapprox.(df.psi4, df.psi .^ 4; rtol=1e-12))
+    end
+
     @testset "observable hook: validation" begin
         lat = obs_square_lattice(4, 4)
         walkers = [LatticeWalker(deepcopy(lat), energy=0.0u"eV", iter=0) for _ in 1:8]

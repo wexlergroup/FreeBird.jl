@@ -882,6 +882,175 @@ function order_parameter_stripe(lattice::MLattice{1,SquareLattice}; period::Int=
 end
 
 """
+    bragg_amplitude(lattice::MLattice{1,TriangularLattice}, m::Int, n::Int) -> Float64
+
+Normalized Bragg-peak amplitude of the occupation pattern on a
+single-component triangular lattice:
+
+    |ρ(k)| = |Σ_{occupied sites} e^{ik·r}| / M,   k = 2π·(m/d₁, n/(√3·d₂)),
+
+in units of the inverse lattice constant, where `(d₁, d₂)` are the in-plane
+supercell dimensions of the conventional (centered-rectangular) cell and
+`M = 2·d₁·d₂` is the number of sites; the sum runs over both basis sites,
+so the two-site basis phases are included. Integer indices on the
+conventional-cell reciprocal grid make every representable k commensurate
+by construction, in the same LEED-intensity convention as the square-lattice
+method [Zhang, Blum & Reuter, PRB **75**, 235406 (2007)].
+
+Because the basis sites live on the half-integer grid of the conventional
+cell, amplitudes are periodic under the *primitive* reciprocal lattice
+rather than index-wise:
+`bragg_amplitude(lat, m, n) == bragg_amplitude(lat, m + d1, n - d2) ==
+bragg_amplitude(lat, m, n + 2*d2)` (the two index shifts add the primitive
+reciprocal vectors b₁ = 2π·(1, −1/√3) and b₂ = 2π·(0, 2/√3)), and both
+identities hold exactly. The three M points of the triangular Brillouin
+zone sit at `(m, n) = (0, d2)` (representable on any cell) and
+`(d1 ÷ 2, ∓(d2 ÷ 2))` (integer indices for even in-plane dimensions);
+M-point phases are exactly ±1.0 (u and v share the parity of the basis
+index, so the quarter-turn table entries always combine to half turns), so
+the documented values of [`order_parameter_p2x2`](@ref) hold to full
+precision. The empty lattice gives exactly `0` at every k; the full
+lattice gives `0` for any k that is not a reciprocal-lattice vector of the
+triangular lattice, exactly at the three M points and to floating-point
+roundoff at generic indices (where the phasor components are irrational).
+A single particle gives `1/M`.
+
+Like the named order parameters, |ρ(k)| is not a function of `(E, N)` and
+must be evaluated on configurations (e.g. per culled walker, via the
+`observables` keyword of the nested-sampling loops); see
+[`order_parameter_p2x2`](@ref) for the composed-observable recipes.
+
+Requires the standard two-site centered-rectangular triangular basis
+`[(0, 0, 0), (a/2, √3·a/2, 0)]` consistent with the lattice vectors and a
+strictly two-dimensional supercell (`supercell_dimensions[3] == 1`);
+violations throw an `ArgumentError`.
+"""
+function bragg_amplitude(lattice::MLattice{1,TriangularLattice}, m::Int, n::Int)
+    if length(lattice.basis) != 2
+        throw(ArgumentError("bragg_amplitude requires the two-site " *
+            "centered-rectangular triangular basis, got " *
+            "$(length(lattice.basis)) basis sites"))
+    end
+    ax, ay = lattice.lattice_vectors[1, 1], lattice.lattice_vectors[2, 2]
+    b1, b2 = lattice.basis
+    if !(isapprox(b1[1], 0.0, atol=1e-9) && isapprox(b1[2], 0.0, atol=1e-9) &&
+         isapprox(b2[1], ax / 2, atol=1e-9) && isapprox(b2[2], ay / 2, atol=1e-9))
+        throw(ArgumentError("bragg_amplitude requires the standard " *
+            "triangular basis [(0, 0, 0), (a/2, √3·a/2, 0)] consistent with " *
+            "the lattice vectors, got $(lattice.basis)"))
+    end
+    d1, d2, d3 = lattice.supercell_dimensions
+    if d3 != 1
+        throw(ArgumentError("bragg_amplitude requires a two-dimensional " *
+            "supercell (supercell_dimensions[3] == 1), got $d3 layers"))
+    end
+    # Site (b, ci, cj) sits at r = ((ci − 1) + b/2, √3·((cj − 1) + b/2))·a,
+    # so on the half-integer grid u = 2(ci − 1) + b, v = 2(cj − 1) + b the
+    # phase is k·r = π·(m·u·d₂ + n·v·d₁)/(d₁·d₂). The numerator is reduced
+    # as one integer modulo 2·d₁·d₂ before the single cispi call per
+    # occupied site: half- and quarter-turn phases come out exactly
+    # ±1.0/±1.0im, every combined M-point phase is exactly ±1.0, and the
+    # joint reduction makes the b₁/b₂ wrapping identities hold bit-exactly,
+    # since both shifts move the numerator by even multiples of d₁·d₂
+    # (u and v share the parity of the basis index).
+    twoM = 2 * d1 * d2
+    mr = mod(m, 2 * d1)
+    nr = mod(n, 2 * d2)
+    colnum = [mod(mr * u * d2, twoM) for u in 0:2*d1-1]
+    rownum = [mod(nr * v * d1, twoM) for v in 0:2*d2-1]
+    occ = lattice.components[1]
+    z = 0.0 + 0.0im
+    for s in eachindex(occ)
+        if occ[s]
+            # lattice_positions ordering: basis innermost, dimension 1 fastest
+            b = (s - 1) % 2
+            ci0 = ((s - 1) ÷ 2) % d1
+            cj0 = (s - 1) ÷ (2 * d1)
+            num = colnum[2*ci0+b+1] + rownum[2*cj0+b+1]
+            num >= twoM && (num -= twoM)
+            z += cispi(num / (d1 * d2))
+        end
+    end
+    return abs(z) / twoM
+end
+
+"""
+    order_parameter_p2x2(lattice::MLattice{1,TriangularLattice}) -> Float64
+
+Orientation-degenerate M-point order parameter for p(2×2) and p(2×1)/row
+ordering on a single-component triangular lattice: the quadrature sum of
+the three normalized M-point Bragg amplitudes,
+
+    Ψ = √(|ρ(M₁)|² + |ρ(M₂)|² + |ρ(M₃)|²),
+
+i.e. `sqrt(bragg_amplitude(lat, d1 ÷ 2, -(d2 ÷ 2))^2 +
+bragg_amplitude(lat, 0, d2)^2 + bragg_amplitude(lat, d1 ÷ 2, d2 ÷ 2)^2)`
+with the amplitudes of [`bragg_amplitude`](@ref). A perfect p(2×2)
+arrangement at coverage 1/4 contributes exactly `1/4` at every M point,
+giving `√3/4 ≈ 0.4330`; a perfect single-orientation p(2×1) row phase at
+coverage 1/2 puts exactly `1/2` on one M point and `0` on the other two,
+giving `1/2`; the perfect (√3×√3)R30° state (K-point order) and the empty
+and the full lattice give exactly `0`; disordered configurations give
+O(1/√M). Translation and orientation degeneracies are divided out, so all
+degenerate ordered states of each phase give the same value.
+
+The M-point pattern separates the two phases where the scalar cannot: the
+max-to-quadrature ratio of the three amplitudes is `1/√3` for p(2×2)
+(three equal M points) and `1` for a single p(2×1) orientation; compose it
+caller-side from `bragg_amplitude` when needed. [`order_parameter_sqrt3`](@ref)
+is exactly `0` on both M-point phases and this function is exactly `0` on
+the √3×√3 phase, so the two observables are orthogonal discriminators.
+
+Ψ is not a function of `(E, N)` and must be evaluated on configurations
+(e.g. per culled walker, via the `observables` keyword of the
+nested-sampling loops). Higher moments for Binder-cumulant analysis are
+composed caller-side, with no library change:
+
+    observables = [:psi  => order_parameter_p2x2,
+                   :psi2 => cfg -> order_parameter_p2x2(cfg)^2,
+                   :psi4 => cfg -> order_parameter_p2x2(cfg)^4]
+
+Requires the structural guards of [`bragg_amplitude`](@ref) plus even
+in-plane supercell dimensions: the M points sit at half-integer reciprocal
+indices, and even circumferences are exactly the wrap-invariance condition
+of the p(2×2) sublattice. A cell hosting this order parameter and
+[`order_parameter_sqrt3`](@ref) simultaneously needs
+`supercell_dimensions[1]` divisible by 6 with an even second dimension;
+the shipped default `(4, 2, 1)` satisfies this function's guards but not
+the √3×√3 one's.
+"""
+function order_parameter_p2x2(lattice::MLattice{1,TriangularLattice})
+    if length(lattice.basis) != 2
+        throw(ArgumentError("order_parameter_p2x2 requires the two-site " *
+            "centered-rectangular triangular basis, got " *
+            "$(length(lattice.basis)) basis sites"))
+    end
+    ax, ay = lattice.lattice_vectors[1, 1], lattice.lattice_vectors[2, 2]
+    b1, b2 = lattice.basis
+    if !(isapprox(b1[1], 0.0, atol=1e-9) && isapprox(b1[2], 0.0, atol=1e-9) &&
+         isapprox(b2[1], ax / 2, atol=1e-9) && isapprox(b2[2], ay / 2, atol=1e-9))
+        throw(ArgumentError("order_parameter_p2x2 requires the standard " *
+            "triangular basis [(0, 0, 0), (a/2, √3·a/2, 0)] consistent with " *
+            "the lattice vectors, got $(lattice.basis)"))
+    end
+    d1, d2, d3 = lattice.supercell_dimensions
+    if d3 != 1
+        throw(ArgumentError("order_parameter_p2x2 requires a two-dimensional " *
+            "supercell (supercell_dimensions[3] == 1), got $d3 layers"))
+    end
+    if d1 % 2 != 0 || d2 % 2 != 0
+        bad = d1 % 2 != 0 ? d1 : d2
+        throw(ArgumentError("order_parameter_p2x2 requires even in-plane " *
+            "supercell dimensions, since the M points sit at half-integer " *
+            "reciprocal indices and the p(2×2) sublattice closes on the " *
+            "periodic cell only for even circumferences; got $bad"))
+    end
+    return sqrt(bragg_amplitude(lattice, d1 ÷ 2, -(d2 ÷ 2))^2 +
+                bragg_amplitude(lattice, 0, d2)^2 +
+                bragg_amplitude(lattice, d1 ÷ 2, d2 ÷ 2)^2)
+end
+
+"""
     _check_planar_basis(caller::Symbol, lattice::MLattice)
 
 Shared guard for the layer helpers: throw an `ArgumentError`, naming the

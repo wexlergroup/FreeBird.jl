@@ -1,3 +1,29 @@
+# Custom-Hamiltonian fixtures for the extension-contract testset at the
+# bottom of this file; type definitions must sit at the file's top level.
+# ExtCoordHam: a coordination-dependent global functional no shipped pair,
+# cluster, or site-field type expresses (the documentation page's example).
+struct ExtCoordHam <: ClassicalHamiltonian
+    j::Float64
+end
+function FreeBird.EnergyEval.interacting_energy(lattice::SLattice, h::ExtCoordHam)
+    occ = lattice.components[1]
+    doubly = count(s -> occ[s] &&
+                        count(n -> occ[n], lattice.neighbors[s][1]) == 2,
+                   eachindex(occ))
+    return h.j * doubly^2 * u"eV"
+end
+# ExtDelegatingHam: wraps a shipped Hamiltonian unchanged, so a same-seed
+# run must be bit-identical to the shipped type (stream neutrality of the
+# extension path, including the setup validation)
+struct ExtDelegatingHam <: ClassicalHamiltonian
+    inner
+end
+FreeBird.EnergyEval.interacting_energy(lattice::SLattice, h::ExtDelegatingHam) =
+    interacting_energy(lattice, h.inner)
+# ExtBadHam: violates the return-type contract (plain Float64)
+struct ExtBadHam <: ClassicalHamiltonian end
+FreeBird.EnergyEval.interacting_energy(lattice::SLattice, h::ExtBadHam) = 1.6
+
 @testset "AbstractLiveSets Tests" begin
     @testset "atomistic_livesets.jl tests" begin
 
@@ -400,6 +426,136 @@
                 @test occursin("$comp", output)
             end
         end
+    end
+
+    @testset "custom-Hamiltonian extension contract" begin
+        using Random
+        ext_sq = MLattice{1,SquareLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)],
+            supercell_dimensions=(4, 4, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1, 1.5],
+            components=[[false for _ in 1:16]],
+            adsorptions=:full)
+        ext_tri = MLattice{1,TriangularLattice}(
+            lattice_constant=1.0,
+            supercell_dimensions=(3, 3, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1],
+            components=[[false for _ in 1:18]],
+            adsorptions=:full)
+        ext_ham = ExtCoordHam(0.1)
+
+        # Negative path: the return-type contract violation raises the
+        # descriptive ArgumentError at walker setup, naming the method and
+        # the required dimension, both at construction and through
+        # exact_enumeration (which constructs a liveset internally)
+        bad_walkers = [LatticeWalker(deepcopy(ext_sq), energy=0.0u"eV", iter=0)]
+        @test_throws ArgumentError LatticeGasWalkers(bad_walkers, ExtBadHam())
+        err = try
+            LatticeGasWalkers(bad_walkers, ExtBadHam())
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("interacting_energy", err.msg)
+        @test occursin("energy-dimensioned", err.msg)
+        @test occursin("Float64", err.msg)
+        @test_throws ArgumentError exact_enumeration(deepcopy(ext_sq), ExtBadHam())
+
+        # Positive path: one interacting_energy method serves construction
+        # on both geometries, with energies matching an independent
+        # re-evaluation of the same rule
+        Random.seed!(4661)
+        function ext_independent(lat)
+            occ = lat.components[1]
+            c = 0
+            for s in eachindex(occ)
+                occ[s] || continue
+                nb = count(n -> occ[n], lat.neighbors[s][1])
+                c += (nb == 2) ? 1 : 0
+            end
+            return 0.1 * c^2
+        end
+        for lat in (ext_sq, ext_tri)
+            walkers = [LatticeWalker(deepcopy(lat), energy=0.0u"eV", iter=0)
+                       for _ in 1:6]
+            for w in walkers
+                w.configuration.components[1] .= rand(Bool, length(w.configuration.components[1]))
+            end
+            ls = LatticeGasWalkers(walkers, ext_ham)
+            for w in ls.walkers
+                @test w.energy.val == ext_independent(w.configuration)
+            end
+        end
+
+        # Positive path, sampled: a short seeded grand-canonical run drives
+        # the custom Hamiltonian through the full loop
+        Random.seed!(4662)
+        walkers = [LatticeWalker(deepcopy(ext_sq), energy=0.0u"eV", iter=0)
+                   for _ in 1:8]
+        ls = LatticeGasWalkers(walkers, ext_ham; assign_energy=false)
+        gc = GrandCanonicalNestedSamplingParameters(mc_steps=20,
+            chemical_potential=-0.05, energy_perturbation=1e-9)
+        ext_save = SaveEveryN("t_ext.csv", "t_ext.traj", "t_ext.ls",
+                              1000000, 1000000, 1000000)
+        df, _, _ = grand_canonical_nested_sampling(ls, gc, Int64(100),
+            MCGrandCanonicalMoves(), ext_save;
+            observables=[:n_occ => (cfg -> Float64(sum(cfg.components[1])))])
+        # The 10^6-step save intervals guarantee no t_ext.* file is written
+        # in these short runs; the rm calls are defensive cleanup only
+        rm.(["t_ext.csv", "t_ext.traj", "t_ext.ls"], force=true)
+        @test nrow(df) > 0
+        @test all(isfinite, df.energy)
+        @test "n_occ" in names(df)
+        @test all(isfinite, df.n_occ)
+        @test df.n_occ == Float64.(df.num_particles)
+
+        # Positive path, enumerated: the fixed-N spectra match a brute force
+        # over all occupations of the independent rule, on the square
+        # C(16, 4) and the triangular C(18, 3) sectors
+        for (lat0, M, N) in [(ext_sq, 16, 4), (ext_tri, 18, 3)]
+            latN = deepcopy(lat0)
+            latN.components[1] .= vcat(fill(true, N), fill(false, M - N))
+            dfe, _ = exact_enumeration(latN, ext_ham)
+            @test nrow(dfe) == binomial(M, N)
+            probe = deepcopy(lat0)
+            brute = Float64[]
+            for mask in 0:(2^M-1)
+                count_ones(mask) == N || continue
+                for s in 1:M
+                    probe.components[1][s] = ((mask >> (s - 1)) & 1) == 1
+                end
+                push!(brute, ext_independent(probe))
+            end
+            @test sort([ustrip(u"eV", e) for e in dfe.energy]) == sort(brute)
+        end
+
+        # Shipped types still construct through the validated path with
+        # bit-identical energies (the validation is a no-op for them), and
+        # a delegating custom Hamiltonian is a same-seed drop-in for the
+        # shipped type it wraps: identical ideal-gas-referenced ledgers
+        ext_gham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+        function ext_igref(seed, h)
+            Random.seed!(seed)
+            ws = [LatticeWalker(deepcopy(ext_sq), energy=0.0u"eV", iter=0)
+                  for _ in 1:12]
+            l = LatticeGasWalkers(ws, h; assign_energy=false)
+            p = IdealGasReferencedGCNSParameters(mc_steps=20,
+                reference_fugacity=1.0, energy_perturbation=1e-9)
+            d, fl, _ = ideal_gas_referenced_nested_sampling(l, p, Int64(80),
+                MCGrandCanonicalMoves(), ext_save)
+            rm.(["t_ext.csv", "t_ext.traj", "t_ext.ls"], force=true)
+            return d, [w.energy.val for w in fl.walkers]
+        end
+        dfS, liveS = ext_igref(4663, ext_gham)
+        dfD, liveD = ext_igref(4663, ExtDelegatingHam(ext_gham))
+        @test dfS.iter == dfD.iter
+        @test dfS.emax == dfD.emax
+        @test dfS.num_particles == dfD.num_particles
+        @test liveS == liveD
     end
 
 end

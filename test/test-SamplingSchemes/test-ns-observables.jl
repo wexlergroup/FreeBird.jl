@@ -2502,4 +2502,428 @@
         @test params_b.move_stats[:insert_biased_accepted] <=
               params_b.move_stats[:insert_biased_attempted]
     end
+
+    # ================================================================
+    @testset "end-to-end: triangular eight-shell + trio cluster expansion, igref" begin
+        # Independent geometry for the triangular cells: explicit-image torus
+        # distances from the stored positions, no FreeBird neighbor or
+        # embedding code
+        tce_sq3 = sqrt(3.0)
+        function tce_tdist(p, q, Lx, Ly)
+            best = Inf
+            for ix in -1:1, iy in -1:1
+                best = min(best, hypot(p[1] - q[1] + ix * Lx, p[2] - q[2] + iy * Ly))
+            end
+            return best
+        end
+
+        # Structural pins on the 18-site (3, 3, 1) cell: the NN-triangle
+        # motif counts 42 embeddings under the torus convention (36 faces
+        # plus 6 winding three-cycles) and the linear trio 36 (aliasing),
+        # then the full 2^18 spectrum of the pair + two-trio expansion is
+        # checked configuration-resolved against an independent evaluation
+        tri18 = obs_tri_lattice(3, 3)
+        tri18_tris = @test_logs (:warn, r"faithful quotient") match_mode = :any enumerate_motif_embeddings(
+            tri18, [1.0, 1.0, 1.0]; expected_count=42)
+        tri18_lins = @test_logs (:warn, r"faithful quotient") match_mode = :any enumerate_motif_embeddings(
+            tri18, [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)])
+        @test length(tri18_lins) == 36
+        tce_ham18 = ClusterLatticeHamiltonian(
+            GenericLatticeHamiltonian(0.0, [0.1], u"eV"),
+            [ClusterInteraction(0.05u"eV", tri18_tris),
+             ClusterInteraction(-0.02u"eV", tri18_lins)])
+        p18 = [(tri18.positions[s, 1], tri18.positions[s, 2]) for s in 1:18]
+        pairs18 = [(i, j) for i in 1:18 for j in (i+1):18
+                   if abs(tce_tdist(p18[i], p18[j], 3.0, 3 * tce_sq3) - 1.0) < 1e-9]
+        @test length(pairs18) == 54
+        probe18 = deepcopy(tri18)
+        worst18 = 0.0
+        for mask in 0:(2^18-1)
+            occ = probe18.components[1]
+            for s in 1:18
+                occ[s] = ((mask >> (s - 1)) & 1) == 1
+            end
+            e_own = 0.1 * count(pr -> occ[pr[1]] && occ[pr[2]], pairs18) +
+                    0.05 * count(t -> occ[t[1]] && occ[t[2]] && occ[t[3]], tri18_tris) -
+                    0.02 * count(t -> occ[t[1]] && occ[t[2]] && occ[t[3]], tri18_lins)
+            worst18 = max(worst18, abs(ustrip(u"eV", interacting_energy(probe18, tce_ham18)) - e_own))
+        end
+        @test worst18 <= 1e-12
+
+        # End-to-end cell: (4, 2, 1) with image_multiplicity (the bulk-tiled
+        # convention restores the coordination sequence (6, 6, 6, 12, 6, 6,
+        # 12, 6) on the small cell), eight pair shells plus both trio motifs
+        # enumerated on this cell with independently counted expected_count.
+        # The NN-triangle enumeration is faithful here (shortest circumference
+        # 2sqrt(3) > 3·1); the linear trio wraps and warns.
+        tce_lat = MLattice{1,TriangularLattice}(
+            lattice_constant=1.0,
+            supercell_dimensions=(4, 2, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.05, 1.75, 2.05, 2.7, 3.05, 3.5, 3.65, 4.05],
+            components=[[false for _ in 1:16]],
+            adsorptions=:full,
+            image_multiplicity=true)
+        @test all(nb -> length.(nb) == [6, 6, 6, 12, 6, 6, 12, 6], tce_lat.neighbors)
+        p16 = [(tce_lat.positions[s, 1], tce_lat.positions[s, 2]) for s in 1:16]
+        function tce_trios(dists)
+            found = NTuple{3,Int}[]
+            for a in 1:16, b in (a+1):16, c in (b+1):16
+                ds = sort([tce_tdist(p16[a], p16[b], 4.0, 2 * tce_sq3),
+                           tce_tdist(p16[a], p16[c], 4.0, 2 * tce_sq3),
+                           tce_tdist(p16[b], p16[c], 4.0, 2 * tce_sq3)])
+                all(abs.(ds .- dists) .< 1e-9) && push!(found, (a, b, c))
+            end
+            return found
+        end
+        own_tris = tce_trios([1.0, 1.0, 1.0])
+        own_lins = tce_trios([1.0, 1.0, 2.0])
+        tce_tris = enumerate_motif_embeddings(tce_lat, [1.0, 1.0, 1.0];
+            expected_count=length(own_tris))
+        tce_lins = @test_logs (:warn, r"faithful quotient") match_mode = :any enumerate_motif_embeddings(
+            tce_lat, [1.0, 1.0, 2.0]; expected_count=length(own_lins))
+        @test sort(collect(tce_tris)) == sort(own_tris)
+        @test sort(collect(tce_lins)) == sort(own_lins)
+        tce_J8 = [0.10, -0.02, 0.01, -0.005, 0.004, -0.003, 0.002, -0.001]
+        tce_ham = ClusterLatticeHamiltonian(
+            GenericLatticeHamiltonian(0.0, tce_J8, u"eV"),
+            [ClusterInteraction(0.05u"eV", tce_tris),
+             ClusterInteraction(-0.02u"eV", tce_lins)])
+
+        # Independent multiplicity-weighted bond multiset from explicit image
+        # enumeration, then the full 2^16 own-energy table and the
+        # configuration-resolved spectrum check; the E_min(N) ladder's ends
+        # pin the empty lattice at exactly zero and the full lattice at the
+        # bulk-tiled closed form
+        tce_radii = [1.05, 1.75, 2.05, 2.7, 3.05, 3.5, 3.65, 4.05]
+        bonds16 = Tuple{Int,Int,Int}[]
+        for i in 1:16, j in 1:16
+            for ix in -3:3, iy in -3:3
+                (j == i && ix == 0 && iy == 0) && continue
+                d = hypot(p16[i][1] - p16[j][1] + ix * 4.0,
+                          p16[i][2] - p16[j][2] + iy * 2 * tce_sq3)
+                d > tce_radii[end] && continue
+                sh = findfirst(r -> d <= r, tce_radii)
+                sh === nothing || push!(bonds16, (i, j, sh))
+            end
+        end
+        occ16 = fill(false, 16)
+        e_own16 = zeros(2^16)
+        for mask in 0:(2^16-1)
+            for s in 1:16
+                occ16[s] = ((mask >> (s - 1)) & 1) == 1
+            end
+            e = 0.0
+            for (i, j, sh) in bonds16
+                (occ16[i] && occ16[j]) && (e += tce_J8[sh] / 2)
+            end
+            e += 0.05 * count(t -> occ16[t[1]] && occ16[t[2]] && occ16[t[3]], tce_tris)
+            e -= 0.02 * count(t -> occ16[t[1]] && occ16[t[2]] && occ16[t[3]], tce_lins)
+            e_own16[mask+1] = e
+        end
+        probe16 = deepcopy(tce_lat)
+        psi16 = zeros(2^16)
+        n16 = zeros(Int, 2^16)
+        worst16 = 0.0
+        for mask in 0:(2^16-1)
+            occ = probe16.components[1]
+            for s in 1:16
+                occ[s] = ((mask >> (s - 1)) & 1) == 1
+            end
+            worst16 = max(worst16, abs(ustrip(u"eV", interacting_energy(probe16, tce_ham)) - e_own16[mask+1]))
+            psi16[mask+1] = order_parameter_p2x2(probe16)
+            n16[mask+1] = count_ones(mask)
+        end
+        @test worst16 <= 1e-12
+        emin16 = [minimum(e_own16[mask+1] for mask in 0:(2^16-1) if count_ones(mask) == N)
+                  for N in 0:16]
+        @test emin16[1] == 0.0
+        tce_zbulk = [6, 6, 6, 12, 6, 6, 12, 6]
+        tce_full = 16 / 2 * sum(tce_zbulk .* tce_J8) +
+                   0.05 * length(tce_tris) - 0.02 * length(tce_lins)
+        @test abs(emin16[17] - tce_full) < 1e-12
+
+        # Constructed-configuration pins on the perfect p(2x2): axial
+        # coordinates from the positions, occupied where both are even
+        tce_ij = map(1:16) do s
+            x, y = tce_lat.positions[s, 1], tce_lat.positions[s, 2]
+            j = round(Int, 2 * y / tce_sq3)
+            (round(Int, x - j / 2), j)
+        end
+        probe16.components[1] .= [iseven(i) && iseven(j) for (i, j) in tce_ij]
+        @test count(probe16.components[1]) == 4
+        @test order_parameter_p2x2(probe16) ≈ sqrt(3) / 4 atol = 1e-12
+        for (m, n) in [(2, -1), (0, 2), (2, 1)]
+            @test bragg_amplitude(probe16, m, n) == 1 / 4
+        end
+
+        # Exact grand references and the seeded igref run with the M-point
+        # order parameter recorded through the hook. Tolerances: three-seed
+        # calibrated (seeds 5301/5302/5303), per stat, >= 3x the maximum
+        # deviation (lnXi 0.279, N 0.508, U 0.021, Psi 0.0142); sigma =
+        # sqrt(16 ln 2 / 100) ~ 0.33 for lnXi. Both mu = +-0.1 corners of
+        # the 800 K row sit deliberately at the |ln(z/z0)| ~ 1.45
+        # trust-window edge; the low-fugacity corner (mu = -0.1,
+        # z = e^{beta mu} ~ 0.23 against z0 = 1) binds, with calibrated
+        # minimum Kish N_eff 23.5, so the health floor is 15, not a
+        # production-grade gate
+        tce_kb = 8.617333262e-5
+        tce_mus = [-0.1, 0.0, 0.1]
+        tce_Ts = [800.0, 1200.0, 2000.0]
+        function tce_exact(mu, T)
+            beta = 1 / (tce_kb * T)
+            w = [exp(beta * (mu * n16[k] - e_own16[k])) for k in 1:2^16]
+            Z = sum(w)
+            return (log(Z), sum(w .* n16) / Z, sum(w .* e_own16) / Z, sum(w .* psi16) / Z)
+        end
+        Random.seed!(5301)
+        tce_walkers = [LatticeWalker(deepcopy(tce_lat), energy=0.0u"eV", iter=0)
+                       for _ in 1:100]
+        tce_ls = LatticeGasWalkers(tce_walkers, tce_ham; assign_energy=false)
+        tce_params = IdealGasReferencedGCNSParameters(mc_steps=60,
+            reference_fugacity=1.0, energy_perturbation=1e-9)
+        tce_df, tce_out, _ = ideal_gas_referenced_nested_sampling(tce_ls,
+            tce_params, Int64(1280), MCGrandCanonicalMoves(), obs_save;
+            observables=[:psi => order_parameter_p2x2])
+        obs_cleanup()
+        tce_liveE = [w.energy.val for w in tce_out.walkers]
+        tce_liveN = [Int(sum(w.configuration.components[1])) for w in tce_out.walkers]
+        tce_livePsi = Dict(:psi => [order_parameter_p2x2(w.configuration) for w in tce_out.walkers])
+        tce_st = gc_thermodynamic_stats_ideal_ref(tce_df, 16, 1.0, tce_mus, tce_Ts,
+            100; ω0=101 / 100, live_emax=tce_liveE, live_numbers=tce_liveN,
+            observable_cols=[:psi], live_observables=tce_livePsi)
+        for (i, mu) in enumerate(tce_mus), (j, T) in enumerate(tce_Ts)
+            lnXi, mN, mU, mPsi = tce_exact(mu, T)
+            @test tce_st.N_eff[i, j] >= 15
+            @test abs(tce_st.logXi[i, j] - lnXi) < 0.9
+            @test abs(tce_st.mean_N[i, j] - mN) < 1.6
+            @test abs(tce_st.mean_U[i, j] - mU) < 0.07
+            @test abs(tce_st.observables[:psi][i, j] - mPsi) < 0.045
+        end
+    end
+
+    # ================================================================
+    @testset "end-to-end: cross-Hamiltonian reweighting closure (3x3 triangular)" begin
+        # Sample the reference ladder under the pair Hamiltonian A, record
+        # the trio-augmented Hamiltonian B per dead point through the
+        # observables hook and the occupation vectors through the dead-point
+        # callback; the substituted ledger (B's energies replacing emax and
+        # the live tail) closes against B's exact grand sum over the same
+        # prior-volume weights, and the substituted estimator's Kish N_eff
+        # never exceeds the control's
+        xh_lat = obs_tri_lattice(3, 3)
+        xh_hamA = GenericLatticeHamiltonian(0.0, [0.1], u"eV")
+        xh_tris = @test_logs (:warn, r"faithful quotient") match_mode = :any enumerate_motif_embeddings(
+            xh_lat, [1.0, 1.0, 1.0]; expected_count=42)
+        xh_hamB = ClusterLatticeHamiltonian(GenericLatticeHamiltonian(0.0, [0.1], u"eV"),
+            [ClusterInteraction(0.05u"eV", xh_tris)])
+
+        # Independent energies for both Hamiltonians over all 2^18 configs
+        xh_sq3 = sqrt(3.0)
+        function xh_tdist(p, q)
+            best = Inf
+            for ix in -1:1, iy in -1:1
+                best = min(best, hypot(p[1] - q[1] + ix * 3.0, p[2] - q[2] + iy * 3 * xh_sq3))
+            end
+            return best
+        end
+        xp = [(xh_lat.positions[s, 1], xh_lat.positions[s, 2]) for s in 1:18]
+        xh_pairs = [(i, j) for i in 1:18 for j in (i+1):18
+                    if abs(xh_tdist(xp[i], xp[j]) - 1.0) < 1e-9]
+        eA = zeros(2^18)
+        eB = zeros(2^18)
+        nX = zeros(Int, 2^18)
+        xocc = fill(false, 18)
+        for mask in 0:(2^18-1)
+            for s in 1:18
+                xocc[s] = ((mask >> (s - 1)) & 1) == 1
+            end
+            pa = 0.1 * count(pr -> xocc[pr[1]] && xocc[pr[2]], xh_pairs)
+            tri = 0.05 * count(t -> xocc[t[1]] && xocc[t[2]] && xocc[t[3]], xh_tris)
+            eA[mask+1] = pa
+            eB[mask+1] = pa + tri
+            nX[mask+1] = count_ones(mask)
+        end
+        xprobe = deepcopy(xh_lat)
+        Random.seed!(5400)
+        for _ in 1:50
+            mask = rand(0:(2^18-1))
+            for s in 1:18
+                xprobe.components[1][s] = ((mask >> (s - 1)) & 1) == 1
+            end
+            @test abs(ustrip(u"eV", interacting_energy(xprobe, xh_hamA)) - eA[mask+1]) <= 1e-12
+            @test abs(ustrip(u"eV", interacting_energy(xprobe, xh_hamB)) - eB[mask+1]) <= 1e-12
+        end
+        xh_kb = 8.617333262e-5
+        function xh_exact(evec, mu, T)
+            beta = 1 / (xh_kb * T)
+            mx = maximum(beta * (mu * nX[k] - evec[k]) for k in 1:2^18)
+            return log(sum(exp(beta * (mu * nX[k] - evec[k]) - mx) for k in 1:2^18)) + mx
+        end
+        xh_mus = [-0.05, 0.0, 0.05]
+        xh_Ts = [800.0, 1200.0, 2000.0]
+
+        # One seeded ladder under A. Tolerances: three-seed calibrated
+        # (seeds 5401/5402/5403), per route, >= 3x the maximum deviation
+        # (control 0.324, substituted 0.325); sigma = sqrt(18 ln 2 / 200)
+        # ~ 0.25; the N_eff monotonicity held on every calibration seed
+        Random.seed!(5401)
+        xh_walkers = [LatticeWalker(deepcopy(xh_lat), energy=0.0u"eV", iter=0)
+                      for _ in 1:200]
+        xh_ls = LatticeGasWalkers(xh_walkers, xh_hamA; assign_energy=false)
+        xh_params = IdealGasReferencedGCNSParameters(mc_steps=100,
+            reference_fugacity=1.0, energy_perturbation=1e-9)
+        xh_configs = Vector{Bool}[]
+        xh_df, xh_out, _ = ideal_gas_referenced_nested_sampling(xh_ls, xh_params,
+            Int64(2870), MCGrandCanonicalMoves(), obs_save;
+            observables=[:U_b => (cfg -> ustrip(u"eV", interacting_energy(cfg, xh_hamB)))],
+            dead_point_callback=(iter, w) ->
+                push!(xh_configs, copy(w.configuration.components[1])))
+        obs_cleanup()
+        @test nrow(xh_df) > 0
+        @test length(xh_configs) == nrow(xh_df)
+        # The callback-collected configurations re-evaluate to the recorded
+        # H_b column exactly
+        xrecomp = [begin
+                       xprobe.components[1] .= c
+                       ustrip(u"eV", interacting_energy(xprobe, xh_hamB))
+                   end for c in xh_configs]
+        @test xrecomp == xh_df.U_b
+
+        xh_liveE = [w.energy.val for w in xh_out.walkers]
+        xh_liveN = [Int(sum(w.configuration.components[1])) for w in xh_out.walkers]
+        xh_stA = gc_thermodynamic_stats_ideal_ref(xh_df, 18, 1.0, xh_mus, xh_Ts,
+            200; ω0=201 / 200, live_emax=xh_liveE, live_numbers=xh_liveN)
+        xh_dfB = copy(xh_df)
+        xh_dfB.emax = copy(xh_df.U_b)
+        xh_liveEB = [begin
+                         xprobe.components[1] .= w.configuration.components[1]
+                         ustrip(u"eV", interacting_energy(xprobe, xh_hamB))
+                     end for w in xh_out.walkers]
+        xh_stB = gc_thermodynamic_stats_ideal_ref(xh_dfB, 18, 1.0, xh_mus, xh_Ts,
+            200; ω0=201 / 200, live_emax=xh_liveEB, live_numbers=xh_liveN)
+        for (i, mu) in enumerate(xh_mus), (j, T) in enumerate(xh_Ts)
+            @test abs(xh_stA.logXi[i, j] - xh_exact(eA, mu, T)) < 1.0
+            @test abs(xh_stB.logXi[i, j] - xh_exact(eB, mu, T)) < 1.0
+            @test 0 < xh_stB.N_eff[i, j] <= xh_stA.N_eff[i, j]
+        end
+    end
+
+    # ================================================================
+    @testset "end-to-end: honeycomb recipe through the generic lattice" begin
+        # The honeycomb adlattice through the MLattice{1,GenericLattice}
+        # inner constructor: rectangular doubled cell (orthogonal vectors
+        # keep the per-axis minimum-image reduction exact) with the
+        # four-site honeycomb basis. With the underlying triangular lattice
+        # constant a = 1 the honeycomb edge is d_nn = a/sqrt(3) ~ 0.577 and
+        # the successive neighbor distances are d_nn * (1, sqrt(3), 2,
+        # sqrt(7)) = (0.577, 1.000, 1.155, 1.528) with multiplicities
+        # (3, 6, 3, 6), so the ladder [0.7, 1.05, 1.30, 1.60] brackets
+        # exactly one distance class per shell. Geometric cluster moves have
+        # no GenericLattice method, so clusters_freq stays 0 throughout (a
+        # run with clusters_freq > 0 dies mid-run with the raw MethodError;
+        # documented exclusion, not exercised here).
+        hc_sq3 = sqrt(3.0)
+        hc_lv = [1.0 0.0 0.0; 0.0 hc_sq3 0.0; 0.0 0.0 1.0]
+        hc_basis = [(0.0, 0.0, 0.0),
+                    (0.5, 1 / (2 * hc_sq3), 0.0),
+                    (0.5, hc_sq3 / 2, 0.0),
+                    (0.0, hc_sq3 / 2 + 1 / (2 * hc_sq3), 0.0)]
+        hc = MLattice{1,GenericLattice}(hc_lv, hc_basis, (6, 4, 1),
+            (true, true, false), [0.7, 1.05, 1.30, 1.60],
+            [fill(false, 96)], fill(true, 96))
+        @test hc isa GLattice{1}
+        @test num_sites(hc) == 96
+        @test all(nb -> length.(nb) == [3, 6, 3, 6], hc.neighbors)
+
+        # Bent NN-trio motif: two nearest neighbors of a common center at
+        # 120 degrees, distance multiset [1/sqrt(3), 1/sqrt(3), 1]; exactly
+        # 3M embeddings (three per center), checked against an independent
+        # count from torus distances
+        hc_dnn = 1 / hc_sq3
+        function hc_tdist(p, q, Lx, Ly)
+            best = Inf
+            for ix in -1:1, iy in -1:1
+                best = min(best, hypot(p[1] - q[1] + ix * Lx, p[2] - q[2] + iy * Ly))
+            end
+            return best
+        end
+        hp = [(hc.positions[s, 1], hc.positions[s, 2]) for s in 1:96]
+        hc_own = NTuple{3,Int}[]
+        for a in 1:96
+            nbs = [b for b in 1:96
+                   if b != a && abs(hc_tdist(hp[a], hp[b], 6.0, 4 * hc_sq3) - hc_dnn) < 1e-9]
+            for x in 1:length(nbs), y in (x+1):length(nbs)
+                b, c = nbs[x], nbs[y]
+                abs(hc_tdist(hp[b], hp[c], 6.0, 4 * hc_sq3) - 1.0) < 1e-9 &&
+                    push!(hc_own, tuple(sort([a, b, c])...))
+            end
+        end
+        sort!(hc_own)
+        @test length(hc_own) == 3 * 96
+        hc_tris = enumerate_motif_embeddings(hc, [hc_dnn, hc_dnn, 1.0];
+            expected_count=length(hc_own))
+        @test sort(collect(hc_tris)) == hc_own
+
+        # Full-occupancy closed form: on-site plus half the coordination-
+        # weighted couplings
+        hc_ham = GenericLatticeHamiltonian(-0.04,
+            [-0.01, -0.005, -0.0025, -0.00125], u"eV")
+        hc.components[1] .= true
+        hc_closed = 96 * (-0.04) +
+                    96 / 2 * sum([3, 6, 3, 6] .* [-0.01, -0.005, -0.0025, -0.00125])
+        @test abs(ustrip(u"eV", interacting_energy(hc, hc_ham)) - hc_closed) < 1e-12
+
+        # Small-cell enumeration closure: the C(16, 4) spectrum on the
+        # (2, 2, 1) cell against an independent NN-bond evaluation
+        hc2 = MLattice{1,GenericLattice}(hc_lv, hc_basis, (2, 2, 1),
+            (true, true, false), [0.7], [vcat(fill(true, 4), fill(false, 12))],
+            fill(true, 16))
+        hc2_ham = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
+        hc2_df, _ = exact_enumeration(hc2, hc2_ham)
+        @test nrow(hc2_df) == binomial(16, 4)
+        hp2 = [(hc2.positions[s, 1], hc2.positions[s, 2]) for s in 1:16]
+        hc2_pairs = [(i, j) for i in 1:16 for j in (i+1):16
+                     if abs(hc_tdist(hp2[i], hp2[j], 2.0, 2 * hc_sq3) - hc_dnn) < 1e-9]
+        @test length(hc2_pairs) == 24
+        hc2_brute = Float64[]
+        hocc = fill(false, 16)
+        for mask in 0:(2^16-1)
+            count_ones(mask) == 4 || continue
+            for s in 1:16
+                hocc[s] = ((mask >> (s - 1)) & 1) == 1
+            end
+            push!(hc2_brute,
+                  4 * (-0.04) - 0.01 * count(pr -> hocc[pr[1]] && hocc[pr[2]], hc2_pairs))
+        end
+        @test sort([ustrip(u"eV", e) for e in hc2_df.energy]) ≈ sort(hc2_brute) atol = 1e-12
+
+        # A short seeded grand-canonical run on the (3, 2, 1) cell returns a
+        # well-formed, monotone ledger (swap-only decorrelation)
+        Random.seed!(5501)
+        hc3 = MLattice{1,GenericLattice}(hc_lv, hc_basis, (3, 2, 1),
+            (true, true, false), [0.7, 1.05, 1.2], [fill(false, 24)],
+            fill(true, 24))
+        @test all(nb -> length.(nb) == [3, 6, 3], hc3.neighbors)
+        hc3_ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.005, -0.0025], u"eV")
+        hc3_walkers = [LatticeWalker(deepcopy(hc3), energy=0.0u"eV", iter=0)
+                       for _ in 1:10]
+        hc3_ls = LatticeGasWalkers(hc3_walkers, hc3_ham; assign_energy=false)
+        hc3_gc = GrandCanonicalNestedSamplingParameters(mc_steps=50,
+            chemical_potential=-0.05, energy_perturbation=1e-9)
+        hc3_df, _, _ = grand_canonical_nested_sampling(hc3_ls, hc3_gc, Int64(300),
+            MCGrandCanonicalMoves(), obs_save)
+        obs_cleanup()
+        @test nrow(hc3_df) > 0
+        @test all(isfinite, hc3_df.omega)
+        @test issorted(hc3_df.omega, rev=true)
+        # Stats leg: the Omega-sorted ledger post-processes to finite
+        # thermodynamics (the first GenericLattice trip through the stats)
+        hc3_beta = 1 / (8.617333262e-5 * 600.0)
+        hc3_E, hc3_Cv, hc3_N = gc_thermodynamic_stats(hc3_df, [hc3_beta], 10, -0.05)
+        @test all(isfinite, hc3_E)
+        @test all(isfinite, hc3_Cv)
+        @test all(isfinite, hc3_N)
+        @test 0 <= hc3_N[1] <= 24
+    end
 end

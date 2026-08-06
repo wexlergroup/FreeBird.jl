@@ -800,4 +800,99 @@
             @test ns_params.cluster_accept_history == [0.1, 0.5, 0.0, 0.5]
         end
     end
+
+    @testset "dead-point callback (canonical route)" begin
+        using Random
+        dpc_lat = MLattice{1,SquareLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)],
+            supercell_dimensions=(4, 4, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1, 1.5],
+            components=[[false for _ in 1:16]],
+            adsorptions=:full)
+        dpc_ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+        dpc_save = SaveEveryN("t_dpc.csv", "t_dpc.traj", "t_dpc.ls",
+                              1000000, 1000000, 1000000)
+        dpc_cleanup() = rm.(["t_dpc.csv", "t_dpc.traj", "t_dpc.ls"], force=true)
+
+        # Fixed-N liveset at N = 6, freshly seeded per run so A/B pairs share
+        # their streams
+        function dpc_fresh(seed)
+            Random.seed!(seed)
+            walkers = [LatticeWalker(deepcopy(dpc_lat), energy=0.0u"eV", iter=0)
+                       for _ in 1:12]
+            for w in walkers
+                occ = vcat(fill(true, 6), fill(false, 10))
+                shuffle!(occ)
+                w.configuration.components[1] .= occ
+            end
+            ls = LatticeGasWalkers(walkers, dpc_ham; perturb_energy=1e-9)
+            params = LatticeNestedSamplingParameters(mc_steps=20,
+                energy_perturbation=1e-9, allowed_fail_count=100000)
+            return ls, params
+        end
+
+        # Invocation count equals nrow(df), and the (iter, energy) pair seen
+        # by the callback matches the ledger row bit-exactly (the pairing
+        # guard's contract, from the caller's side)
+        ls, params = dpc_fresh(31)
+        seen = Tuple{Int,Float64}[]
+        df, _, _ = nested_sampling(ls, params, Int64(150),
+            MCRandomWalkClone(), dpc_save;
+            dead_point_callback=(iter, w) -> push!(seen, (iter, w.energy.val)))
+        dpc_cleanup()
+        @test nrow(df) > 0
+        @test length(seen) == nrow(df)
+        @test [t[1] for t in seen] == df.iter
+        @test [t[2] for t in seen] == df.emax
+
+        # Offline reproduction and energy faithfulness: occupation vectors
+        # collected through the callback re-evaluate the run's recorded
+        # observable column exactly, and recomputing the Hamiltonian on a
+        # collected configuration matches the ledger energy within the
+        # energy_perturbation half-width (the perturbation is uniform on
+        # ±energy_perturbation/2)
+        ls, params = dpc_fresh(32)
+        configs = Vector{Bool}[]
+        df2, _, _ = nested_sampling(ls, params, Int64(150),
+            MCRandomWalkClone(), dpc_save;
+            observables=[:nocc => (cfg -> Float64(sum(cfg.components[1])))],
+            dead_point_callback=(iter, w) ->
+                push!(configs, copy(w.configuration.components[1])))
+        dpc_cleanup()
+        @test length(configs) == nrow(df2)
+        @test [Float64(sum(c)) for c in configs] == df2.nocc
+        dpc_probe = deepcopy(dpc_lat)
+        for (c, e) in zip(configs, df2.emax)
+            dpc_probe.components[1] .= c
+            @test abs(ustrip(u"eV", interacting_energy(dpc_probe, dpc_ham)) - e) <= 5.1e-10
+        end
+
+        # Stream neutrality: a same-seed A/B pair with and without the
+        # callback leaves the ledger byte-identical (the callback path draws
+        # no randomness)
+        lsA, paramsA = dpc_fresh(33)
+        dfA, _, _ = nested_sampling(lsA, paramsA, Int64(120),
+            MCRandomWalkClone(), dpc_save)
+        dpc_cleanup()
+        lsB, paramsB = dpc_fresh(33)
+        dfB, _, _ = nested_sampling(lsB, paramsB, Int64(120),
+            MCRandomWalkClone(), dpc_save;
+            dead_point_callback=(iter, w) -> nothing)
+        dpc_cleanup()
+        @test dfA.iter == dfB.iter
+        @test dfA.emax == dfB.emax
+
+        # Guards: a non-Function argument fails at the keyword's type
+        # boundary; parallel/multi-cull routines are rejected up front when
+        # only the callback is requested
+        ls, params = dpc_fresh(34)
+        @test_throws TypeError nested_sampling(ls, params, Int64(1),
+            MCRandomWalkClone(), dpc_save; dead_point_callback=42)
+        @test_throws ArgumentError nested_sampling(ls, params, Int64(1),
+            MCRandomWalkMaxEParallel(), dpc_save;
+            dead_point_callback=(i, w) -> nothing)
+        dpc_cleanup()
+    end
 end

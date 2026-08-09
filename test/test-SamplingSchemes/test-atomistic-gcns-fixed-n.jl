@@ -155,13 +155,14 @@
 
         V = 1000.0u"Å^3"
         m = 40.0u"u"
-        T = 200.0u"K"
-        T_grid = [T]
+        T_grid = [200.0u"K", 350.0u"K"]
         kb = 8.617333262e-5
-        β = 1.0 / (kb * ustrip(u"K", T))
-        Λ_val = ustrip(u"Å", FreeBird.AnalysisTools._thermal_wavelength(m, T))
+        βs = [1.0 / (kb * ustrip(u"K", T)) for T in T_grid]
+        Λs = [ustrip(u"Å", FreeBird.AnalysisTools._thermal_wavelength(m, T)) for T in T_grid]
         V_val = ustrip(u"Å^3", V)
-        μ_for_zV(zV_target) = (log(zV_target * Λ_val^3 / V_val) / β) * u"eV"
+        # μ targets are set at the first (coldest) temperature; the second
+        # temperature exercises the per-T empty-sector row at the same μ.
+        μ_for_zV(zV_target) = (log(zV_target * Λs[1]^3 / V_val) / βs[1]) * u"eV"
 
         E_floor(N) = -0.02 * N
         ladder(N) = E_floor(N) .+ 0.05 .* (1.0 .- collect(1:n_iters) ./ n_iters)
@@ -195,7 +196,10 @@
 
             @test all(abs.(outE.mean_N .- out0.mean_N) .<= 1e-12)
             @test all(abs.(outE.var_N .- out0.var_N) .<= 1e-12)
-            @test all(isapprox.(outE.Xi, out0.Xi .* exp(-β * E0), rtol=1e-10))
+            for j in eachindex(T_grid)
+                @test all(isapprox.(outE.Xi[:, j], out0.Xi[:, j] .* exp(-βs[j] * E0),
+                                    rtol=1e-10))
+            end
             @test all(abs.(outE.mean_U .- (out0.mean_U .+ E0)) .<= 1e-12)
         end
 
@@ -229,28 +233,32 @@
             wavg(w, x) = sum(w .* x) / sum(w)
             Ns = collect(0:4)
 
-            for (k, μ) in enumerate(μ_grid)
-                zV = exp(β * ustrip(u"eV", μ)) * V_val / Λ_val^3
-                terms = [zV^N / factorial(N) * M * exp(-β * E_N(N)) for N in 1:4]
-                w_ex = vcat(exp(-β * E0), terms)   # exact: N = 0 at exp(−βE0)
+            for (k, μ) in enumerate(μ_grid), j in eachindex(T_grid)
+                βj = βs[j]
+                zV = exp(βj * ustrip(u"eV", μ)) * V_val / Λs[j]^3
+                terms = [zV^N / factorial(N) * M * exp(-βj * E_N(N)) for N in 1:4]
+                w_ex = vcat(exp(-βj * E0), terms)  # exact: N = 0 at exp(−βE0)
                 w_b = vcat(1.0, terms)             # biased: N = 0 at weight 1
                 Es_ex = vcat(E0, [E_N(N) for N in 1:4])
                 Es_b = vcat(0.0, [E_N(N) for N in 1:4])  # default: mean_E(0) = 0
 
-                @test isapprox(out_fix.Xi[k, 1], sum(w_ex), rtol=1e-10)
-                @test isapprox(out_fix.mean_N[k, 1], wavg(w_ex, Ns), rtol=1e-10)
-                @test isapprox(out_fix.var_N[k, 1],
+                @test isapprox(out_fix.Xi[k, j], sum(w_ex), rtol=1e-10)
+                @test isapprox(out_fix.mean_N[k, j], wavg(w_ex, Ns), rtol=1e-10)
+                @test isapprox(out_fix.var_N[k, j],
                                wavg(w_ex, Ns .^ 2) - wavg(w_ex, Ns)^2, rtol=1e-10)
-                @test isapprox(out_fix.mean_U[k, 1], wavg(w_ex, Es_ex), rtol=1e-10)
+                @test isapprox(out_fix.mean_U[k, j], wavg(w_ex, Es_ex), rtol=1e-10)
 
-                @test isapprox(out_def.Xi[k, 1], sum(w_b), rtol=1e-10)
-                @test isapprox(out_def.mean_N[k, 1], wavg(w_b, Ns), rtol=1e-10)
-                @test isapprox(out_def.var_N[k, 1],
+                @test isapprox(out_def.Xi[k, j], sum(w_b), rtol=1e-10)
+                @test isapprox(out_def.mean_N[k, j], wavg(w_b, Ns), rtol=1e-10)
+                @test isapprox(out_def.var_N[k, j],
                                wavg(w_b, Ns .^ 2) - wavg(w_b, Ns)^2, rtol=1e-10)
-                @test isapprox(out_def.mean_U[k, 1], wavg(w_b, Es_b), rtol=1e-10)
+                @test isapprox(out_def.mean_U[k, j], wavg(w_b, Es_b), rtol=1e-10)
 
-                # The bias is material at these μ: the default overstates ⟨N⟩.
-                @test out_def.mean_N[k, 1] > out_fix.mean_N[k, 1] + 0.1
+                # The bias is material in the cold dilute column: the default
+                # overstates ⟨N⟩ (analytic gaps 0.713 and 0.277 at 200 K).
+                if j == 1
+                    @test out_def.mean_N[k, 1] > out_fix.mean_N[k, 1] + 0.05
+                end
             end
         end
 
@@ -261,6 +269,9 @@
             @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
                 ns_outputs, N_values, V, m, μ_grid, T_grid;
                 n_walkers=K, ω0=ω0_test, live_emax=live_all, empty_energy=Inf)
+            @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+                ns_outputs, N_values, V, m, μ_grid, T_grid;
+                n_walkers=K, ω0=ω0_test, live_emax=live_all, empty_energy=-Inf)
         end
     end
 

@@ -28,12 +28,19 @@ The parameter `p` controls the average cluster size: `p ≈ 0` gives single-site
   restores the original configuration.
 - Supports 2D (`supercell_dimensions[3] == 1`) and 3D lattices. In 3D, the reflection
   operates in the periodic xy-plane; the z-coordinate is preserved.
+- Requires the single-site basis (the site-index reflection assumes single-basis,
+  x-fastest ordering); a multi-site basis throws an `ArgumentError`.
 
 # References
 - Heringa & Blöte, Phys. Rev. E 57, 4976 (1998) — geometric cluster MC framework.
 - Adaptation uses fixed growth probability (configuration-independent) for symmetric proposals.
 """
 function geometric_cluster_swap!(lattice::MLattice{C,SquareLattice}, p::Float64) where C
+    if length(lattice.basis) != 1
+        throw(ArgumentError("geometric_cluster_swap! on a square lattice " *
+            "requires the single-site basis, got " *
+            "$(length(lattice.basis)) basis sites"))
+    end
     Lx = lattice.supercell_dimensions[1]
     Ly = lattice.supercell_dimensions[2]
     Lz = lattice.supercell_dimensions[3]

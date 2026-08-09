@@ -2926,4 +2926,342 @@
         @test all(isfinite, hc3_N)
         @test 0 <= hc3_N[1] <= 24
     end
+
+    # ================================================================
+    @testset "end-to-end: rectangular adlattice through the SquareLattice tag" begin
+        # The rectangular adlattice -- the adsorption geometry of the
+        # fcc(110) facet in the nested-sampling study of Lennard-Jones
+        # surface adsorption [Yang, Partay & Wexler, Phys. Chem. Chem.
+        # Phys. 26, 13862 (2024)] -- through the MLattice inner
+        # constructor with the SquareLattice tag retained: lattice
+        # vectors diag(a, sqrt(2) a, c), single-site basis. Every
+        # square-tag kernel is either metric-true (neighbor shells from
+        # image distances) or index-space (the geometric cluster move
+        # is a point inversion, valid on any Bravais lattice), so the
+        # tag carries the anisotropic in-plane metric; this testset is
+        # the regression pinning cluster-move correctness on an
+        # anisotropic in-plane metric. On the 1 x sqrt(2) cell the
+        # first four shell distances are d_k = sqrt(k) a, k = 1..4,
+        # with coordinations [2, 2, 4, 2], so a 12-6 pair potential
+        # tabulates to exactly rational couplings
+        # J_k / eps = k^-6 - 2 k^-3 at the shell distances.
+        ra_sq2 = sqrt(2.0)
+        ra_lv = [1.0 0.0 0.0; 0.0 ra_sq2 0.0; 0.0 0.0 1.0]
+        ra_radii = [1.05, 1.45, 1.8, 2.05]
+        ra_J = 0.01 .* [-1.0, -0.234375, -0.0727023319615912, -0.031005859375]
+        ra_ham = GenericLatticeHamiltonian(-0.03, ra_J, u"eV")
+        ra_z = [2, 2, 4, 2]
+
+        # (6, 4, 1): no shell wraps the cell (x-circumference 6a > 2 d_4,
+        # y-circumference 4 sqrt(2) a > 2 d_2), so the default
+        # minimum-image lists are exact and construction is warning-free
+        ra6 = @test_logs min_level = Base.CoreLogging.Warn MLattice{1,SquareLattice}(
+            ra_lv, [(0.0, 0.0, 0.0)], (6, 4, 1), (true, true, false),
+            ra_radii, [fill(false, 24)], fill(true, 24))
+        @test num_sites(ra6) == 24
+        @test all(nb -> length.(nb) == ra_z, ra6.neighbors)
+
+        # Independent geometry: explicit-image bond multiset from the
+        # stored positions (coupling/2 per ordered entry, images counted
+        # individually), sharing no code with compute_neighbors
+        function ra_bonds(pos, Lx, Ly)
+            bonds = Tuple{Int,Int,Int}[]
+            for i in eachindex(pos), j in eachindex(pos)
+                for ix in -3:3, iy in -3:3
+                    (j == i && ix == 0 && iy == 0) && continue
+                    d = hypot(pos[i][1] - pos[j][1] + ix * Lx,
+                              pos[i][2] - pos[j][2] + iy * Ly)
+                    d > ra_radii[end] && continue
+                    sh = findfirst(r -> d <= r, ra_radii)
+                    sh === nothing || push!(bonds, (i, j, sh))
+                end
+            end
+            return bonds
+        end
+        rp6 = [(ra6.positions[s, 1], ra6.positions[s, 2]) for s in 1:24]
+        ra6_bonds = ra_bonds(rp6, 6.0, 4 * ra_sq2)
+        @test all(sort(ra6.neighbors[s][k]) ==
+                  sort([b[2] for b in ra6_bonds if b[1] == s && b[3] == k])
+                  for s in 1:24, k in 1:4)
+
+        # Configuration-resolved energy identity over random occupation
+        # masks: interacting_energy against the explicit-image truncated
+        # pair sum. The RNG draws here precede the seeded run below,
+        # which re-seeds
+        ra_brute(occ, bonds) = -0.03 * count(occ) +
+            sum((occ[b[1]] && occ[b[2]]) ? ra_J[b[3]] / 2 : 0.0 for b in bonds)
+        Random.seed!(7300)
+        ra_worst6 = 0.0
+        for _ in 1:100
+            mask = rand(0:(2^24 - 1))
+            occ = ra6.components[1]
+            for s in 1:24
+                occ[s] = ((mask >> (s - 1)) & 1) == 1
+            end
+            ra_worst6 = max(ra_worst6,
+                abs(ustrip(u"eV", interacting_energy(ra6, ra_ham)) -
+                    ra_brute(occ, ra6_bonds)))
+        end
+        @test ra_worst6 <= 1e-12
+
+        # Full coverage: on-site plus half the coordination-weighted
+        # couplings per site
+        ra6.components[1] .= true
+        ra_full6 = 24 * (-0.03) + 24 / 2 * sum(ra_z .* ra_J)
+        @test abs(ustrip(u"eV", interacting_energy(ra6, ra_ham)) - ra_full6) < 1e-12
+
+        # (4, 4, 1): the d_4 = 2a shell wraps the 4a x-circumference
+        # (the +2a and -2a images of the same partner both sit at
+        # distance 2a), so the cell is built with image_multiplicity =
+        # true; the bulk-tiled shell entries stay [2, 2, 4, 2] with the
+        # fourth shell listing one unique partner twice
+        ra4 = MLattice{1,SquareLattice}(ra_lv, [(0.0, 0.0, 0.0)], (4, 4, 1),
+            (true, true, false), ra_radii, [fill(false, 16)], fill(true, 16);
+            image_multiplicity=true)
+        @test all(nb -> length.(nb) == ra_z, ra4.neighbors)
+        @test all(length(unique(ra4.neighbors[s][4])) == 1 for s in 1:16)
+        rp4 = [(ra4.positions[s, 1], ra4.positions[s, 2]) for s in 1:16]
+        ra4_bonds = ra_bonds(rp4, 4.0, 4 * ra_sq2)
+        @test all(sort(ra4.neighbors[s][k]) ==
+                  sort([b[2] for b in ra4_bonds if b[1] == s && b[3] == k])
+                  for s in 1:16, k in 1:4)
+        ra_worst4 = 0.0
+        for _ in 1:100
+            mask = rand(0:(2^16 - 1))
+            occ = ra4.components[1]
+            for s in 1:16
+                occ[s] = ((mask >> (s - 1)) & 1) == 1
+            end
+            ra_worst4 = max(ra_worst4,
+                abs(ustrip(u"eV", interacting_energy(ra4, ra_ham)) -
+                    ra_brute(occ, ra4_bonds)))
+        end
+        @test ra_worst4 <= 1e-12
+
+        # Full 2^16 own-energy table from the bond multiset; the N = 4
+        # spectrum and every grand reference below derive from it
+        ra_e = zeros(2^16)
+        ra_n = zeros(Int, 2^16)
+        ra_occ = fill(false, 16)
+        for mask in 0:(2^16 - 1)
+            for s in 1:16
+                ra_occ[s] = ((mask >> (s - 1)) & 1) == 1
+            end
+            e = -0.03 * count(ra_occ)
+            for (i, j, sh) in ra4_bonds
+                (ra_occ[i] && ra_occ[j]) && (e += ra_J[sh] / 2)
+            end
+            ra_e[mask + 1] = e
+            ra_n[mask + 1] = count_ones(mask)
+        end
+
+        # exact_enumeration closure at N = 4: the C(16, 4) spectrum
+        ra_lat4 = deepcopy(ra4)
+        ra_lat4.components[1] .= false
+        ra_lat4.components[1][1:4] .= true
+        ra_df4, _ = exact_enumeration(ra_lat4, ra_ham)
+        @test nrow(ra_df4) == binomial(16, 4)
+        @test sort([ustrip(u"eV", e) for e in ra_df4.energy]) ≈
+              sort([ra_e[m + 1] for m in 0:(2^16 - 1) if count_ones(m) == 4]) atol = 1e-12
+
+        ra_kb = 8.617333262e-5
+        function ra_exact(mu, T)
+            beta = 1 / (ra_kb * T)
+            lt = beta .* (mu .* ra_n .- ra_e)
+            mx = maximum(lt)
+            w = exp.(lt .- mx)
+            Z = sum(w)
+            mN = sum(w .* ra_n) / Z
+            (logXi=mx + log(Z), mean_N=mN,
+             var_N=sum(w .* ra_n .^ 2) / Z - mN^2,
+             mean_U=sum(w .* ra_e) / Z)
+        end
+        # Particle-hole symmetry pins half coverage at mu* = eps_0 +
+        # (1/2) sum_k z_k J_k at every temperature. The mu grid is mu*
+        # rounded to 10^-5 plus the two mu values that bracket coverage
+        # 0.2 and 0.8 at 80 K, so the grid spans coverage ~0.2-0.8;
+        # beta |J_1| runs from 0.93 (125 K) to 1.45 (80 K)
+        ra_mu_sym = -0.03 + 0.5 * sum(ra_z .* ra_J)
+        @test ra_exact(ra_mu_sym, 80.0).mean_N ≈ 8.0 atol = 1e-9
+        @test ra_exact(ra_mu_sym, 125.0).mean_N ≈ 8.0 atol = 1e-9
+        ra_mus = [-0.04694, -0.04411, -0.04127]
+        ra_Ts = [80.0, 100.0, 125.0]
+        @test ra_mus[2] ≈ ra_mu_sym atol = 5e-6
+        @test ra_exact(ra_mus[1], ra_Ts[1]).mean_N ≈ 0.2 * 16 atol = 0.2
+        @test ra_exact(ra_mus[3], ra_Ts[1]).mean_N ≈ 0.8 * 16 atol = 0.2
+
+        # Seeded ideal-gas-referenced route with geometric cluster moves
+        # in the decorrelation loop (clusters_freq = swaps_freq = 1):
+        # K = 200 walkers, 20000 steps ~ 1.2 K M log1p(1/z0) at the
+        # full-descent depth M log1p(1/z0) ~ 82 nats, z0 = e^{beta mu*}
+        # at 100 K centering the reference on the grid; sigma(lnXi) ~
+        # sqrt(82/200) ~ 0.64 at the full-descent depth. K and the
+        # step count are doubled from the first cut of this closure
+        # because gates must be able to fail: the K = 100 run's
+        # grid-wide spread exceeded the attainable deviation range for
+        # <N> and <U>, whose estimators are confined to [0, 16] and
+        # [E_gs, 0] with E_gs = -0.70572568 eV. The global RNG is
+        # seeded here (the parameters' random_seed field is not
+        # consumed) and the gates run after all RNG use.
+        #
+        # Tolerances: three-seed calibrated (seeds 7301/7302/7303),
+        # per stat per temperature row (gate arrays indexed by the
+        # 80/100/125 K rows), >= 3x the three-seed maximum deviation
+        # from the exact grand sums over that row's gated points.
+        # Every gated-set maximum is set by seed 7303, whose 80 K row
+        # (beta |J_1| = 1.45) converges worst; the lnXi and mean_N
+        # maxima all sit at the coverage-0.8 flank. Per-point
+        # attainable sups: max(<N>, 16 - <N>) for mean_N and
+        # max(|E_gs - <U>|, |<U>|) for mean_U; gated points are (mu
+        # index, T index) pairs.
+        #   lnXi: gates 10.6/7.9/5.9 on all points (maxima 3.50/2.62/
+        #   1.96); failable low everywhere, the log-sum estimator
+        #   being unbounded below.
+        #   mean_N: gates 7.9/9.7/8.6 on the flanking-mu points only
+        #   (flank maxima 2.62/3.20/2.84 vs flank sups 12.80/11.27/
+        #   10.20). At the symmetric mu the sup is 16 - 8 = 8, below
+        #   every row's 3x spread (seed 7303 deviates 5.01 there at
+        #   80 K), so those points carry no mean_N gate and stay
+        #   closed by the exact particle-hole pins above, lnXi, and
+        #   the Kish floor.
+        #   mean_U: gates 0.41/0.21/0.33 on gated points (1,1),(3,1) /
+        #   (1,2) / (1,3),(2,3) (gated maxima 0.136/0.068/0.108 vs
+        #   minimum gated sups 0.54/0.53/0.40); the ungated points'
+        #   sups (0.39-0.46) sit below the 3x spread seed 7303 forces
+        #   (deviations up to 0.24).
+        #   var_N: no deviation gate at this effort level -- a >= 3x
+        #   gate would sit at 12.0-26.4 while the exact values span
+        #   6.9-15.2, so it could never fail low at any point (the
+        #   best point, the symmetric mu at 100 K, would leave a 3x
+        #   gate of 10.7 only 0.35 below the exact 11.06); Var N
+        #   mis-convergence still trips the lnXi gates and the Kish
+        #   floor.
+        # Shipped seed 7301, row maxima on the gated points: lnXi
+        # 0.997/0.325/0.133, mean_N 2.19/1.89/0.933, mean_U 0.115/
+        # 0.0129/0.0145; its Kish minimum is N_eff 805 at the
+        # coverage-0.8 corner of the 80 K row -- the same corner binds
+        # for all three seeds (three-seed minimum 709) -- on a floor
+        # of 100.
+        ra_z0 = exp(ra_mus[2] / (ra_kb * 100.0))
+        Random.seed!(7301)
+        ra_walkers = [LatticeWalker(deepcopy(ra4), energy=0.0u"eV", iter=0)
+                      for _ in 1:200]
+        ra_ls = LatticeGasWalkers(ra_walkers, ra_ham; assign_energy=false)
+        ra_params = IdealGasReferencedGCNSParameters(mc_steps=60,
+            reference_fugacity=ra_z0, energy_perturbation=1e-9,
+            allowed_fail_count=100_000)
+        ra_df, ra_out, ra_pout = ideal_gas_referenced_nested_sampling(
+            ra_ls, ra_params, Int64(20000),
+            MCGrandCanonicalMoves(p_move=0.5, p_insert=0.25,
+                clusters_freq=1, swaps_freq=1), obs_save)
+        obs_cleanup()
+        @test names(ra_df) == ["iter", "emax", "num_particles"]
+        @test issorted(ra_df.emax, rev=true)
+        # The fixed-N branch really alternated local swaps and cluster
+        # moves, and cluster proposals were accepted on the anisotropic
+        # metric
+        @test ra_pout.move_stats[:swap_attempted] > 0
+        @test ra_pout.move_stats[:cluster_attempted] > 0
+        @test ra_pout.move_stats[:cluster_accepted] > 0
+        ra_liveE = [w.energy.val for w in ra_out.walkers]
+        ra_liveN = [Int(sum(w.configuration.components[1])) for w in ra_out.walkers]
+        ra_st = gc_thermodynamic_stats_ideal_ref(ra_df, 16, ra_z0, ra_mus, ra_Ts,
+            200; ω0=201 / 200, live_emax=ra_liveE, live_numbers=ra_liveN)
+        ra_lnXi_tol = [10.6, 7.9, 5.9]
+        ra_N_tol = [7.9, 9.7, 8.6]
+        ra_U_tol = [0.41, 0.21, 0.33]
+        ra_U_gated = ((1, 1), (3, 1), (1, 2), (1, 3), (2, 3))
+        for (i, mu) in enumerate(ra_mus), (j, T) in enumerate(ra_Ts)
+            ex = ra_exact(mu, T)
+            @test ra_st.N_eff[i, j] >= 100
+            @test abs(ra_st.logXi[i, j] - ex.logXi) < ra_lnXi_tol[j]
+            i == 2 || @test abs(ra_st.mean_N[i, j] - ex.mean_N) < ra_N_tol[j]
+            (i, j) in ra_U_gated &&
+                @test abs(ra_st.mean_U[i, j] - ex.mean_U) < ra_U_tol[j]
+        end
+    end
+
+    # ================================================================
+    @testset "Langmuir closure off the keyword-square path" begin
+        # On-site term only (zero couplings): E = eps N exactly, so
+        # Xi(mu, T) = (1 + z e^{-beta eps})^M with z = e^{beta mu}, and
+        # with x = z e^{-beta eps}: <N> = M x / (1 + x), Var N =
+        # M x / (1 + x)^2, <U> = eps <N>. The closed forms are
+        # geometry-free, so closing them on the rectangular
+        # inner-constructor cell and on the keyword triangular cell
+        # pins the on-site/mu composition of the grand-canonical walk
+        # and the ideal-gas-referenced stats as geometry-independent.
+        lm_eps = -0.05
+        lm_ham = GenericLatticeHamiltonian(-0.05u"eV", [0.0u"eV"])
+        lm_kb = 8.617333262e-5
+        # Rectangular 1 x sqrt(2) cell through the inner constructor,
+        # nearest-neighbor shell only (2 partners at distance a);
+        # construction is warning-free
+        lm_rect = @test_logs min_level = Base.CoreLogging.Warn MLattice{1,SquareLattice}(
+            [1.0 0.0 0.0; 0.0 sqrt(2.0) 0.0; 0.0 0.0 1.0], [(0.0, 0.0, 0.0)],
+            (6, 4, 1), (true, true, false), [1.05],
+            [fill(false, 24)], fill(true, 24))
+        @test num_sites(lm_rect) == 24
+        @test all(nb -> length.(nb) == [2], lm_rect.neighbors)
+        # Keyword triangular cell
+        lm_tri = MLattice{1,TriangularLattice}(
+            lattice_constant=1.0,
+            supercell_dimensions=(4, 2, 1),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.05],
+            components=[[false for _ in 1:16]],
+            adsorptions=:full)
+        @test num_sites(lm_tri) == 16
+        @test all(nb -> length.(nb) == [6], lm_tri.neighbors)
+
+        # mu/T grid and gate structure of the keyword-square Langmuir
+        # closure (test-ideal-gas-ref-gcns.jl): z0 = 1, the first mu
+        # deliberately out of the reweighting window, skipped in the
+        # closure loop and used for the N_eff collapse check. The
+        # global RNG is seeded per run (the parameters' random_seed
+        # field is not consumed) and the gates run after all RNG use.
+        # Tolerances: three-seed calibrated (seeds 7501/7502/7503, both
+        # geometries), per stat over the nine in-window grid points and
+        # both geometries, >= 3x the maximum deviation from the closed
+        # forms (lnXi 0.209 absolute; N 0.0228, Var N 0.161, U 0.0228
+        # relative); in-window Kish N_eff >= 303 across the
+        # calibration, floor 100.
+        lm_mus = [-0.08, -0.04, -0.03, -0.02]
+        lm_Ts = [200.0, 300.0, 500.0]
+        for (lm_lat, lm_M) in ((lm_rect, 24), (lm_tri, 16))
+            Random.seed!(7501)
+            lm_walkers = [LatticeWalker(deepcopy(lm_lat), energy=0.0u"eV", iter=0)
+                          for _ in 1:100]
+            lm_ls = LatticeGasWalkers(lm_walkers, lm_ham; assign_energy=false)
+            lm_params = IdealGasReferencedGCNSParameters(mc_steps=100,
+                reference_fugacity=1.0, allowed_fail_count=100_000)
+            lm_df, lm_out, _ = ideal_gas_referenced_nested_sampling(lm_ls,
+                lm_params, Int64(3000),
+                MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3), obs_save)
+            obs_cleanup()
+            @test nrow(lm_df) > 0
+            @test names(lm_df) == ["iter", "emax", "num_particles"]
+            @test issorted(lm_df.emax, rev=true)
+            # Ledger-level composition pin: every dead point sits on
+            # E = eps N
+            @test maximum(abs.(lm_df.emax .- lm_eps .* lm_df.num_particles)) < 1e-9
+            lm_liveE = [w.energy.val for w in lm_out.walkers]
+            lm_liveN = [Int(sum(w.configuration.components[1])) for w in lm_out.walkers]
+            lm_st = gc_thermodynamic_stats_ideal_ref(lm_df, lm_M, 1.0, lm_mus,
+                lm_Ts, 100; ω0=101 / 100, live_emax=lm_liveE, live_numbers=lm_liveN)
+            for (j, T) in enumerate(lm_Ts), (i, mu) in enumerate(lm_mus)
+                i == 1 && continue      # the out-of-window point
+                beta = 1 / (lm_kb * T)
+                x = exp(beta * mu) * exp(-beta * lm_eps)
+                @test lm_st.N_eff[i, j] >= 100
+                @test abs(lm_st.logXi[i, j] - lm_M * log1p(x)) < 0.65
+                @test isapprox(lm_st.mean_N[i, j], lm_M * x / (1 + x); rtol=0.07)
+                @test isapprox(lm_st.var_N[i, j], lm_M * x / (1 + x)^2; rtol=0.5)
+                @test isapprox(lm_st.mean_U[i, j], lm_eps * lm_M * x / (1 + x); rtol=0.07)
+            end
+            # Out-of-window N_eff collapse, as in the keyword-square
+            # closure
+            @test lm_st.N_eff[1, 1] < lm_st.N_eff[4, 1] / 10
+        end
+    end
 end

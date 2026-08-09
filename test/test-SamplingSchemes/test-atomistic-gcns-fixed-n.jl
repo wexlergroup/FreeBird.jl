@@ -1130,3 +1130,440 @@ end
         @test out.mean_N[2, 1] > out.mean_N[1, 1]
     end
 end
+
+
+@testset "Atomistic GC-NS, fixed-N ideal-adsorbate closure (LJ fcc(100) slab)" begin
+    using Random
+
+    # ===== Substrate: fcc(100) slab, all frozen ==========================
+    # 3×3 in-plane square supercell with side 3·2^(1/6)·σ (the LJ-minimum
+    # spacing), 3 layers in ABA stacking with the fcc(100) interlayer
+    # spacing a/√2, box height 25 Å, fully periodic. Adsorbate-adsorbate
+    # interactions are switched OFF (ε_aa = 0 in the composite parameter
+    # set), so each adsorbate sees only the frozen slab field U_s(r): an
+    # ideal gas in an external field, exactly solvable by quadrature. This
+    # makes the block the one end-to-end surface fixture that closes
+    # against exact references rather than shape and monotonicity checks
+    # alone.
+    σ_val = 2.5
+    ε_val = 0.01
+    a = 2^(1/6) * σ_val
+    Lx = 3.0 * a
+    Ly = 3.0 * a
+    Lz = 25.0
+    dz_layer = a / sqrt(2.0)
+    z_base = 4.0
+
+    slab_positions = Pair{Symbol,Vector{Float64}}[]
+    for l in 0:2
+        off = (l % 2 == 0) ? 0.0 : 0.5
+        z = z_base + l * dz_layer
+        for i in 0:2, j in 0:2
+            push!(slab_positions, :Ar => [(i + off) / 3.0, (j + off) / 3.0, z / Lz])
+        end
+    end
+
+    box = [[Lx * u"Å", 0u"Å", 0u"Å"],
+           [0u"Å", Ly * u"Å", 0u"Å"],
+           [0u"Å", 0u"Å", Lz * u"Å"]]
+    V_box = (Lx * Ly * Lz) * u"Å^3"
+    mass = 40.0u"u"
+
+    lj = LJParameters(epsilon=ε_val, sigma=σ_val, cutoff=3.0, shift=true)
+    # [aa, as, ss] upper-triangle order: the aa channel gets ε = 0.
+    lj_zero = LJParameters(epsilon=0.0, sigma=σ_val, cutoff=3.0, shift=true)
+    ljs = CompositeParameterSets(2, [lj_zero, lj, lj])
+
+    substrate_sys = FastSystem(periodic_system(slab_positions, box, fractional=true))
+    surface = AtomWalker(substrate_sys; freeze_species=[:Ar])
+    surface.energy_frozen_part = interacting_energy(surface.configuration, lj)
+    E_slab = ustrip(u"eV", surface.energy_frozen_part)
+
+    T_val = 200.0u"K"
+    T_grid = [T_val]
+    kb = 8.617333262e-5
+    β = 1.0 / (kb * ustrip(u"K", T_val))
+
+    # ===== Quadrature reference ==========================================
+    # Midpoint rule over the box for the per-particle field integrals
+    # I = ∫ e^{−βU_s} d³r, I_u = ∫ U_s e^{−βU_s} d³r, I_u2 = ∫ U_s² e^{−βU_s} d³r,
+    # plus the prior-retention fraction m₁ = |{r : U_s(r) < E_thresh}| / V
+    # (see the walker-init note below). The pair kernel replicates the
+    # shifted, 3σ-truncated lj_energy exactly; U is clamped at 50 eV, where
+    # e^{−βU} is already 0, so the U²e^{−βU} accumuland stays finite inside
+    # the hard cores. Grid (32, 32, 96) is the smallest rung of the halving
+    # ladder (16, 16, 48) → (32, 32, 96) whose refinement step changes I by
+    # < 1e-3 relative (measured: 2.3×10⁻⁵ on I and < 1e-3 on both U-moments
+    # against (40, 40, 120)); the coarser rung (16, 16, 48) still moves the
+    # U-moments by several ×10⁻³.
+    slab_xyz = Matrix{Float64}(undef, 3, length(substrate_sys))
+    for i in 1:length(substrate_sys)
+        slab_xyz[:, i] .= ustrip.(u"Å", position(substrate_sys, i))
+    end
+
+    function _slab_field_moments(slab_xyz::Matrix{Float64}, Lx, Ly, Lz, σ, ε, β,
+                                 nx::Int, ny::Int, nz::Int, E_thresh::Float64)
+        rc = 3.0 * σ
+        shift_e = 4.0 * ε * ((σ / rc)^12 - (σ / rc)^6)
+        mind(d, L) = min(abs(d), L - abs(d))
+        npos = size(slab_xyz, 2)
+        hx, hy, hz = Lx / nx, Ly / ny, Lz / nz
+        dV = hx * hy * hz
+        I = 0.0; Iu = 0.0; Iu2 = 0.0; n_below = 0
+        for iz in 1:nz
+            z = (iz - 0.5) * hz
+            for ix in 1:nx
+                x = (ix - 0.5) * hx
+                for iy in 1:ny
+                    y = (iy - 0.5) * hy
+                    U = 0.0
+                    @inbounds for s in 1:npos
+                        dx = mind(x - slab_xyz[1, s], Lx)
+                        dy = mind(y - slab_xyz[2, s], Ly)
+                        dz = mind(z - slab_xyz[3, s], Lz)
+                        r = sqrt(dx * dx + dy * dy + dz * dz)
+                        if r <= rc
+                            sr6 = (σ / r)^6
+                            U += 4.0 * ε * (sr6 * sr6 - sr6) - shift_e
+                        end
+                    end
+                    U < E_thresh && (n_below += 1)
+                    Uc = U > 50.0 ? 50.0 : U
+                    e = exp(-β * Uc)
+                    I += e
+                    Iu += Uc * e
+                    Iu2 += Uc * Uc * e
+                end
+            end
+        end
+        return I * dV, Iu * dV, Iu2 * dV, n_below / (nx * ny * nz)
+    end
+
+    E_init_thresh = 1.0e9
+    I_ref, Iu, Iu2, m1 = _slab_field_moments(slab_xyz, Lx, Ly, Lz, σ_val, ε_val, β,
+                                             32, 32, 96, E_init_thresh)
+    ubar = Iu / I_ref          # per-particle ⟨U_s⟩ under e^{−βU_s}/I
+    sig_u2 = Iu2 / I_ref - ubar^2
+    Λ = ustrip(u"Å", FreeBird.AnalysisTools._thermal_wavelength(mass, T_val))
+    kT = kb * ustrip(u"K", T_val)
+    # μ placed so the occupancy parameter q = e^{βμ}·I/Λ³ — the Poisson
+    # rate of the untruncated ideal-adsorbate grand ensemble — lands at
+    # 0.5 (dilute) and 1.0; both fall near −0.22 eV here.
+    μ_grid = [kT * log(0.5 * Λ^3 / I_ref), kT * log(1.0 * Λ^3 / I_ref)] .* u"eV"
+
+    # ===== Canonical NS ladders, N = 1..4 ================================
+    # Walker-init rejection threshold: 1e9 eV, deliberately NOT the 100 eV
+    # used by the LJ(111) block above. Rejecting E_ads ≥ 100 eV draws
+    # truncates the uniform prior by a per-particle fraction worth ≈ 0.153
+    # nats, so every per-N evidence would sit ≈ 0.153·N nats above the
+    # reference — the bias alone exceeds the N = 4 gate, and combined with
+    # the NS noise it erodes the others. At 1e9 eV only the hard-core
+    # region is excluded, and the retained fraction m₁ ≈ 0.9972 (measured
+    # on the quadrature grid) is folded into the reference as −N·ln m₁.
+    K = 64
+    mc_steps = 400
+    n_ns_steps = 1200
+    N_values = collect(0:4)
+    seedbase = 3000   # gates calibrated at seedbases 3000 and 4000; 3000 ships
+
+    function _uniform_walker_ideal(N::Int)
+        while true
+            coor = [:Ar => [rand(), rand(), rand()] for _ in 1:N]
+            w = AtomWalker(FastSystem(periodic_system(coor, box, fractional=true)))
+            E_ads = ustrip(u"eV", interacting_energy(w.configuration, ljs,
+                        w.list_num_par, w.frozen, surface.configuration))
+            (isfinite(E_ads) && E_ads < E_init_thresh) && return w
+        end
+    end
+
+    tmpdir = mktempdir()
+    function _run_ns_ideal(N::Int, seed::Int)
+        Random.seed!(seed)
+        walkers = [_uniform_walker_ideal(N) for _ in 1:K]
+        liveset = LJSurfaceWalkers(walkers, ljs, surface)
+        ns_params = NestedSamplingParameters(
+            mc_steps=mc_steps,
+            initial_step_size=0.3,
+            step_size=0.3,
+            step_size_lo=0.01,
+            step_size_up=2.0,
+            accept_range=(0.25, 0.75),
+            allowed_fail_count=1000,
+            energy_perturbation=1e-12,
+        )
+        save_strategy = SaveEveryN(
+            df_filename=joinpath(tmpdir, "_test_ideal_ns_$(N).csv"),
+            wk_filename=joinpath(tmpdir, "_test_ideal_ns_$(N).traj.extxyz"),
+            ls_filename=joinpath(tmpdir, "_test_ideal_ns_$(N).ls.extxyz"),
+            n_traj=100_000,
+            n_snap=100_000,
+            n_info=100_000,
+        )
+        df, final_liveset, _ = nested_sampling(
+            liveset, ns_params, n_ns_steps, MCRandomWalkClone(), save_strategy)
+        live_emax_N = [ustrip(u"eV", w.energy) for w in final_liveset.walkers]
+        return df, live_emax_N
+    end
+
+    ns_outputs = Vector{DataFrame}(undef, length(N_values))
+    live_emax_all = Vector{Vector{Float64}}(undef, length(N_values))
+    ns_outputs[1] = DataFrame(iter=Int[], emax=Float64[])
+    live_emax_all[1] = Float64[]
+    for (idx, N) in enumerate(N_values)
+        N == 0 && continue
+        df, live_emax_N = _run_ns_ideal(N, seedbase + N)
+        ns_outputs[idx] = df
+        live_emax_all[idx] = live_emax_N
+    end
+    rm(tmpdir; recursive=true, force=true)
+
+    # ===== Stitch and exact references ===================================
+    # empty_energy = E_slab: the N = 0 sector is the bare slab at its
+    # frozen self-energy, which puts all five sectors on one energy scale.
+    out_fix = gc_thermodynamic_stats_fixed_N(
+        ns_outputs, N_values, V_box, mass, μ_grid, T_grid;
+        n_walkers=K, live_emax=live_emax_all, empty_energy=E_slab)
+
+    # Truncated-Poisson reference over the SAME N = 0..4 sector set, with
+    # the corrected rate q_corr = q/m₁ (the NS prior per particle is the
+    # m₁ fraction of the box). Ideal adsorbates make the sector energy
+    # E_slab + Σᵢuᵢ with uᵢ i.i.d. (mean ubar, variance sig_u2), so
+    #   ⟨U⟩ = E_slab + ubar·⟨N⟩,
+    #   var_U = ubar²·Var N + sig_u2·⟨N⟩   (law of total variance),
+    #   cov_UN = ubar·Var N.
+    q_phys = [exp(β * ustrip(u"eV", μ)) * I_ref / Λ^3 for μ in μ_grid]
+    q_corr = q_phys ./ m1
+    function _trunc_poisson(q::Float64)
+        Ns = 0:4
+        w = [q^N / factorial(N) for N in Ns]
+        S = sum(w)
+        p = w ./ S
+        mN = sum(p .* Ns)
+        vN = sum(p .* Ns .^ 2) - mN^2
+        return (S=S, mean_N=mN, var_N=vN,
+                mean_U=E_slab + ubar * mN,
+                var_U=ubar^2 * vN + sig_u2 * mN,
+                cov_UN=ubar * vN)
+    end
+
+    @testset "per-N evidence vs quadrature reference" begin
+        # Exact: log Z_N = −βE_slab + N·ln(I/(Λ³m₁)) − ln N! (the log_Z_N
+        # return already carries the N·ln(V/Λ³) − ln N! part, so the
+        # reference is stated on the same scale). Gates: ≥ 3× the larger
+        # two-seedbase |deviation| per N — measured 0.0112/0.1030 (N = 1),
+        # 0.1928/0.1310 (N = 2), 0.2889/0.0120 (N = 3), 0.1551/0.0077
+        # (N = 4) nats at seedbases 3000/4000, consistent with the √(3N/K)
+        # NS noise scale.
+        tol_logZ = [0.35, 0.60, 0.90, 0.50]
+        for (i, N) in enumerate(N_values)
+            N == 0 && continue
+            exact = -β * E_slab + N * (log(I_ref / Λ^3) - log(m1)) -
+                    sum(log, 1:N; init=0.0)
+            @test abs(out_fix.log_Z_N[i, 1] - exact) <= tol_logZ[N]
+        end
+    end
+
+    @testset "stitched grand stats vs truncated Poisson" begin
+        # Gates: ≥ 3× the max two-seedbase |deviation| per stat across both
+        # μ — measured maxima: logXi 0.0647 nats, mean_N 0.0850 rel,
+        # var_N 0.1055 rel, mean_U 1.55e-3 eV, var_U 0.1490 rel,
+        # cov_UN 0.1390 rel. mean_U is gated absolutely: E_slab dominates
+        # its magnitude, so a relative gate on the total would be
+        # insensitive to the adsorbate part.
+        for k in eachindex(μ_grid)
+            tp = _trunc_poisson(q_corr[k])
+            @test abs(out_fix.logXi[k, 1] - (-β * E_slab + log(tp.S))) <= 0.20
+            @test abs(out_fix.mean_N[k, 1] / tp.mean_N - 1) <= 0.26
+            @test abs(out_fix.var_N[k, 1] / tp.var_N - 1) <= 0.32
+            @test abs(out_fix.mean_U[k, 1] - tp.mean_U) <= 5.0e-3
+            @test abs(out_fix.var_U[k, 1] / tp.var_U - 1) <= 0.45
+            @test abs(out_fix.cov_UN[k, 1] / tp.cov_UN - 1) <= 0.42
+        end
+    end
+
+    @testset "default empty sector overstates ⟨N⟩" begin
+        # Without empty_energy the N = 0 sector enters the grand sum at
+        # weight 1 instead of e^{−βE_slab} = e^{+85.9}: it effectively
+        # vanishes, and ⟨N⟩ collapses toward the N ≥ 1 conditional mean.
+        # Measured gaps above the corrected ⟨N⟩ at the dilute μ: +0.778 and
+        # +0.810 at seedbases 3000/4000 (the corrected values are ≈ 0.54
+        # and ≈ 0.50); the margin ships at 0.25, ≥ 3× inside the measured
+        # gaps while still asserting a ≥ +45% bias on the corrected ⟨N⟩.
+        out_def = gc_thermodynamic_stats_fixed_N(
+            ns_outputs, N_values, V_box, mass, μ_grid, T_grid;
+            n_walkers=K, live_emax=live_emax_all)
+        @test out_def.mean_N[1, 1] > out_fix.mean_N[1, 1] + 0.25
+    end
+end
+
+
+@testset "Atomistic observables ledger and passthrough (LJ on LJ(111) surface)" begin
+    using Random
+
+    # Same LJ(111) slab geometry as the block above, at reduced cost
+    # (N = 2 free adsorbates, K = 32, 300 iterations): every assertion here
+    # is a deterministic recording or passthrough closure given the seeded
+    # run, not a sampling-quality gate. Covered: the per-dead-point
+    # `observables` hook on an atomistic canonical run, the dead-point
+    # callback's bit-exact pairing with the ledger, and `observable_cols`
+    # passthrough of the recorded column through the fixed-N assembly.
+    σ_val = 2.5
+    ε_val = 0.01
+    a = 2^(1/6) * σ_val
+    Δz_layer = a * sqrt(2/3)
+    Lx = 2.0 * a
+    Ly = 2.0 * a * sqrt(3.0)
+    Lz = 22.0
+
+    layer_offsets = [
+        [(0.0, 0.0), (0.5, 0.5)],         # A
+        [(0.5, 1.0/6.0), (0.0, 2.0/3.0)], # B
+        [(0.5, 5.0/6.0), (0.0, 1.0/3.0)], # C
+    ]
+
+    substrate_positions = Pair{Symbol,Vector{Float64}}[]
+    for (l, layer) in enumerate(layer_offsets)
+        z_frac = (l - 1) * Δz_layer / Lz
+        for (fx_prim, fy_prim) in layer
+            for ix in 0:1, iy in 0:1
+                push!(substrate_positions,
+                      :Ar => [(ix + fx_prim) / 2.0, (iy + fy_prim) / 2.0, z_frac])
+            end
+        end
+    end
+
+    box = [[Lx * u"Å", 0u"Å", 0u"Å"],
+           [0u"Å", Ly * u"Å", 0u"Å"],
+           [0u"Å", 0u"Å", Lz * u"Å"]]
+    V_box = (Lx * Ly * Lz) * u"Å^3"
+    mass = 40.0u"u"
+
+    lj = LJParameters(epsilon=ε_val, sigma=σ_val, cutoff=3.0, shift=true)
+    ljs = CompositeParameterSets(2, [lj, lj, lj])
+
+    substrate_sys = FastSystem(periodic_system(substrate_positions, box, fractional=true))
+    surface = AtomWalker(substrate_sys; freeze_species=[:Ar])
+    surface.energy_frozen_part = interacting_energy(surface.configuration, lj)
+
+    T_val = 200.0u"K"
+    kb = 8.617333262e-5
+    β = 1.0 / (kb * ustrip(u"K", T_val))
+
+    N_free = 2
+    K = 32
+    mc_steps = 500
+    n_ns_steps = 300
+
+    function _uniform_walker_obs(N::Int)
+        while true
+            coor = [:Ar => [rand(), rand(), rand()] for _ in 1:N]
+            w = AtomWalker(FastSystem(periodic_system(coor, box, fractional=true)))
+            E_ads = ustrip(u"eV", interacting_energy(w.configuration, ljs,
+                        w.list_num_par, w.frozen, surface.configuration))
+            (isfinite(E_ads) && E_ads < 100.0) && return w
+        end
+    end
+
+    # z_com: configuration-mean z of the free adsorbates in Å as a Float64 —
+    # the adsorption-height observable natural to a slab geometry.
+    z_com = function (cfg)
+        s = 0.0
+        for i in 1:length(cfg)
+            s += ustrip(u"Å", position(cfg, i)[3])
+        end
+        return s / length(cfg)
+    end
+
+    callback_log = Tuple{Int,Float64}[]
+    record_dead = (iter, w) -> push!(callback_log, (iter, ustrip(u"eV", w.energy)))
+
+    Random.seed!(42)
+    walkers = [_uniform_walker_obs(N_free) for _ in 1:K]
+    liveset = LJSurfaceWalkers(walkers, ljs, surface)
+    ns_params = NestedSamplingParameters(
+        mc_steps=mc_steps,
+        initial_step_size=0.3,
+        step_size=0.3,
+        step_size_lo=0.01,
+        step_size_up=2.0,
+        accept_range=(0.25, 0.75),
+        allowed_fail_count=1000,
+        energy_perturbation=1e-12,
+    )
+    tmpdir = mktempdir()
+    save_strategy = SaveEveryN(
+        df_filename=joinpath(tmpdir, "_test_obs_ns.csv"),
+        wk_filename=joinpath(tmpdir, "_test_obs_ns.traj.extxyz"),
+        ls_filename=joinpath(tmpdir, "_test_obs_ns.ls.extxyz"),
+        n_traj=100_000,
+        n_snap=100_000,
+        n_info=100_000,
+    )
+    df, final_liveset, _ = nested_sampling(
+        liveset, ns_params, n_ns_steps, MCRandomWalkClone(), save_strategy;
+        observables=[:z_com => z_com],
+        dead_point_callback=record_dead)
+    rm(tmpdir; recursive=true, force=true)
+
+    @testset "observables ledger column" begin
+        @test "z_com" in names(df)
+        @test eltype(df.z_com) === Float64
+        @test all(isfinite, df.z_com)
+        @test all(0.0 .< df.z_com .< Lz)
+    end
+
+    @testset "dead-point callback pairing" begin
+        # One invocation per recorded dead point, in ledger order, with the
+        # culled walker's energy matching the emax column bit-exactly.
+        @test length(callback_log) == nrow(df)
+        @test all(callback_log[i][1] == df.iter[i] for i in eachindex(callback_log))
+        @test all(callback_log[i][2] === df.emax[i] for i in eachindex(callback_log))
+    end
+
+    @testset "observable passthrough vs direct reweighting" begin
+        # Single-sector demonstration: the run's N = 2 sector plus the
+        # empty sector (whose live_observables entry declares the empty
+        # configuration's observable value, 0.0 here). The reference is a
+        # direct log-space reweighting of the same ledger column — dead
+        # points at ω_i·e^{−βE_i}, live tail at the shared tail weight —
+        # accumulated in BigFloat: a different decomposition of the same
+        # sum, so agreement is deterministic given the run.
+        live_emax_N = [ustrip(u"eV", w.energy) for w in final_liveset.walkers]
+        live_z = [z_com(w.configuration) for w in final_liveset.walkers]
+
+        N_values = [0, 2]
+        μ_grid = [-0.22u"eV"]
+        T_grid = [T_val]
+        ns_outputs = [DataFrame(iter=Int[], emax=Float64[]), df]
+        live_emax_all = [Float64[], live_emax_N]
+        live_obs = [Dict(:z_com => [0.0]), Dict(:z_com => live_z)]
+
+        out = gc_thermodynamic_stats_fixed_N(
+            ns_outputs, N_values, V_box, mass, μ_grid, T_grid;
+            n_walkers=K, live_emax=live_emax_all,
+            observable_cols=[:z_com], live_observables=live_obs)
+
+        Λ = ustrip(u"Å", FreeBird.AnalysisTools._thermal_wavelength(mass, T_val))
+        log_zV = β * ustrip(u"eV", μ_grid[1]) + log(ustrip(u"Å^3", V_box)) - 3 * log(Λ)
+        log_r = log(BigFloat(K) / (K + 1))
+        S0 = BigFloat(1)          # N = 0 sector: weight e^{−β·0}·(zV)⁰/0! = 1
+        SA = BigFloat(0)          # its declared z_com is 0.0
+        sector = 2 * BigFloat(log_zV) - log(BigFloat(2))   # N·ln zV − ln N!, N = 2
+        for row in 1:nrow(df)
+            lw = df.iter[row] * log_r - log(BigFloat(K + 1))
+            w = exp(lw - BigFloat(β) * BigFloat(df.emax[row]) + sector)
+            S0 += w
+            SA += w * df.z_com[row]
+        end
+        n_it = maximum(df.iter)
+        lw_tail = n_it * log_r - log(BigFloat(K))
+        for (s, E) in enumerate(live_emax_N)
+            w = exp(lw_tail - BigFloat(β) * BigFloat(E) + sector)
+            S0 += w
+            SA += w * live_z[s]
+        end
+        z_direct = Float64(SA / S0)
+
+        @test isapprox(out.observables[:z_com][1, 1], z_direct, rtol=1e-10)
+    end
+end

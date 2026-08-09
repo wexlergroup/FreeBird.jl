@@ -144,6 +144,137 @@
             n_walkers=K)
     end
 
+    @testset "empty_energy: offset invariance, empty-sector restoration, guards" begin
+        # Deterministic synthetic ladders — no NS runs. Sector N carries a
+        # linearly descending emax ladder ending at its floor, plus K live
+        # energies at the floor.
+        K = 64
+        n_iters = 400
+        ω0_test = (K + 1) / K
+        N_values = collect(0:4)
+
+        V = 1000.0u"Å^3"
+        m = 40.0u"u"
+        T_grid = [200.0u"K", 350.0u"K"]
+        kb = 8.617333262e-5
+        βs = [1.0 / (kb * ustrip(u"K", T)) for T in T_grid]
+        Λs = [ustrip(u"Å", FreeBird.AnalysisTools._thermal_wavelength(m, T)) for T in T_grid]
+        V_val = ustrip(u"Å^3", V)
+        # μ targets are set at the first (coldest) temperature; the second
+        # temperature exercises the per-T empty-sector row at the same μ.
+        μ_for_zV(zV_target) = (log(zV_target * Λs[1]^3 / V_val) / βs[1]) * u"eV"
+
+        E_floor(N) = -0.02 * N
+        ladder(N) = E_floor(N) .+ 0.05 .* (1.0 .- collect(1:n_iters) ./ n_iters)
+        empty_df() = DataFrame(iter=Int[], emax=Float64[])
+        ns_outputs = [N == 0 ? empty_df() :
+                      DataFrame(iter=collect(1:n_iters), emax=ladder(N))
+                      for N in N_values]
+        live_all = [N == 0 ? Float64[] : fill(E_floor(N), K) for N in N_values]
+
+        μ_grid = [μ_for_zV(0.3), μ_for_zV(1.0)]
+
+        out0 = gc_thermodynamic_stats_fixed_N(
+            ns_outputs, N_values, V, m, μ_grid, T_grid;
+            n_walkers=K, ω0=ω0_test, live_emax=live_all)
+
+        @testset "offset invariance" begin
+            # Shifting every ledger and live energy by a constant E0 while
+            # declaring the same E0 as the empty-sector energy leaves ⟨N⟩ and
+            # Var N unchanged, scales Ξ by exp(−βE0), and offsets ⟨U⟩ by
+            # exactly E0.
+            E0 = -1.5
+            ns_shift = [N == 0 ? empty_df() :
+                        DataFrame(iter=collect(1:n_iters), emax=ladder(N) .+ E0)
+                        for N in N_values]
+            live_shift = [N == 0 ? Float64[] : fill(E_floor(N) + E0, K)
+                          for N in N_values]
+
+            outE = gc_thermodynamic_stats_fixed_N(
+                ns_shift, N_values, V, m, μ_grid, T_grid;
+                n_walkers=K, ω0=ω0_test, live_emax=live_shift, empty_energy=E0)
+
+            @test all(abs.(outE.mean_N .- out0.mean_N) .<= 1e-12)
+            @test all(abs.(outE.var_N .- out0.var_N) .<= 1e-12)
+            for j in eachindex(T_grid)
+                @test all(isapprox.(outE.Xi[:, j], out0.Xi[:, j] .* exp(-βs[j] * E0),
+                                    rtol=1e-10))
+            end
+            @test all(abs.(outE.mean_U .- (out0.mean_U .+ E0)) .<= 1e-12)
+        end
+
+        @testset "empty-sector restoration" begin
+            # Constant-energy sectors E ≡ E0 + N·u make the truncated grand sum
+            # exactly computable: Z_NS^{(N)} = M · exp(−β(E0 + N·u)) for N ≥ 1,
+            # with the prior mass M = Σᵢ ωᵢ + tail replicated analytically. The
+            # default call reproduces the biased sum in which the empty sector
+            # enters with weight 1 instead of exp(−βE0); empty_energy = E0
+            # reproduces the exact sum.
+            E0 = -1.5
+            u1 = -0.013
+            E_N(N) = E0 + N * u1
+            ns_const = [N == 0 ? empty_df() :
+                        DataFrame(iter=collect(1:n_iters), emax=fill(E_N(N), n_iters))
+                        for N in N_values]
+            live_const = [N == 0 ? Float64[] : fill(E_N(N), K) for N in N_values]
+
+            r = K / (K + 1)
+            M_dead = sum(ω0_test * (1 / (K + 1)) * r^i for i in 1:n_iters)
+            M_tail = ω0_test * r^n_iters
+            M = M_dead + M_tail
+
+            out_def = gc_thermodynamic_stats_fixed_N(
+                ns_const, N_values, V, m, μ_grid, T_grid;
+                n_walkers=K, ω0=ω0_test, live_emax=live_const)
+            out_fix = gc_thermodynamic_stats_fixed_N(
+                ns_const, N_values, V, m, μ_grid, T_grid;
+                n_walkers=K, ω0=ω0_test, live_emax=live_const, empty_energy=E0)
+
+            wavg(w, x) = sum(w .* x) / sum(w)
+            Ns = collect(0:4)
+
+            for (k, μ) in enumerate(μ_grid), j in eachindex(T_grid)
+                βj = βs[j]
+                zV = exp(βj * ustrip(u"eV", μ)) * V_val / Λs[j]^3
+                terms = [zV^N / factorial(N) * M * exp(-βj * E_N(N)) for N in 1:4]
+                w_ex = vcat(exp(-βj * E0), terms)  # exact: N = 0 at exp(−βE0)
+                w_b = vcat(1.0, terms)             # biased: N = 0 at weight 1
+                Es_ex = vcat(E0, [E_N(N) for N in 1:4])
+                Es_b = vcat(0.0, [E_N(N) for N in 1:4])  # default: mean_E(0) = 0
+
+                @test isapprox(out_fix.Xi[k, j], sum(w_ex), rtol=1e-10)
+                @test isapprox(out_fix.mean_N[k, j], wavg(w_ex, Ns), rtol=1e-10)
+                @test isapprox(out_fix.var_N[k, j],
+                               wavg(w_ex, Ns .^ 2) - wavg(w_ex, Ns)^2, rtol=1e-10)
+                @test isapprox(out_fix.mean_U[k, j], wavg(w_ex, Es_ex), rtol=1e-10)
+
+                @test isapprox(out_def.Xi[k, j], sum(w_b), rtol=1e-10)
+                @test isapprox(out_def.mean_N[k, j], wavg(w_b, Ns), rtol=1e-10)
+                @test isapprox(out_def.var_N[k, j],
+                               wavg(w_b, Ns .^ 2) - wavg(w_b, Ns)^2, rtol=1e-10)
+                @test isapprox(out_def.mean_U[k, j], wavg(w_b, Es_b), rtol=1e-10)
+
+                # The bias is material in the cold dilute column: the default
+                # overstates ⟨N⟩ (analytic gaps 0.713 and 0.277 at 200 K).
+                if j == 1
+                    @test out_def.mean_N[k, 1] > out_fix.mean_N[k, 1] + 0.05
+                end
+            end
+        end
+
+        @testset "guards" begin
+            @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+                ns_outputs, N_values, V, m, μ_grid, T_grid;
+                n_walkers=K, ω0=ω0_test, live_emax=live_all, empty_energy=NaN)
+            @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+                ns_outputs, N_values, V, m, μ_grid, T_grid;
+                n_walkers=K, ω0=ω0_test, live_emax=live_all, empty_energy=Inf)
+            @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+                ns_outputs, N_values, V, m, μ_grid, T_grid;
+                n_walkers=K, ω0=ω0_test, live_emax=live_all, empty_energy=-Inf)
+        end
+    end
+
 end
 
 

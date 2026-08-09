@@ -736,7 +736,8 @@ end
 """
     gc_thermodynamic_stats_fixed_N(ns_outputs, N_values, V, atomic_mass, μ_grid, T_grid;
                                    n_walkers=120, n_cull=1, ω0=1.0,
-                                   live_emax=nothing, kb=8.617333262e-5)
+                                   live_emax=nothing, empty_energy=0.0,
+                                   kb=8.617333262e-5)
 
 Atomistic method: compute grand-canonical thermodynamic averages from a stack
 of canonical nested-sampling outputs, one per fixed particle number `N`, using
@@ -761,10 +762,20 @@ The grand partition function is assembled as
 
 with the thermal wavelength `Λ(T) = h / sqrt(2π m k_B T)` computed from `atomic_mass`.
 The sum runs over the supplied `N_values`, which must include `0`. The `N=0` sector
-is treated specially: `Z_{NS}^{(0)} = 1` by definition (the empty configuration has no
-spatial integral), so the corresponding DataFrame contents are ignored. Truncation
+is treated specially: the empty configuration has no spatial integral, so
+`Z_{NS}^{(0)} = exp(-β·empty_energy)` — exactly `1` at the default
+`empty_energy = 0` — and the corresponding DataFrame contents are ignored. Truncation
 error at the upper end of `N_values` is bounded by the tail of `(zV)^N / N!` for the
 largest `⟨N⟩` requested.
+
+All sectors must share one zero of energy. When the recorded energies carry a
+configuration-independent offset — for surface systems, the frozen substrate's
+self-energy, which every `N ≥ 1` walker records via `energy_frozen_part` — pass that
+offset as `empty_energy` so the `N = 0` sector sits on the same scale. Otherwise the
+empty sector's weight in the grand sum is misstated by the factor `exp(+β·offset)`,
+and for an attractive substrate the assembly silently returns `N ≥ 1`-conditional
+statistics wherever the empty sector carries weight (dilute coverage, strong binding,
+low temperature).
 
 A log-sum-exp pass is used both inside each per-N evidence and across the
 grand sum for numerical stability.
@@ -808,6 +819,14 @@ does not cancel.
 - `live_emax::Union{Nothing,AbstractVector{<:AbstractVector{<:Real}}}=nothing`:
   when supplied, one vector of `K = n_walkers` live walker energies (in eV) per
   `N`. The entry for `N=0` is ignored. See "Live-set tail correction" above.
+- `empty_energy::Float64=0.0`: total energy (in eV) of the `N=0` configuration on
+  the same energy scale as the ledger energies. Leave at `0` when the empty
+  simulation box has zero energy (free clusters and fluids); for adsorption on a
+  frozen substrate pass the substrate self-energy. Must be finite. At very large
+  offsets (`β·|empty_energy|` beyond about `709`) the linear-space `Xi` return
+  over- or underflows while the ratio observables (`mean_N`, `var_N`, `mean_U`)
+  remain valid; when the absolute `Ξ` is needed in that regime, shift all ledger
+  and live energies to the empty-configuration reference externally instead.
 - `kb::Float64`: Boltzmann constant in eV/K.
 
 # Returns
@@ -827,6 +846,7 @@ function gc_thermodynamic_stats_fixed_N(
     n_cull::Int=1,
     ω0::Float64=1.0,
     live_emax::Union{Nothing,AbstractVector{<:AbstractVector{<:Real}}}=nothing,
+    empty_energy::Float64=0.0,
     kb::Float64=8.617333262e-5,
 )
     if length(ns_outputs) != length(N_values)
@@ -840,6 +860,9 @@ function gc_thermodynamic_stats_fixed_N(
     end
     if live_emax !== nothing && length(live_emax) != length(N_values)
         throw(DimensionMismatch("live_emax and N_values must have the same length"))
+    end
+    if !isfinite(empty_energy)
+        throw(ArgumentError("empty_energy must be finite"))
     end
     if !all(T -> ustrip(u"K", T) > 0, T_grid)
         throw(ArgumentError("every temperature in T_grid must be positive"))
@@ -855,11 +878,15 @@ function gc_thermodynamic_stats_fixed_N(
     mean_E_N = Matrix{Float64}(undef, n_N, n_T)
 
     for (i, df) in enumerate(ns_outputs)
-        # The N = 0 sector is the empty configuration: Z_NS^{(0)} = 1 by
-        # definition. The corresponding DataFrame contents are ignored.
+        # The N = 0 sector is the empty configuration: no spatial integral, so
+        # Z_NS^{(0)} = exp(-β·empty_energy), the Boltzmann weight of its total
+        # energy on the ledgers' energy scale (exactly 1 at the default
+        # empty_energy = 0). The corresponding DataFrame contents are ignored.
         if N_int[i] == 0
-            log_Z_NS[i, :] .= 0.0
-            mean_E_N[i, :] .= 0.0
+            for (j, T) in enumerate(T_grid)
+                log_Z_NS[i, j] = -empty_energy / (kb * ustrip(u"K", T))
+            end
+            mean_E_N[i, :] .= empty_energy
             continue
         end
 

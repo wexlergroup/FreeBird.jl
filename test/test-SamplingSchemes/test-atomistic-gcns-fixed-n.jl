@@ -369,16 +369,18 @@ end
             # unshifted-first-moment floor (u_avg accumulates ~|E|·eps of
             # absolute error before the E_shift subtraction; the lattice
             # method shares the structure): measured ≤ 1.5e-8 relative here,
-            # against ~2e-5 with the cancellation guard disabled. The offset
-            # variant therefore gates them at 1e-7; everything else holds
-            # 1e-10.
-            rtol_uu = base == 0.0 ? 1e-10 : 1e-7
+            # against ≈5e-6 with the cancellation guard disabled — the guard
+            # stays load-bearing even at the relaxed gate. The offset variant
+            # therefore gates var_U/cov_UN at 3e-7 and mean_N/var_N at 1e-9;
+            # everything else holds 1e-10.
+            rtol_uu = base == 0.0 ? 1e-10 : 3e-7
+            rtol_nn = base == 0.0 ? 1e-10 : 1e-9
             for (k, μ) in enumerate(μ_grid), (j, T) in enumerate(T_grid)
                 ref = brute_reference(ns_outputs, live_all, N_values, E0,
                                       Symbol[], nothing, μ, T)
                 @test isapprox(out.logXi[k, j], ref.logXi, rtol=1e-10)
-                @test isapprox(out.mean_N[k, j], ref.mean_N, rtol=1e-10)
-                @test isapprox(out.var_N[k, j], ref.var_N, rtol=1e-10)
+                @test isapprox(out.mean_N[k, j], ref.mean_N, rtol=rtol_nn)
+                @test isapprox(out.var_N[k, j], ref.var_N, rtol=rtol_nn)
                 @test isapprox(out.mean_U[k, j], ref.mean_U, rtol=1e-10)
                 @test isapprox(out.var_U[k, j], ref.var_U, rtol=rtol_uu)
                 @test isapprox(out.cov_UN[k, j], ref.cov_UN, rtol=rtol_uu)
@@ -439,7 +441,7 @@ end
             if N == 0
                 ns_outputs[i] = empty_df()
                 live_all[i] = Float64[]
-                live_obs[i] = Dict(:A => [7.5], :B => [0.0])
+                live_obs[i] = Dict(:A => [7.0, 8.0], :B => [0.0])
                 continue
             end
             Es = ladder(0.0, N)

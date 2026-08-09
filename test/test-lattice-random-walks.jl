@@ -228,6 +228,62 @@
             @test changed
         end
 
+        @testset "multi-site basis guard" begin
+            using Random
+            # The keyword constructor admits an arbitrary basis, so the
+            # index-space reflection's single-basis contract gets the same
+            # loud guard the triangular method has. (Basis offset and cutoff
+            # chosen so the intra-basis shell is unambiguous — a warning-free
+            # construction.)
+            two_site = MLattice{1,SquareLattice}(
+                basis=[(0.0, 0.0, 0.0), (0.25, 0.25, 0.0)],
+                supercell_dimensions=(4, 4, 1),
+                cutoff_radii=[0.5],
+                components=[[1, 2, 3]]
+            )
+            @test_throws ArgumentError geometric_cluster_swap!(two_site, 0.3)
+
+            # The guard consumes no randomness: a guarded throw leaves the
+            # global RNG stream untouched.
+            Random.seed!(7)
+            probe = rand(UInt64)
+            Random.seed!(7)
+            try
+                geometric_cluster_swap!(two_site, 0.3)
+            catch
+            end
+            @test rand(UInt64) === probe
+
+            # On a single-site-basis lattice the guarded method's same-seed
+            # trajectory is identical to the pre-guard body, replicated here
+            # through the same internal helpers.
+            sl = SLattice{SquareLattice}(
+                supercell_dimensions=(8, 8, 1),
+                components=[[1, 2, 3, 10, 15, 20, 30, 40, 50, 60]]
+            )
+            replica = deepcopy(sl)
+            Random.seed!(4242)
+            for _ in 1:25
+                geometric_cluster_swap!(sl, 0.3)
+            end
+            Random.seed!(4242)
+            for _ in 1:25
+                Lx, Ly, Lz = replica.supercell_dimensions
+                pivot_gx = rand(0:Lx-1)
+                pivot_gy = rand(0:Ly-1)
+                seed_site = rand(1:num_sites(replica))
+                reflect = s -> MonteCarloMoves._reflect_site(s, pivot_gx, pivot_gy, Lx, Ly, Lz)
+                cluster = MonteCarloMoves._build_geometric_cluster(replica, seed_site, reflect, 0.3)
+                for (a, b) in cluster
+                    if a != b
+                        replica.components[1][a], replica.components[1][b] =
+                            replica.components[1][b], replica.components[1][a]
+                    end
+                end
+            end
+            @test sl.components == replica.components
+        end
+
         # ---- triangular lattice (two-site centered-rectangular basis) ----
 
         @testset "triangular reflection: half-grid round-trip" begin

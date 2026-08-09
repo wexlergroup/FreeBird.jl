@@ -278,6 +278,281 @@
 end
 
 
+@testset "Atomistic GC-NS, fixed-N parity fields" begin
+    # Deterministic synthetic ladders — no NS runs. Every closure is gated
+    # against an independent reference: direct sample-level reweighting of the
+    # raw ledger weights accumulated in BigFloat (no energy shift needed at
+    # that precision), a different decomposition than the library's
+    # law-of-total-expectation assembly.
+    K = 64
+    n_iters = 400
+    ω0_test = (K + 1) / K
+    N_values = collect(0:4)
+
+    V = 1000.0u"Å^3"
+    m = 40.0u"u"
+    T_grid = [200.0u"K", 350.0u"K"]
+    kb = 8.617333262e-5
+    βs = [1.0 / (kb * ustrip(u"K", T)) for T in T_grid]
+    Λs = [ustrip(u"Å", FreeBird.AnalysisTools._thermal_wavelength(m, T)) for T in T_grid]
+    V_val = ustrip(u"Å^3", V)
+    μ_for_zV(zV_target) = (log(zV_target * Λs[1]^3 / V_val) / βs[1]) * u"eV"
+    μ_grid = [μ_for_zV(0.3), μ_for_zV(1.0)]
+    empty_df() = DataFrame(iter=Int[], emax=Float64[])
+    r = K / (K + 1)
+
+    ladder(base, N) = base + N * (-0.02) .+ 0.05 .* (1.0 .- collect(1:n_iters) ./ n_iters)
+    floor_of(base, N) = base + N * (-0.02)
+
+    function brute_reference(ns_outs, live_all, N_vals, empty_E, obs_cols,
+                             live_obs, μ, T)
+        β = 1.0 / (kb * ustrip(u"K", T))
+        Λ = ustrip(u"Å", FreeBird.AnalysisTools._thermal_wavelength(m, T))
+        log_zV = β * ustrip(u"eV", μ) + log(V_val) - 3 * log(Λ)
+        S0 = BigFloat(0); SN = BigFloat(0); SN2 = BigFloat(0)
+        SE = BigFloat(0); SE2 = BigFloat(0); SEN = BigFloat(0)
+        SA = Dict(col => BigFloat(0) for col in obs_cols)
+        function add!(E, lw, N, avals)
+            w = exp(BigFloat(lw) - BigFloat(β) * BigFloat(E) +
+                    N * BigFloat(log_zV) - log(BigFloat(factorial(N))))
+            S0 += w; SN += w * N; SN2 += w * N^2
+            SE += w * E; SE2 += w * E^2; SEN += w * E * N
+            for col in obs_cols
+                SA[col] += w * avals[col]
+            end
+            return nothing
+        end
+        for (i, N) in enumerate(N_vals)
+            if N == 0
+                a0 = Dict(col => sum(Float64, live_obs[i][col]) / length(live_obs[i][col])
+                          for col in obs_cols)
+                add!(empty_E, 0.0, 0, a0)
+                continue
+            end
+            df = ns_outs[i]
+            for row in 1:nrow(df)
+                lw = log(ω0_test) + log(1 / (K + 1)) + df.iter[row] * log(r)
+                arow = Dict(col => Float64(df[row, col]) for col in obs_cols)
+                add!(df.emax[row], lw, N, arow)
+            end
+            n_it = maximum(df.iter)
+            lw_tail = log(ω0_test) + n_it * log(r) - log(K)
+            for (s, E) in enumerate(live_all[i])
+                atail = Dict(col => Float64(live_obs === nothing ? 0.0 :
+                                            live_obs[i][col][s]) for col in obs_cols)
+                add!(E, lw_tail, N, atail)
+            end
+        end
+        mN = SN / S0; mE = SE / S0
+        return (logXi=Float64(log(S0)), mean_N=Float64(mN),
+                var_N=Float64(SN2 / S0 - mN^2), mean_U=Float64(mE),
+                var_U=Float64(SE2 / S0 - mE^2),
+                cov_UN=Float64(SEN / S0 - mE * mN),
+                obs=Dict(col => Float64(SA[col] / S0) for col in obs_cols))
+    end
+
+    @testset "brute-force closure, ordinary and offset ladders" begin
+        # Variant (a): energies of ordinary magnitude, default empty_energy.
+        # Variant (b): every energy carries a -1000 eV offset with
+        # empty_energy to match — the E_shift cancellation guard is the only
+        # thing keeping var_U/cov_UN at rtol 1e-10 there.
+        for (base, E0) in ((0.0, 0.0), (-1000.0, -1000.0))
+            ns_outputs = [N == 0 ? empty_df() :
+                          DataFrame(iter=collect(1:n_iters), emax=ladder(base, N))
+                          for N in N_values]
+            live_all = [N == 0 ? Float64[] : fill(floor_of(base, N), K)
+                        for N in N_values]
+            out = gc_thermodynamic_stats_fixed_N(
+                ns_outputs, N_values, V, m, μ_grid, T_grid;
+                n_walkers=K, ω0=ω0_test, live_emax=live_all, empty_energy=E0)
+            # var_U/cov_UN at the 10³ eV offset sit on the assembly's
+            # unshifted-first-moment floor (u_avg accumulates ~|E|·eps of
+            # absolute error before the E_shift subtraction; the lattice
+            # method shares the structure): measured ≤ 1.5e-8 relative here,
+            # against ≈5e-6 with the cancellation guard disabled — the guard
+            # stays load-bearing even at the relaxed gate. The offset variant
+            # therefore gates var_U/cov_UN at 3e-7 and mean_N/var_N at 1e-9;
+            # everything else holds 1e-10.
+            rtol_uu = base == 0.0 ? 1e-10 : 3e-7
+            rtol_nn = base == 0.0 ? 1e-10 : 1e-9
+            for (k, μ) in enumerate(μ_grid), (j, T) in enumerate(T_grid)
+                ref = brute_reference(ns_outputs, live_all, N_values, E0,
+                                      Symbol[], nothing, μ, T)
+                @test isapprox(out.logXi[k, j], ref.logXi, rtol=1e-10)
+                @test isapprox(out.mean_N[k, j], ref.mean_N, rtol=rtol_nn)
+                @test isapprox(out.var_N[k, j], ref.var_N, rtol=rtol_nn)
+                @test isapprox(out.mean_U[k, j], ref.mean_U, rtol=1e-10)
+                @test isapprox(out.var_U[k, j], ref.var_U, rtol=rtol_uu)
+                @test isapprox(out.cov_UN[k, j], ref.cov_UN, rtol=rtol_uu)
+            end
+        end
+    end
+
+    @testset "overflow: logXi finite where Xi is Inf" begin
+        ns_outputs = [N == 0 ? empty_df() :
+                      DataFrame(iter=collect(1:n_iters), emax=zeros(n_iters))
+                      for N in N_values]
+        live_all = [N == 0 ? Float64[] : zeros(K) for N in N_values]
+        μ_deep = [μ_for_zV(exp(180.0))]
+        out = gc_thermodynamic_stats_fixed_N(
+            ns_outputs, N_values, V, m, μ_deep, T_grid[1:1];
+            n_walkers=K, ω0=ω0_test, live_emax=live_all)
+        @test out.Xi[1, 1] == Inf
+        ref = brute_reference(ns_outputs, live_all, N_values, 0.0,
+                              Symbol[], nothing, μ_deep[1], T_grid[1])
+        @test isapprox(out.logXi[1, 1], ref.logXi, rtol=1e-12)
+    end
+
+    @testset "P(N | μ, T) recipe from log_Z_N" begin
+        # E ≡ 0 ladders: the truncated weights are (zV)^N/N! · M with the
+        # prior mass M = Σᵢ ωᵢ + tail, and M = 1 for the empty sector.
+        ns_outputs = [N == 0 ? empty_df() :
+                      DataFrame(iter=collect(1:n_iters), emax=zeros(n_iters))
+                      for N in N_values]
+        live_all = [N == 0 ? Float64[] : zeros(K) for N in N_values]
+        M_dead = sum(ω0_test * (1 / (K + 1)) * r^i for i in 1:n_iters)
+        M_tail = ω0_test * r^n_iters
+        M = M_dead + M_tail
+        out = gc_thermodynamic_stats_fixed_N(
+            ns_outputs, N_values, V, m, μ_grid, T_grid;
+            n_walkers=K, ω0=ω0_test, live_emax=live_all)
+        @test out.N_values == N_values
+        @test size(out.log_Z_N) == (length(N_values), length(T_grid))
+        for (k, μ) in enumerate(μ_grid), (j, T) in enumerate(T_grid)
+            β = βs[j]
+            logP = out.log_Z_N[:, j] .+ β .* ustrip(u"eV", μ) .* out.N_values
+            P = exp.(logP .- maximum(logP))
+            P ./= sum(P)
+            zV = exp(β * ustrip(u"eV", μ)) * V_val / Λs[j]^3
+            w_ref = [N == 0 ? 1.0 : zV^N / factorial(N) * M for N in N_values]
+            @test isapprox(P, w_ref ./ sum(w_ref), rtol=1e-12)
+            @test isapprox(sum(P .* out.N_values), out.mean_N[k, j], rtol=1e-12)
+            @test isapprox(sum(P .* out.N_values .^ 2) - sum(P .* out.N_values)^2,
+                           out.var_N[k, j], rtol=1e-12)
+        end
+    end
+
+    @testset "observables passthrough" begin
+        obs_cols = [:A, :B]
+        ns_outputs = Vector{DataFrame}(undef, length(N_values))
+        live_all = Vector{Vector{Float64}}(undef, length(N_values))
+        live_obs = Vector{Dict{Symbol,Vector{Float64}}}(undef, length(N_values))
+        for (i, N) in enumerate(N_values)
+            if N == 0
+                ns_outputs[i] = empty_df()
+                live_all[i] = Float64[]
+                live_obs[i] = Dict(:A => [7.0, 8.0], :B => [0.0])
+                continue
+            end
+            Es = ladder(0.0, N)
+            ns_outputs[i] = DataFrame(iter=collect(1:n_iters), emax=Es,
+                                      A=2.0 .* Es .+ 1.0, B=fill(Float64(N), n_iters))
+            live_all[i] = fill(floor_of(0.0, N), K)
+            live_obs[i] = Dict(:A => 2.0 .* live_all[i] .+ 1.0,
+                               :B => fill(Float64(N), K))
+        end
+        out = gc_thermodynamic_stats_fixed_N(
+            ns_outputs, N_values, V, m, μ_grid, T_grid;
+            n_walkers=K, ω0=ω0_test, live_emax=live_all,
+            observable_cols=obs_cols, live_observables=live_obs)
+        for (k, μ) in enumerate(μ_grid), (j, T) in enumerate(T_grid)
+            ref = brute_reference(ns_outputs, live_all, N_values, 0.0,
+                                  obs_cols, live_obs, μ, T)
+            @test isapprox(out.observables[:A][k, j], ref.obs[:A], rtol=1e-10)
+            @test isapprox(out.observables[:B][k, j], ref.obs[:B], rtol=1e-10)
+            # B ≡ N per sector, except the empty sector's declared 0.0 — the
+            # grand average must therefore reproduce ⟨N⟩ exactly.
+            @test isapprox(out.observables[:B][k, j], out.mean_N[k, j], rtol=1e-12)
+        end
+        # Guards, mirroring the lattice method's validation.
+        @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+            ns_outputs, N_values, V, m, μ_grid, T_grid;
+            n_walkers=K, ω0=ω0_test, live_emax=live_all, live_observables=live_obs)
+        @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+            ns_outputs, N_values, V, m, μ_grid, T_grid;
+            n_walkers=K, ω0=ω0_test, observable_cols=obs_cols)
+        bad_obs = [Dict(:A => d[:A]) for d in live_obs]
+        @test_throws ArgumentError gc_thermodynamic_stats_fixed_N(
+            ns_outputs, N_values, V, m, μ_grid, T_grid;
+            n_walkers=K, ω0=ω0_test, live_emax=live_all,
+            observable_cols=obs_cols, live_observables=bad_obs)
+    end
+
+    @testset "cross-method pin on the coinciding two-sector ladder" begin
+        # N_values = [0, 1] with E ≡ 0 is the one ladder where the atomistic
+        # (zV/Λ³)^N/N! and lattice C(M,N)·e^{βμN} priors coincide exactly
+        # under zV = M·e^{βμ_lat}.
+        M_sites = 8
+        N2 = [0, 1]
+        ns2 = [empty_df(), DataFrame(iter=collect(1:n_iters), emax=zeros(n_iters))]
+        live2 = [Float64[], zeros(K)]
+        T1 = T_grid[1:1]
+        μ_lat = [-0.05u"eV"]
+        μ_atom = [μ_lat[1] + (log(M_sites * Λs[1]^3 / V_val) / βs[1]) * u"eV"]
+        out_lat = gc_thermodynamic_stats_fixed_N(
+            ns2, N2, M_sites, μ_lat, T1;
+            n_walkers=K, ω0=ω0_test, live_emax=live2)
+        out_atom = gc_thermodynamic_stats_fixed_N(
+            ns2, N2, V, m, μ_atom, T1;
+            n_walkers=K, ω0=ω0_test, live_emax=live2)
+        @test abs(out_atom.mean_N[1, 1] - out_lat.mean_N[1, 1]) <= 1e-12
+        @test abs(out_atom.var_N[1, 1] - out_lat.var_N[1, 1]) <= 1e-12
+        @test isapprox(out_atom.logXi[1, 1], out_lat.logXi[1, 1], rtol=1e-12)
+    end
+
+    @testset "leading positions and legacy expressions" begin
+        ns_outputs = [N == 0 ? empty_df() :
+                      DataFrame(iter=collect(1:n_iters), emax=ladder(0.0, N))
+                      for N in N_values]
+        live_all = [N == 0 ? Float64[] : fill(floor_of(0.0, N), K)
+                    for N in N_values]
+        out = gc_thermodynamic_stats_fixed_N(
+            ns_outputs, N_values, V, m, μ_grid, T_grid;
+            n_walkers=K, ω0=ω0_test, live_emax=live_all)
+        @test propertynames(out) == (:Xi, :mean_N, :var_N, :mean_U, :logXi,
+                                     :var_U, :cov_UN, :log_Z_N, :N_values,
+                                     :observables)
+        @test out[1] === out.Xi && out[2] === out.mean_N &&
+              out[3] === out.var_N && out[4] === out.mean_U
+        @test isempty(out.observables)
+        # The four legacy fields must be bit-identical to the pre-extension
+        # assembly, replicated here expression for expression.
+        n = length(N_values)
+        log_Z_NS = Matrix{Float64}(undef, n, length(T_grid))
+        mean_E_N = Matrix{Float64}(undef, n, length(T_grid))
+        for (i, N) in enumerate(N_values)
+            if N == 0
+                log_Z_NS[i, :] .= 0.0
+                mean_E_N[i, :] .= 0.0
+                continue
+            end
+            log_Z_NS[i, :], mean_E_N[i, :] = FreeBird.AnalysisTools._fixed_N_log_evidence(
+                ns_outputs[i], T_grid;
+                n_walkers=K, n_cull=1, ω0=ω0_test,
+                live_energies=live_all[i], kb=kb)
+        end
+        log_fact = [FreeBird.AnalysisTools._log_factorial(N) for N in N_values]
+        for (j, T) in enumerate(T_grid)
+            β = 1.0 / (kb * ustrip(u"K", T))
+            Λ_val = ustrip(u"Å", FreeBird.AnalysisTools._thermal_wavelength(m, T))
+            log_V_over_Λ3 = log(V_val) - 3 * log(Λ_val)
+            for (k, μ) in enumerate(μ_grid)
+                log_zV = β * ustrip(u"eV", μ) + log_V_over_Λ3
+                log_w = log_Z_NS[:, j] .+ N_values .* log_zV .- log_fact
+                max_log = maximum(log_w)
+                ws = exp.(log_w .- max_log)
+                sum_w = sum(ws)
+                @test out.Xi[k, j] === exp(max_log) * sum_w
+                @test out.mean_N[k, j] === sum(ws .* N_values) / sum_w
+                mean_N2 = sum(ws .* (N_values .^ 2)) / sum_w
+                @test out.var_N[k, j] === mean_N2 - (sum(ws .* N_values) / sum_w)^2
+                @test out.mean_U[k, j] === sum(ws .* view(mean_E_N, :, j)) / sum_w
+            end
+        end
+    end
+end
+
+
 @testset "Atomistic GC-NS, fixed-N construction (3D LJ fluid)" begin
     using Random
 

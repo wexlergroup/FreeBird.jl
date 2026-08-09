@@ -736,14 +736,16 @@ end
 """
     gc_thermodynamic_stats_fixed_N(ns_outputs, N_values, V, atomic_mass, μ_grid, T_grid;
                                    n_walkers=120, n_cull=1, ω0=1.0,
-                                   live_emax=nothing, empty_energy=0.0,
-                                   kb=8.617333262e-5)
+                                   live_emax=nothing,
+                                   observable_cols=Symbol[], live_observables=nothing,
+                                   empty_energy=0.0, kb=8.617333262e-5)
 
 Atomistic method: compute grand-canonical thermodynamic averages from a stack
 of canonical nested-sampling outputs, one per fixed particle number `N`, using
-the simulation-box volume `V` and the thermal wavelength. Returns `Xi` in
-linear space (contrast the lattice-gas method of this function, which takes
-`n_sites` and returns `logXi`).
+the simulation-box volume `V` and the thermal wavelength. Returns the same
+field set as the lattice-gas method of this function (which takes `n_sites`),
+with the linear-space `Xi` retained in the leading position alongside its
+log-space companion `logXi`.
 
 For each `N`, the canonical NS evidence at inverse temperature `β` is
 
@@ -819,21 +821,54 @@ does not cancel.
 - `live_emax::Union{Nothing,AbstractVector{<:AbstractVector{<:Real}}}=nothing`:
   when supplied, one vector of `K = n_walkers` live walker energies (in eV) per
   `N`. The entry for `N=0` is ignored. See "Live-set tail correction" above.
+- `observable_cols::AbstractVector{Symbol}=Symbol[]`: names of extra ledger
+  columns to average grand-canonically; each `N ≥ 1` DataFrame must carry
+  them. Requires `live_emax` and `live_observables`.
+- `live_observables=nothing`: one `Dict{Symbol,<:AbstractVector{<:Real}}` per
+  `N` sector, holding each observable's values on the surviving live walkers.
+  The `N = 0` entry supplies the observable value of the empty configuration
+  directly (averaged over the given values), unlike its ignored `live_emax`
+  entry.
 - `empty_energy::Float64=0.0`: total energy (in eV) of the `N=0` configuration on
   the same energy scale as the ledger energies. Leave at `0` when the empty
   simulation box has zero energy (free clusters and fluids); for adsorption on a
   frozen substrate pass the substrate self-energy. Must be finite. At very large
   offsets (`β·|empty_energy|` beyond about `709`) the linear-space `Xi` return
   over- or underflows while the ratio observables (`mean_N`, `var_N`, `mean_U`)
-  remain valid; when the absolute `Ξ` is needed in that regime, shift all ledger
-  and live energies to the empty-configuration reference externally instead.
+  remain valid — as does `logXi`; when the absolute `Ξ` is needed in that
+  regime, read `logXi`.
 - `kb::Float64`: Boltzmann constant in eV/K.
 
 # Returns
-A `NamedTuple` `(Xi, mean_N, var_N, mean_U)`. Each field is a `Matrix{Float64}`
-of size `(length(μ_grid), length(T_grid))` indexed `[i_μ, i_T]`. `Xi` is the
-absolute grand partition function, `mean_N` is `⟨N⟩`, `var_N` is `⟨N²⟩ − ⟨N⟩²`,
-and `mean_U` is `⟨E⟩` (grand-canonical, in eV).
+A `NamedTuple` `(Xi, mean_N, var_N, mean_U, logXi, var_U, cov_UN, log_Z_N,
+N_values, observables)`; the first four fields keep their historical leading
+positions. `Xi`, `mean_N`, `var_N`, `mean_U`, `logXi`, `var_U`, and `cov_UN`
+are `Matrix{Float64}` of size `(length(μ_grid), length(T_grid))` indexed
+`[i_μ, i_T]`. `Xi` is the absolute grand partition function in linear space —
+`Inf` once `ln Ξ` exceeds ≈ 709; `logXi`, its log-space companion, stays
+finite there. `mean_N` is `⟨N⟩`, `var_N` is `⟨N²⟩ − ⟨N⟩²`, and `mean_U` is
+`⟨E⟩` (grand-canonical, in eV). `var_U` is the grand-canonical energy variance
+`⟨E²⟩ − ⟨E⟩²` and `cov_UN` the covariance `⟨EN⟩ − ⟨E⟩⟨N⟩`, both assembled by
+the law of total expectation over the `N` sectors. At fixed `μ` the
+configurational heat capacity follows as
+`C_config = k_B β² (var_U − μ · cov_UN) + (3/2) k_B β · cov_UN`: the extra
+term carries the `Λ(T)^{3N}` temperature dependence of the atomistic
+activity and is absent from the lattice-gas method's identity; kinetic
+contributions must be added separately for the total-energy heat capacity.
+Both fields are accurate to roughly machine epsilon times their natural
+scales, which near their zero crossings is absolute rather than relative
+precision. `log_Z_N` is the
+`(length(N_values), length(T_grid))` matrix of per-`N` log canonical partition
+functions `log Z_N(T) = log Z_NS^{(N)}(β) + N·log(V/Λ³) − log N!` — the
+μ-independent evidence the assembly is built from — and `N_values` echoes the
+particle counts (as `Vector{Int}`) indexing its rows; the particle-number
+distribution follows as `P(N | μ, T) ∝ exp.(log_Z_N[:, j] .+ β .* μ .* N_values)`,
+normalized over the supplied sectors. `observables` is a
+`Dict{Symbol,Matrix{Float64}}` mapping each requested column to ⟨A⟩(μ, T);
+empty when no columns are requested. No Kish effective sample size is
+returned: the fixed-`N` route introduces no importance reweighting (`μ`
+enters the assembly exactly), so there is no sampling fidelity for it to
+diagnose.
 """
 function gc_thermodynamic_stats_fixed_N(
     ns_outputs::AbstractVector{<:DataFrame},
@@ -846,6 +881,8 @@ function gc_thermodynamic_stats_fixed_N(
     n_cull::Int=1,
     ω0::Float64=1.0,
     live_emax::Union{Nothing,AbstractVector{<:AbstractVector{<:Real}}}=nothing,
+    observable_cols::AbstractVector{Symbol}=Symbol[],
+    live_observables::Union{Nothing,AbstractVector{<:AbstractDict{Symbol}}}=nothing,
     empty_energy::Float64=0.0,
     kb::Float64=8.617333262e-5,
 )
@@ -874,8 +911,72 @@ function gc_thermodynamic_stats_fixed_N(
     n_T = length(T_grid)
     V_val = ustrip(u"Å^3", V)
 
+    allunique(observable_cols) || throw(ArgumentError(
+        "observable_cols must not contain duplicate entries"))
+    if !isempty(observable_cols)
+        if live_emax === nothing || live_observables === nothing
+            throw(ArgumentError(
+                "observable recording requires both live_emax and " *
+                "live_observables: the N = 0 and single-configuration sectors " *
+                "have no dead points, so their per-sector observable averages " *
+                "come from the live entries"))
+        end
+        if length(live_observables) != length(N_values)
+            throw(DimensionMismatch(
+                "live_observables must have one Dict per N sector " *
+                "(length(N_values) = $(length(N_values)))"))
+        end
+        for (i, d) in enumerate(live_observables)
+            Set(keys(d)) == Set(observable_cols) || throw(ArgumentError(
+                "live_observables[$i] keys must match observable_cols exactly"))
+            for col in observable_cols
+                v = d[col]
+                (v isa AbstractVector && all(x -> x isa Real, v)) || throw(ArgumentError(
+                    "live_observables[$i][:$col] must be a vector of Real values"))
+                isempty(v) && throw(ArgumentError(
+                    "live_observables[$i][:$col] is empty"))
+                if N_int[i] != 0 && length(v) != length(live_emax[i])
+                    throw(DimensionMismatch(
+                        "live_observables[$i][:$col] must have one entry per " *
+                        "live walker (length(live_emax[$i]) = " *
+                        "$(length(live_emax[i])))"))
+                end
+            end
+        end
+        for (i, dfi) in enumerate(ns_outputs)
+            (N_int[i] == 0 || nrow(dfi) == 0) && continue
+            for col in observable_cols
+                hasproperty(dfi, col) || throw(ArgumentError(
+                    "ns_outputs[$i] (N = $(N_int[i])) has no observable " *
+                    "column :$col"))
+                any(ismissing, dfi[!, col]) && throw(ArgumentError(
+                    "ns_outputs[$i] column :$col contains missing values"))
+            end
+        end
+    elseif live_observables !== nothing
+        throw(ArgumentError(
+            "live_observables was given but observable_cols is empty"))
+    end
+
+    # One global energy shift for all sector second moments (the cv()
+    # convention): variances and covariances are shift-invariant, and forming
+    # them on E - E_shift avoids the ~eps*E^2 one-pass cancellation floor.
+    # The N = 0 sector pins E = empty_energy into the spectrum, hence the min
+    # with empty_energy.
+    E_shift = empty_energy
+    for (i, dfi) in enumerate(ns_outputs)
+        N_int[i] == 0 && continue
+        nrow(dfi) > 0 && (E_shift = min(E_shift, minimum(dfi.emax)))
+        if live_emax !== nothing && !isempty(live_emax[i])
+            E_shift = min(E_shift, minimum(live_emax[i]))
+        end
+    end
+
     log_Z_NS = Matrix{Float64}(undef, n_N, n_T)
     mean_E_N = Matrix{Float64}(undef, n_N, n_T)
+    mean_E2_N = Matrix{Float64}(undef, n_N, n_T)   # shifted: <(E - E_shift)^2>
+    obs_N = Dict{Symbol,Matrix{Float64}}(
+        col => Matrix{Float64}(undef, n_N, n_T) for col in observable_cols)
 
     for (i, df) in enumerate(ns_outputs)
         # The N = 0 sector is the empty configuration: no spatial integral, so
@@ -887,14 +988,30 @@ function gc_thermodynamic_stats_fixed_N(
                 log_Z_NS[i, j] = -empty_energy / (kb * ustrip(u"K", T))
             end
             mean_E_N[i, :] .= empty_energy
+            mean_E2_N[i, :] .= (empty_energy - E_shift)^2
+            for col in observable_cols
+                # Unlike its ignored live_emax entry, the N = 0 sector's
+                # live_observables entry is used: it supplies the observable
+                # value of the single empty configuration directly (averaged
+                # over the given values)
+                vals = live_observables[i][col]
+                obs_N[col][i, :] .= sum(Float64, vals) / length(vals)
+            end
             continue
         end
 
         live = live_emax === nothing ? nothing : live_emax[i]
-        log_Z_NS[i, :], mean_E_N[i, :] = _fixed_N_log_evidence(
+        live_obs = isempty(observable_cols) ? nothing : live_observables[i]
+        log_Z_NS[i, :], mean_E_N[i, :], sector_E2, sector_obs = _fixed_N_log_evidence(
             df, T_grid;
             n_walkers=n_walkers, n_cull=n_cull, ω0=ω0,
-            live_energies=live, kb=kb)
+            live_energies=live, kb=kb,
+            observable_cols=observable_cols, live_observables=live_obs,
+            energy_shift=E_shift)
+        mean_E2_N[i, :] = sector_E2
+        for col in observable_cols
+            obs_N[col][i, :] = sector_obs[col]
+        end
     end
 
     log_fact = [_log_factorial(N) for N in N_int]
@@ -903,11 +1020,20 @@ function gc_thermodynamic_stats_fixed_N(
     mean_N = Matrix{Float64}(undef, n_mu, n_T)
     var_N = Matrix{Float64}(undef, n_mu, n_T)
     mean_U = Matrix{Float64}(undef, n_mu, n_T)
+    logXi = Matrix{Float64}(undef, n_mu, n_T)
+    var_U = Matrix{Float64}(undef, n_mu, n_T)
+    cov_UN = Matrix{Float64}(undef, n_mu, n_T)
+    log_Z_N = Matrix{Float64}(undef, n_N, n_T)
+    obs_out = Dict{Symbol,Matrix{Float64}}(
+        col => Matrix{Float64}(undef, n_mu, n_T) for col in observable_cols)
 
     for (j, T) in enumerate(T_grid)
         β = 1.0 / (kb * ustrip(u"K", T))
         Λ_val = ustrip(u"Å", _thermal_wavelength(atomic_mass, T))
         log_V_over_Λ3 = log(V_val) - 3 * log(Λ_val)
+        # Per-N log canonical partition functions at this temperature:
+        # log Z_N(T) = log Z_NS^{(N)}(β) + N·log(V/Λ³) − log N!, μ-independent
+        log_Z_N[:, j] = log_Z_NS[:, j] .+ N_int .* log_V_over_Λ3 .- log_fact
         for (k, μ) in enumerate(μ_grid)
             μ_val = ustrip(u"eV", μ)
             log_zV = β * μ_val + log_V_over_Λ3
@@ -918,14 +1044,28 @@ function gc_thermodynamic_stats_fixed_N(
             sum_w = sum(ws)
 
             Xi[k, j] = exp(max_log) * sum_w
+            logXi[k, j] = max_log + log(sum_w)
             mean_N[k, j] = sum(ws .* N_int) / sum_w
             mean_N2 = sum(ws .* (N_int .^ 2)) / sum_w
             var_N[k, j] = mean_N2 - mean_N[k, j]^2
-            mean_U[k, j] = sum(ws .* view(mean_E_N, :, j)) / sum_w
+            u_avg = sum(ws .* view(mean_E_N, :, j)) / sum_w
+            mean_U[k, j] = u_avg
+            # Law of total expectation over the N sectors, formed on shifted
+            # energies (mean_E2_N holds <(E - E_shift)^2>_N; variances and
+            # covariances are shift-invariant)
+            u_c = u_avg - E_shift
+            var_U[k, j] = sum(ws .* view(mean_E2_N, :, j)) / sum_w - u_c^2
+            cov_UN[k, j] = sum(ws .* N_int .* (view(mean_E_N, :, j) .- E_shift)) / sum_w -
+                           u_c * mean_N[k, j]
+            for col in observable_cols
+                obs_out[col][k, j] = sum(ws .* view(obs_N[col], :, j)) / sum_w
+            end
         end
     end
 
-    return (Xi=Xi, mean_N=mean_N, var_N=var_N, mean_U=mean_U)
+    return (Xi=Xi, mean_N=mean_N, var_N=var_N, mean_U=mean_U,
+            logXi=logXi, var_U=var_U, cov_UN=cov_UN,
+            log_Z_N=log_Z_N, N_values=N_int, observables=obs_out)
 end
 
 """
@@ -1024,9 +1164,9 @@ A `NamedTuple` `(logXi, mean_N, var_N, mean_U, log_Z_N, N_values, var_U,
 cov_UN, observables)`. The first
 four fields are `Matrix{Float64}` of size `(length(μ_grid), length(T_grid))`
 indexed `[i_μ, i_T]`. `logXi` is the natural log of the absolute grand
-partition function — returned in log space (unlike the atomistic method's
-`Xi`) because the binomial prior mass grows like `2^M` and `Ξ` overflows
-`Float64` for modest lattices. `mean_N` is `⟨N⟩`, `var_N` is `⟨N²⟩ − ⟨N⟩²`,
+partition function — returned in log space (the atomistic method returns
+linear-space `Xi` alongside the same `logXi`) because the binomial prior mass
+grows like `2^M` and `Ξ` overflows `Float64` for modest lattices. `mean_N` is `⟨N⟩`, `var_N` is `⟨N²⟩ − ⟨N⟩²`,
 and `mean_U` is `⟨E⟩` (grand-canonical, in eV). `log_Z_N` is the
 `(length(N_values), length(T_grid))` matrix of log canonical
 partition-function slices `log[C(M,N) · Z_NS^{(N)}(β)]` — the per-`N`

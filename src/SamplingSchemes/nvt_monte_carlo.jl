@@ -79,7 +79,12 @@ function nvt_monte_carlo(
 )
     # Set the random seed
     Random.seed!(random_seed)
-    
+
+    # No liveset is built on this path, so run the setup checks here
+    AbstractLiveSets._warn_uncoupled_shells(lattice, h)
+    AbstractLiveSets._check_cluster_sites(h, lattice)
+    AbstractLiveSets._check_field_length(h, lattice)
+
     energies = Vector{Float64}(undef, num_steps)
     configurations = Vector{typeof(lattice)}(undef, num_steps)
     # df = DataFrame(energy=Float64[], config=Vector{Vector{Bool}}[])
@@ -448,4 +453,14 @@ function monte_carlo_sampling(
     ls = AtomWalkers(configs, pot; assign_energy=true)
 
     return energies, ls, cvs, acceptance_rates
+end
+
+# Catch-all for common mistake of omitting MCRoutine as the first argument
+function monte_carlo_sampling(system, potential_or_hamiltonian, mc_params::MetropolisMCParameters; kwargs...)
+    throw(ArgumentError(
+        "`monte_carlo_sampling` requires an `MCRoutine` as the first argument.\n" *
+        "For atomistic systems, use e.g. `MCRandomWalkMaxE()` or `MCMixedMoves()`.\n" *
+        "For lattice systems, use `MCNewSample()`.\n" *
+        "Example: monte_carlo_sampling(MCRandomWalkMaxE(), walker, potential, params)"
+    ))
 end

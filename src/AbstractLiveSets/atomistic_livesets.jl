@@ -173,37 +173,67 @@ with the presence of an external surface object wrapped in an `AtomWalker`.
 
 # Fields
 - `walkers::Vector{AtomWalker{C}}`: A vector of atom walkers, where `C` is the number of components.
-- `pot::Union{LJParameters, CompositeParameterSets{CP, LJParameters}}`: The Lennard-Jones potential parameters.
+- `pot::CompositeParameterSets{CP, LJParameters}`: The Lennard-Jones parameter sets. The surface
+  energy paths evaluate walker components against the surface as an appended LAST component, so
+  the parameter set must carry `CP = C + 1` components (walker components first, surface last);
+  the constructors validate this and throw an `ArgumentError` on a mismatch. A bare
+  `LJParameters` is not accepted: no surface energy path can evaluate it.
 - `surface::AtomWalker{CS}`: An atom walker representing the surface, where `CS` is the number of components of the surface.
 
+# The frozen-part energy convention
+The constructors READ `surface.energy_frozen_part` and copy it into every walker; they do not
+compute it unless asked. Callers must either assign the adsorbent self-energy before
+construction (idiom: `surface.energy_frozen_part = interacting_energy(surface.configuration, lj)`)
+or pass `compute_frozen_energy=true`, which computes it from the surface configuration with the
+parameter set's surface-surface entry. Under the field's `0.0u"eV"` default, walker energies
+silently omit the entire adsorbent self-energy: within one liveset that is a constant shift, but
+any quantity comparing totals across systems or conventions inherits it as an error.
+
 # Constructor
-- `LJSurfaceWalkers(walkers::Vector{AtomWalker{C}}, 
-                    pot::Union{LJParameters, CompositeParameterSets{CP, LJParameters}}, 
-                    surface::AtomWalker{CS}; assign_energy=true)`
+- `LJSurfaceWalkers(walkers::Vector{AtomWalker{C}},
+                    pot::CompositeParameterSets{CP, LJParameters},
+                    surface::AtomWalker{CS}; assign_energy=true, compute_frozen_energy=false)`
 
-    Constructs a new `LJSurfaceWalkers` object with the given walkers, Lennard-Jones potential parameters, and a single surface walker. 
-    If `assign_energy=true`, the energy of each walker is assigned using the Lennard-Jones potential and the surface.
+    Constructs a new `LJSurfaceWalkers` object with the given walkers, Lennard-Jones parameter
+    sets, and a single surface walker. If `assign_energy=true`, the energy of each walker is
+    assigned using the Lennard-Jones parameters and the surface.
 
-- `LJSurfaceWalkers(walkers::Vector{AtomWalker{C}}, 
-                            pot::Union{LJParameters, CompositeParameterSets{CP, LJParameters}},
-                            surface::AtomWalker{CS}, 
-                            assign_energy_parallel::Symbol,
+- `LJSurfaceWalkers(walkers::Vector{AtomWalker{C}},
+                            pot::CompositeParameterSets{CP, LJParameters},
+                            surface::AtomWalker{CS},
+                            assign_energy_parallel::Symbol;
+                            compute_frozen_energy=false,
                             ) where {C, CP, CS}
 
-    Constructs a new `LJSurfaceWalkers` object with the given walkers, Lennard-Jones potential parameters, and a single surface walker.
-    The `assign_energy_parallel` argument determines whether to assign energy in parallel using threads (`:threads`) or distributed 
+    Constructs a new `LJSurfaceWalkers` object with the given walkers, Lennard-Jones parameter
+    sets, and a single surface walker.
+    The `assign_energy_parallel` argument determines whether to assign energy in parallel using threads (`:threads`) or distributed
     processes (`:distributed`).
 """
 struct LJSurfaceWalkers <: AtomWalkers
     walkers::Vector{AtomWalker{C}} where C
-    potential::Union{LJParameters, CompositeParameterSets{CP, LJParameters}} where CP
+    potential::CompositeParameterSets{CP, LJParameters} where CP
     surface::AtomWalker{CS} where CS
-    function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}}, 
-                                pot::Union{LJParameters, CompositeParameterSets{CP, LJParameters}}, 
-                                surface::AtomWalker{CS}; 
+    function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}},
+                                pot::CompositeParameterSets{CP, LJParameters},
+                                surface::AtomWalker{CS};
                                 assign_energy = true,
+                                compute_frozen_energy = false,
                                 ) where {C, CP, CS}
+        # The surface energy paths append the surface as the LAST component, so
+        # the parameter set must carry exactly one more component than the
+        # walkers (walker components first, surface last); a mismatch would
+        # make the total-energy and single-site paths read different
+        # parameter-set entries with no error.
+        CP == C + 1 || throw(ArgumentError(
+            "LJSurfaceWalkers requires a parameter set with one component per " *
+            "walker component plus one for the surface (walker components " *
+            "first, surface last): got $CP-component parameters over " *
+            "$C-component walkers, expected $(C + 1)"))
         update_walker!(surface, :frozen, ones(Bool, length(surface.list_num_par)))
+        if compute_frozen_energy
+            surface.energy_frozen_part = interacting_energy(surface.configuration, pot.param_sets[end, end])
+        end
         frozen_part_energy = surface.energy_frozen_part # assuming (only) the surface is frozen
         if assign_energy
             Threads.@threads for walker in walkers
@@ -216,31 +246,45 @@ struct LJSurfaceWalkers <: AtomWalkers
 end
 
 """
-    LJSurfaceWalkers(walkers::Vector{AtomWalker{C}}, 
-                            pot::Union{LJParameters, CompositeParameterSets{CP, LJParameters}},
-                            surface::AtomWalker{CS}, 
-                            assign_energy_parallel::Symbol,
+    LJSurfaceWalkers(walkers::Vector{AtomWalker{C}},
+                            pot::CompositeParameterSets{CP, LJParameters},
+                            surface::AtomWalker{CS},
+                            assign_energy_parallel::Symbol;
+                            compute_frozen_energy=false,
                             ) where {C, CP, CS}
 
-Constructs a new `LJSurfaceWalkers` object with the given walkers, Lennard-Jones potential parameters, and a single surface walker.
-The `assign_energy_parallel` argument determines whether to assign energy in parallel using threads (`:threads`) or distributed 
-processes (`:distributed`).
+Constructs a new `LJSurfaceWalkers` object with the given walkers, Lennard-Jones parameter sets, and a single surface walker.
+The `assign_energy_parallel` argument determines whether to assign energy in parallel using threads (`:threads`) or distributed
+processes (`:distributed`). The parameter set must carry `CP = C + 1` components (walker
+components first, surface last; validated with an `ArgumentError`), and
+`surface.energy_frozen_part` is read, not computed, unless `compute_frozen_energy=true`; see
+[`LJSurfaceWalkers`](@ref).
 
 # Arguments
 - `walkers::Vector{AtomWalker{C}}`: A vector of atom walkers, where `C` is the number of components.
-- `pot::Union{LJParameters, CompositeParameterSets{CP, LJParameters}}`: The Lennard-Jones potential parameters.
+- `pot::CompositeParameterSets{CP, LJParameters}`: The Lennard-Jones parameter sets.
 - `surface::AtomWalker{CS}`: An atom walker representing the surface, where `CS` is the number of components of the surface.
 - `assign_energy_parallel::Symbol`: The method to use for parallel energy assignment. Can be `:threads` or `:distributed`.
+- `compute_frozen_energy::Bool`: Whether to compute `surface.energy_frozen_part` from the surface configuration before assigning walker energies. Default is `false` (the field is read as-is).
 
 # Returns
 - `LJSurfaceWalkers`: A new `LJSurfaceWalkers` object with the assigned energy.
 """
-function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}}, 
-                            pot::Union{LJParameters, CompositeParameterSets{CP, LJParameters}}, 
-                            surface::AtomWalker{CS}, 
-                            assign_energy_parallel::Symbol,
+function LJSurfaceWalkers(walkers::Vector{AtomWalker{C}},
+                            pot::CompositeParameterSets{CP, LJParameters},
+                            surface::AtomWalker{CS},
+                            assign_energy_parallel::Symbol;
+                            compute_frozen_energy = false,
                             ) where {C, CP, CS}
+    CP == C + 1 || throw(ArgumentError(
+        "LJSurfaceWalkers requires a parameter set with one component per " *
+        "walker component plus one for the surface (walker components " *
+        "first, surface last): got $CP-component parameters over " *
+        "$C-component walkers, expected $(C + 1)"))
     update_walker!(surface, :frozen, ones(Bool, length(surface.list_num_par)))
+    if compute_frozen_energy
+        surface.energy_frozen_part = interacting_energy(surface.configuration, pot.param_sets[end, end])
+    end
     frozen_part_energy = surface.energy_frozen_part
     if assign_energy_parallel == :threads
         @info "Assigning energy to walkers in parallel using $(Threads.nthreads()) threads..."

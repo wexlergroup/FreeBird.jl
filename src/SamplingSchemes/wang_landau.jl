@@ -111,7 +111,12 @@ function wang_landau(
 )
     # Set the random seed
     Random.seed!(wl_params.random_seed)
-    
+
+    # No liveset is built on this path, so run the setup checks here
+    AbstractLiveSets._warn_uncoupled_shells(lattice, h)
+    AbstractLiveSets._check_cluster_sites(h, lattice)
+    AbstractLiveSets._check_field_length(h, lattice)
+
     energy_bins_count = length(wl_params.energy_bins)
     
     # Set g(E) = 1 and H(E) = 0

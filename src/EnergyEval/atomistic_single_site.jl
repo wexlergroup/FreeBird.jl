@@ -27,9 +27,20 @@ function single_site_energy(index::Int,
     all_index = collect(1:length(at))
     popat!(all_index, index)
     energies = Array{typeof(0.0u"eV"), 1}(undef, length(all_index))
-    Threads.@threads for i in eachindex(all_index)
-        r = pbc_dist(position(at, index), position(at, all_index[i]), at)
-        energies[i] = pair_energy(r,pot)
+    # Serial path when single-threaded: @threads spawns and joins a task on
+    # every call; this function runs millions of times per NS run, so the task
+    # overhead dominates the small loop (see ROADMAP "Threading granularity").
+    # Results are identical: iterations write disjoint slots.
+    if Threads.nthreads() == 1
+        for i in eachindex(all_index)
+            r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+            energies[i] = pair_energy(r,pot)
+        end
+    else
+        Threads.@threads for i in eachindex(all_index)
+            r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+            energies[i] = pair_energy(r,pot)
+        end
     end
     return sum(energies)
 end
@@ -48,15 +59,25 @@ function single_site_energy(index::Int,
     all_index = collect(1:length(at))
     popat!(all_index, index)
     energies = Array{typeof(0.0u"eV"), 1}(undef, length(all_index))
-    Threads.@threads for i in eachindex(all_index)
-        r = pbc_dist(position(at, index), position(at, all_index[i]), at)
-        if all_index[i] in comp_split[from_comp]
-            energy = pair_energy(r,cps.param_sets[from_comp,from_comp])
-            energies[i] = energy
-        else
-            to_comp = findfirst(x->all_index[i] in x, comp_split)
-            energy = pair_energy(r,cps.param_sets[from_comp,to_comp])
-            energies[i] = energy
+    if Threads.nthreads() == 1   # see comment in the single-component method
+        for i in eachindex(all_index)
+            r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+            if all_index[i] in comp_split[from_comp]
+                energies[i] = pair_energy(r,cps.param_sets[from_comp,from_comp])
+            else
+                to_comp = findfirst(x->all_index[i] in x, comp_split)
+                energies[i] = pair_energy(r,cps.param_sets[from_comp,to_comp])
+            end
+        end
+    else
+        Threads.@threads for i in eachindex(all_index)
+            r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+            if all_index[i] in comp_split[from_comp]
+                energies[i] = pair_energy(r,cps.param_sets[from_comp,from_comp])
+            else
+                to_comp = findfirst(x->all_index[i] in x, comp_split)
+                energies[i] = pair_energy(r,cps.param_sets[from_comp,to_comp])
+            end
         end
     end
     return sum(energies)
@@ -77,23 +98,41 @@ function single_site_energy(index::Int,
     all_index = collect(1:length(at))
     popat!(all_index, index)
     energies = Array{typeof(0.0u"eV"), 1}(undef, length(all_index))
-    Threads.@threads for i in eachindex(all_index)
-        r = pbc_dist(position(at, index), position(at, all_index[i]), at)
-        if all_index[i] in comp_split[from_comp]
-            energy = pair_energy(r,cps.param_sets[from_comp,from_comp])
-            energies[i] = energy
-        else
-            to_comp = findfirst(x->all_index[i] in x, comp_split)
-            energy = pair_energy(r,cps.param_sets[from_comp,to_comp])
-            energies[i] = energy
+    if Threads.nthreads() == 1   # see comment in the single-component method
+        for i in eachindex(all_index)
+            r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+            if all_index[i] in comp_split[from_comp]
+                energies[i] = pair_energy(r,cps.param_sets[from_comp,from_comp])
+            else
+                to_comp = findfirst(x->all_index[i] in x, comp_split)
+                energies[i] = pair_energy(r,cps.param_sets[from_comp,to_comp])
+            end
+        end
+    else
+        Threads.@threads for i in eachindex(all_index)
+            r = pbc_dist(position(at, index), position(at, all_index[i]), at)
+            if all_index[i] in comp_split[from_comp]
+                energies[i] = pair_energy(r,cps.param_sets[from_comp,from_comp])
+            else
+                to_comp = findfirst(x->all_index[i] in x, comp_split)
+                energies[i] = pair_energy(r,cps.param_sets[from_comp,to_comp])
+            end
         end
     end
     internal_e = sum(energies)
     energies_surface = Array{typeof(0.0u"eV"), 1}(undef, length(surface))
-    Threads.@threads for i in eachindex(surface.position)
-        r = pbc_dist(position(at, index), position(surface, i), at)
-        to_comp = C # surface is the last component
-        energies_surface[i] = pair_energy(r,cps.param_sets[from_comp,to_comp])
+    if Threads.nthreads() == 1   # see comment in the single-component method
+        for i in eachindex(surface.position)
+            r = pbc_dist(position(at, index), position(surface, i), at)
+            to_comp = C # surface is the last component
+            energies_surface[i] = pair_energy(r,cps.param_sets[from_comp,to_comp])
+        end
+    else
+        Threads.@threads for i in eachindex(surface.position)
+            r = pbc_dist(position(at, index), position(surface, i), at)
+            to_comp = C # surface is the last component
+            energies_surface[i] = pair_energy(r,cps.param_sets[from_comp,to_comp])
+        end
     end
     external_e = sum(energies_surface)
     return internal_e + external_e

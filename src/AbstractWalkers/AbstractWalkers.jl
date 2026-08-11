@@ -25,6 +25,13 @@ export LatticeGeometry, SquareLattice, TriangularLattice, GenericLattice
 export MLattice, SLattice, GLattice
 export update_walker!
 export num_sites, occupied_site_count
+export order_parameter_c2x2
+export order_parameter_sqrt3
+export bragg_amplitude
+export order_parameter_stripe
+export order_parameter_p2x2
+export site_layers, layer_coverage, occupancy_profile, layer_field
+export enumerate_motif_embeddings, motif_distances
 export view_structure
 
 abstract type AbstractWalker end

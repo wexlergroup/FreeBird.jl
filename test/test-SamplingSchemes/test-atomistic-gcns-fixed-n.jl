@@ -1567,3 +1567,266 @@ end
         @test isapprox(out.observables[:z_com][1, 1], z_direct, rtol=1e-10)
     end
 end
+
+# ================================================================
+@testset "Atomistic NS at all-false periodicity (13-atom cuboctahedral cluster)" begin
+    using Random
+
+    # Issue #186 (c): the first nested-sampling liveset in the suite at
+    # all-false periodicity. The library builds such systems as a matter of
+    # course (generate_random_starting_config constructs atomic_system with
+    # explicit (false, false, false) boundary conditions), and
+    # periodic_boundary_wrap! REFLECTS rather than wraps on every
+    # non-periodic axis; the surface blocks above build fully periodic
+    # walkers via periodic_system(...; fractional=true), which is correct
+    # for slabs, so the reflecting branch has no other nested-sampling
+    # coverage and no direct pins at any wall.
+    #
+    # Fixture: a frozen 13-atom cuboctahedral LJ cluster (eps = 0.01 eV,
+    # sigma = 2.5 A, cutoff 2.5 sigma shifted, nearest-neighbor spacing
+    # d = 2^(1/6) sigma; sites as in test-ns-plateau-ties.jl), centered in a
+    # cubic box of edge L = sqrt(2) d + 4 * 2.5 sigma ~ 28.97 A: the
+    # axis-aligned shell extent (the vertex coordinates sit at
+    # +- d/sqrt(2) about the center) padded by two cutoff radii of vacuum
+    # per side. Unlike the plateau-ties fixture, the adsorbates here
+    # interact (adsorbate-adsorbate LJ on), and energy_frozen_part carries
+    # the real cluster self-energy through the compute_frozen_energy path
+    # of the LJSurfaceWalkers constructors, which now REQUIRE a
+    # CompositeParameterSets with one component per walker component plus
+    # one for the surface (CP = C + 1, walker components first).
+    afp_sig = 2.5
+    afp_eps = 0.01
+    afp_rc = 2.5                       # cutoff, units of sigma
+    afp_dnn = 2.0^(1 / 6) * afp_sig
+    afp_L = sqrt(2.0) * afp_dnn + 4 * afp_rc * afp_sig
+    afp_half = afp_L / 2
+
+    afp_shell = [(1, 1, 0), (1, -1, 0), (-1, 1, 0), (-1, -1, 0),
+                 (1, 0, 1), (1, 0, -1), (-1, 0, 1), (-1, 0, -1),
+                 (0, 1, 1), (0, 1, -1), (0, -1, 1), (0, -1, -1)]
+    afp_sites = vcat([(afp_half, afp_half, afp_half)],
+                     [(afp_half + p[1] * afp_dnn / sqrt(2),
+                       afp_half + p[2] * afp_dnn / sqrt(2),
+                       afp_half + p[3] * afp_dnn / sqrt(2)) for p in afp_shell])
+
+    afp_lj = LJParameters(epsilon=afp_eps, sigma=afp_sig, cutoff=afp_rc, shift=true)
+    afp_ljs = CompositeParameterSets(2, [afp_lj, afp_lj, afp_lj])
+    afp_box = [[afp_L, 0.0, 0.0]u"Å", [0.0, afp_L, 0.0]u"Å", [0.0, 0.0, afp_L]u"Å"]
+    afp_pbc = (false, false, false)
+
+    afp_surface = AtomWalker(FastSystem(atomic_system(
+        [:Ar => [x, y, z]u"Å" for (x, y, z) in afp_sites], afp_box, afp_pbc));
+        freeze_species=[:Ar])
+
+    afp_walker(coords) = AtomWalker(FastSystem(atomic_system(
+        [:Ar => [x, y, z]u"Å" for (x, y, z) in coords], afp_box, afp_pbc)))
+
+    # in-test brute force through the library's own pair function only
+    function afp_pair(p, q)
+        r = sqrt(sum((p[k] - q[k])^2 for k in 1:3))u"Å"
+        return ustrip(u"eV", lj_energy(r, afp_lj))
+    end
+    afp_E_frozen = sum(afp_pair(afp_sites[i], afp_sites[j])
+                       for i in 1:13 for j in (i+1):13)
+
+    @testset "periodicity contract and construction trap" begin
+        @test periodicity(afp_surface.configuration) == (false, false, false)
+        # The construction trap this fixture locks out (without calling the
+        # slab idiom wrong): periodic_system(...; fractional=true) yields a
+        # FULLY periodic system, so a finite-cluster model must construct
+        # through atomic_system -- the periodicity assertion is what
+        # catches the mix-up.
+        afp_trap = FastSystem(periodic_system([:Ar => [0.5, 0.5, 0.5]],
+                                              afp_box, fractional=true))
+        @test periodicity(afp_trap) == (true, true, true)
+    end
+
+    @testset "CompositeParameterSets energy identity vs brute force" begin
+        # 30 configurations, N = 1-6 (five per N), against the in-test sum
+        # adsorbate-adsorbate + adsorbate-cluster + frozen self-energy.
+        # Calibrated: worst relative deviation 0.0, frozen self-energy
+        # deviation 0.0 (the constructor evaluates the same truncated pair
+        # sum; the gates allow accumulation-order rounding).
+        Random.seed!(7402)
+        afp_worst = 0.0
+        for N in 1:6
+            ws = [afp_walker([ntuple(_ -> rand() * afp_L, 3) for _ in 1:N])
+                  for _ in 1:5]
+            ls = LJSurfaceWalkers(ws, afp_ljs, afp_surface;
+                                  compute_frozen_energy=true)
+            @test all(w -> periodicity(w.configuration) == (false, false, false),
+                      ls.walkers)
+            for w in ls.walkers
+                coords = [Tuple(ustrip.(u"Å", position(w.configuration, i)))
+                          for i in 1:N]
+                E_aa = N < 2 ? 0.0 :
+                       sum(afp_pair(coords[i], coords[j])
+                           for i in 1:N for j in (i+1):N)
+                E_as = sum(afp_pair(c, s) for c in coords, s in afp_sites)
+                E_brute = E_aa + E_as + afp_E_frozen
+                afp_worst = max(afp_worst,
+                    abs(ustrip(u"eV", w.energy) - E_brute) /
+                    max(abs(E_brute), 1.0e-12))
+            end
+        end
+        @test afp_worst <= 1e-12
+        @test abs(ustrip(u"eV", afp_surface.energy_frozen_part) -
+                  afp_E_frozen) <= 1e-13
+        @test afp_E_frozen < 0.0    # all 78 cluster pairs sit inside the cutoff
+
+        # Beyond-cutoff references are exact zeros: two adsorbates farther
+        # than the cutoff from the cluster and from each other leave the
+        # adsorbate part bit-exactly 0.0 eV (the truncated-shifted pair
+        # energy is an exact zero beyond the cutoff), so the walker energy
+        # is bit-exactly the frozen self-energy
+        afp_far = afp_walker([(2.0, 2.0, 2.0), (2.0, 2.0, afp_L - 2.0)])
+        afp_far_ls = LJSurfaceWalkers([afp_far], afp_ljs, afp_surface;
+                                      compute_frozen_energy=true)
+        @test ustrip(u"eV", interacting_energy(afp_far.configuration, afp_ljs,
+                  afp_far.list_num_par, afp_far.frozen,
+                  afp_surface.configuration)) === 0.0
+        @test afp_far_ls.walkers[1].energy == afp_surface.energy_frozen_part
+    end
+
+    # reflection probe: wrap a single-axis excursion through the library
+    # call, returning the full wrapped vector
+    function afp_wrap(v, ax)
+        p = [10.0, 11.0, 12.0]
+        p[ax] = v
+        sv = SVector{3,typeof(1.0u"Å")}(p[1]u"Å", p[2]u"Å", p[3]u"Å")
+        out = FreeBird.MonteCarloMoves.periodic_boundary_wrap!(
+            sv, afp_surface.configuration)
+        return ustrip.(u"Å", out)
+    end
+
+    @testset "reflection pins at all six walls" begin
+        for ax in 1:3
+            others = [k for k in 1:3 if k != ax]
+            for δ in (0.75, 7.5)
+                # upper wall: mirror reflection (2L - pos arithmetic; the
+                # gate allows one rounding ulp)
+                up = afp_wrap(afp_L + δ, ax)
+                @test abs(up[ax] - (afp_L - δ)) <= 1e-9
+                # lower wall: pure negation, bit-exact
+                lo = afp_wrap(-δ, ax)
+                @test lo[ax] === δ
+                # untouched in-range axes come back bit-exact
+                @test all(up[k] === Float64(10 + k - 1) for k in others)
+                @test all(lo[k] === Float64(10 + k - 1) for k in others)
+            end
+            # interior points and both closed endpoints are identity
+            @test all(afp_wrap(v, ax)[ax] === v for v in (0.0, 3.25, afp_L))
+
+            # single-reflection overshoot characterization: the reflection
+            # is applied once, not iterated, so wrap(2L + δ) = -δ and
+            # wrap(-(L + δ)) = L + δ both land OUTSIDE [0, L]
+            ov_up = afp_wrap(2 * afp_L + 0.75, ax)
+            @test abs(ov_up[ax] - (-0.75)) <= 1e-9
+            @test ov_up[ax] < 0.0
+            ov_lo = afp_wrap(-(afp_L + 0.75), ax)
+            @test ov_lo[ax] === afp_L + 0.75
+            @test ov_lo[ax] > afp_L
+            # hence containment silently requires every per-axis proposal
+            # to stay within [-L, 2L]; inside that range one reflection
+            # maps back into the box
+            @test all(0.0 <= afp_wrap(v, ax)[ax] <= afp_L
+                      for v in range(-afp_L, 2 * afp_L; length=41))
+        end
+    end
+
+    # ===== canonical completion at N = 2 and N = 4 =====================
+    # K = 32 clone-move runs to a live span < 2e-4 eV with zero out-of-box
+    # dead points. A finite cluster in a padded box puts a macroscopic
+    # prior fraction at exactly zero adsorbate energy, so the runs traverse
+    # an initial exact-tie plateau (the eviction path of the plateau-aware
+    # accounting; its quadrature closures live in test-ns-plateau-ties.jl)
+    # and the ledgers carry the log_compression column.
+    afp_E_THRESH = 1.0e9
+    function afp_uniform_walker(N)
+        while true
+            w = afp_walker([ntuple(_ -> rand() * afp_L, 3) for _ in 1:N])
+            E = ustrip(u"eV", interacting_energy(w.configuration, afp_ljs,
+                    w.list_num_par, w.frozen, afp_surface.configuration))
+            isfinite(E) && E < afp_E_THRESH && return w
+        end
+    end
+
+    function afp_run(N, seed, n_steps)
+        Random.seed!(seed)   # the parameters' random_seed field is not consumed
+        walkers = [afp_uniform_walker(N) for _ in 1:32]
+        ls = LJSurfaceWalkers(walkers, afp_ljs, afp_surface;
+                              compute_frozen_energy=true)
+        # per-axis step bound: the adaptive step size is capped at
+        # step_size_up = 2.0 A, a 14.5x margin on the [-L, 2L] containment
+        # bound above (>= 10x asserted below)
+        p = NestedSamplingParameters(mc_steps=100, step_size=1.0,
+                                     step_size_up=2.0,
+                                     allowed_fail_count=100_000)
+        save = SaveEveryN(df_filename="_test_afp_df.csv",
+                          wk_filename="_test_afp.traj.extxyz",
+                          ls_filename="_test_afp.ls.extxyz",
+                          n_traj=10_000_000, n_snap=10_000_000,
+                          n_info=10_000_000)
+        n_dead = Ref(0)
+        n_oob = Ref(0)
+        dead_cb = (iter, w) -> begin
+            n_dead[] += 1
+            for i in 1:length(w.configuration)
+                pos = position(w.configuration, i)
+                for k in 1:3
+                    x = ustrip(u"Å", pos[k])
+                    (0.0 <= x <= afp_L) || (n_oob[] += 1)
+                end
+            end
+        end
+        df, ls_out, p_out = nested_sampling(ls, p, n_steps, MCRandomWalkClone(),
+                                            save; dead_point_callback=dead_cb)
+        rm("_test_afp_df.csv", force=true)
+        rm("_test_afp.traj.extxyz", force=true)
+        rm("_test_afp.ls.extxyz", force=true)
+        return df, ls_out, p_out, n_dead[], n_oob[]
+    end
+
+    # ---- all RNG use happens here; the asserts below evaluate afterwards ----
+    # n_steps is sized ~1.5-2x the measured span crossing so completion is
+    # seed-robust: the shipped seeds cross span < 2e-4 eV at accepted cull
+    # 987 (N = 2, seed 81) and 1864 (N = 4, seed 82); issue #186 measured
+    # 1158 and 2596 culls on its own seeds -- seed-dependent, pinned
+    # loosely via the acceptance floor below
+    afp_runs = [(2, afp_run(2, 81, 1600)...), (4, afp_run(4, 82, 3600)...)]
+
+    @testset "canonical completion at N = 2 and N = 4" begin
+        for (N, df, ls_out, p_out, n_dead, n_oob) in afp_runs
+            # ledger schema: serial atomistic steps emit the per-cull
+            # log-compression, so the ledger carries the third column
+            @test names(df) == ["iter", "emax", "log_compression"]
+            @test all(diff(df.emax) .<= 0)
+            # loose cull pin (acceptance health; culls are seed-dependent)
+            @test nrow(df) >= 0.9 * (N == 2 ? 1600 : 3600)
+            @test n_dead == nrow(df)
+            # zero out-of-box dead points, coordinate-resolved
+            @test n_oob == 0
+            # completion: live span below 2e-4 eV (calibrated final spans
+            # 3.98e-7 and 3.50e-8 eV), live set intact and in the box
+            liveE = [ustrip(u"eV", w.energy) for w in ls_out.walkers]
+            @test length(liveE) == 32
+            @test maximum(liveE) - minimum(liveE) < 2e-4
+            @test all(w -> periodicity(w.configuration) == (false, false, false),
+                      ls_out.walkers)
+            afp_live_in_box = true
+            for w in ls_out.walkers, i in 1:length(w.configuration)
+                pos = position(w.configuration, i)
+                for k in 1:3
+                    afp_live_in_box &= (0.0 <= ustrip(u"Å", pos[k]) <= afp_L)
+                end
+            end
+            @test afp_live_in_box
+            # the shipped seeds end outside any tie block
+            @test p_out.plateau_refill_target == 0
+            # the adaptive step size respected its cap, and the cap keeps
+            # >= 10x margin on the single-reflection containment bound
+            @test p_out.step_size <= 2.0
+            @test 10 * 2.0 <= afp_L
+        end
+    end
+end

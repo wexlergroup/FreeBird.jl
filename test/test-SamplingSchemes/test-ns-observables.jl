@@ -3182,6 +3182,362 @@
     end
 
     # ================================================================
+    # Shared fixture (issue #186 (a)/(b)): the 12-vertex cuboctahedral shell
+    # -- the first coordination shell of the fcc crystal, i.e. the
+    # adsorption-site shell of a 13-atom cuboctahedral cluster -- as a FINITE
+    # lattice through the MLattice{1,GenericLattice} inner constructor:
+    # supercell (1, 1, 1), periodicity (false, false, false), the twelve
+    # vertices supplied as an explicit Cartesian basis. Keyword constructors
+    # exist only for the square and triangular tags
+    # (src/AbstractWalkers/lattice_walkers.jl), so the generic tag -- and
+    # with it any irregular finite cluster model -- is reachable only
+    # through the inner constructor.
+    #
+    # Geometry: vertices (+-1, +-1, 0), (+-1, 0, +-1), (0, +-1, +-1) scaled
+    # by d/sqrt(2) about a positive center, with nearest-neighbor spacing
+    # d = 2^(1/6) sigma (sigma = 1 lattice units, the Lennard-Jones pair
+    # minimum). The inter-vertex distances fall in shells
+    # {1, sqrt(2), sqrt(3), 2} d with per-site counts [4, 2, 4, 1]
+    # (unordered pair counts [24, 12, 24, 6]); the cutoff ladder
+    # d * [1.1, 1.5, 1.8, 2.05] brackets exactly one distance class per
+    # shell. A 12-6 pair potential tabulates to exactly rational couplings
+    # at the shell distances: J_k / eps = -1, -15/64, 3^-6 - 2*3^-3,
+    # -127/4096.
+    cb_d = 2.0^(1 / 6)
+    cb_s = cb_d / sqrt(2.0)
+    cb_vertices = [(1, 1, 0), (1, -1, 0), (-1, 1, 0), (-1, -1, 0),
+                   (1, 0, 1), (1, 0, -1), (-1, 0, 1), (-1, 0, -1),
+                   (0, 1, 1), (0, 1, -1), (0, -1, 1), (0, -1, -1)]
+    cb_basis = [(cb_d + p[1] * cb_s, cb_d + p[2] * cb_s, cb_d + p[3] * cb_s)
+                for p in cb_vertices]
+    cb_radii = cb_d .* [1.1, 1.5, 1.8, 2.05]
+    # Non-periodic: no minimum-image reduction exists to go wrong, and
+    # construction is warning-free
+    cb = @test_logs min_level = Base.CoreLogging.Warn MLattice{1,GenericLattice}(
+        [2.0 * cb_d 0.0 0.0; 0.0 2.0 * cb_d 0.0; 0.0 0.0 2.0 * cb_d],
+        cb_basis, (1, 1, 1), (false, false, false), cb_radii,
+        [fill(false, 12)], fill(true, 12))
+
+    # SiteFieldLatticeHamiltonian over a zero-on-site GenericLatticeHamiltonian
+    # base: the couplings carry the four-shell LJ tabulation above, and a
+    # three-class site field (one class per coordinate plane of the shell:
+    # vertices with z, y, x displacement zero respectively) breaks the
+    # site-transitivity the base Hamiltonians assume
+    cb_eps = 0.01
+    cb_J = cb_eps .* [-1.0, -15 / 64, 3.0^-6 - 2 * 3.0^-3, -127 / 4096]
+    cb_field = vcat(fill(-0.03, 4), fill(-0.02, 4), fill(-0.012, 4))
+    cb_ham = SiteFieldLatticeHamiltonian(
+        GenericLatticeHamiltonian(0.0, cb_J, u"eV"), cb_field, u"eV")
+
+    # Independent geometry: brute-force pair-shell table from the stored
+    # positions (no images: the model is finite), sharing no code with
+    # compute_neighbors
+    cb_pos = [(cb.positions[s, 1], cb.positions[s, 2], cb.positions[s, 3])
+              for s in 1:12]
+    cb_dist(i, j) = sqrt(sum((cb_pos[i][k] - cb_pos[j][k])^2 for k in 1:3))
+    cb_pair_shell = Dict{Tuple{Int,Int},Int}()
+    for i in 1:12, j in (i+1):12
+        r = cb_dist(i, j)
+        r > cb_radii[end] && continue
+        sh = findfirst(rr -> r <= rr, cb_radii)
+        sh === nothing || (cb_pair_shell[(i, j)] = sh)
+    end
+    cb_brute_E(occ) = sum(cb_field[i] for i in 1:12 if occ[i]; init=0.0) +
+                      sum((occ[p[1]] && occ[p[2]]) ? cb_J[sh] : 0.0
+                          for (p, sh) in cb_pair_shell; init=0.0)
+
+    # ================================================================
+    @testset "finite non-periodic generic lattice: cuboctahedral shell" begin
+        @test cb isa GLattice{1}
+        @test num_sites(cb) == 12
+        @test cb.periodicity == (false, false, false)
+        # supercell (1, 1, 1): the stored positions are exactly the basis
+        @test all(Tuple(cb.positions[s, :]) == cb_basis[s] for s in 1:12)
+
+        # Neighbor-shell audit against the brute-force adjacency
+        cb_brute = [[Int[] for _ in 1:4] for _ in 1:12]
+        for ((i, j), sh) in cb_pair_shell
+            push!(cb_brute[i][sh], j)
+            push!(cb_brute[j][sh], i)
+        end
+        @test all(nb -> length.(nb) == [4, 2, 4, 1], cb.neighbors)
+        @test all(sort(cb.neighbors[s][k]) == sort(cb_brute[s][k])
+                  for s in 1:12, k in 1:4)
+        # symmetric and duplicate-free
+        cb_sym = true
+        for s in 1:12, k in 1:4, nb in cb.neighbors[s][k]
+            cb_sym &= (s in cb.neighbors[nb][k])
+        end
+        @test cb_sym
+        @test all(allunique(vcat(cb.neighbors[s]...)) for s in 1:12)
+        # unordered pair counts per shell
+        @test [sum(length(cb.neighbors[s][k]) for s in 1:12) ÷ 2 for k in 1:4] ==
+              [24, 12, 24, 6]
+
+        # Energy identity against the explicit pair-plus-field sum
+        # (the additive contract of SiteFieldLatticeHamiltonian). Single
+        # occupancies pin the field per site exactly: no pair term
+        # contributes, so E = field[i], bit-exactly
+        cb_occ = cb.components[1]
+        cb_single_ok = true
+        for i in 1:12
+            cb_occ .= false
+            cb_occ[i] = true
+            cb_single_ok &= (ustrip(u"eV", interacting_energy(cb, cb_ham)) ==
+                             cb_field[i])
+        end
+        @test cb_single_ok
+        # 222 masks: the 12 singles, the 66 pairs, and 144 seeded random
+        # masks (calibrated worst deviation 1.1102230246251565e-16 eV)
+        cb_masks = Int[]
+        for i in 1:12
+            push!(cb_masks, 1 << (i - 1))
+        end
+        for i in 1:12, j in (i+1):12
+            push!(cb_masks, (1 << (i - 1)) | (1 << (j - 1)))
+        end
+        Random.seed!(7401)
+        for _ in 1:144
+            push!(cb_masks, rand(0:4095))
+        end
+        @test length(cb_masks) == 222
+        cb_worst = 0.0
+        for m in cb_masks
+            for s in 1:12
+                cb_occ[s] = ((m >> (s - 1)) & 1) == 1
+            end
+            cb_worst = max(cb_worst,
+                abs(ustrip(u"eV", interacting_energy(cb, cb_ham)) -
+                    cb_brute_E(cb_occ)))
+        end
+        @test cb_worst <= 1e-13
+        # Full-occupancy closed form: field sum plus the pair-count-weighted
+        # couplings (calibrated deviation 4.440892098500626e-16 eV)
+        cb_occ .= true
+        cb_full = sum(cb_field) + 24 * cb_J[1] + 12 * cb_J[2] +
+                  24 * cb_J[3] + 6 * cb_J[4]
+        @test abs(ustrip(u"eV", interacting_energy(cb, cb_ham)) - cb_full) < 1e-12
+        cb_occ .= false
+    end
+
+    # ================================================================
+    # Issue #186 (b): ideal-gas-referenced closure on the finite lattice --
+    # the first GenericLattice coverage of ideal_gas_referenced_nested_sampling,
+    # gc_thermodynamic_stats_ideal_ref, and (last member) the :contact
+    # biased-insertion kernel. Exact reference: full 2^12 enumeration,
+    # computed here in-test.
+    #
+    # ============== calibration ledger (record, do not retype) ==============
+    # Grid: mus = [-0.07569, -0.04461, -0.01358] (coverage 0.05 at 200 K,
+    # 0.50 at 250 K, 0.95 at 200 K by bisection on the exact sums, rounded
+    # to 1e-5), Ts = [200, 250, 300] K; grid-wide exact coverage spans
+    # [0.0500, 0.9500]. z0 = exp(beta_250 * mu_mid) = 0.12609619465789468.
+    # E_gs = -0.5354339112332822 eV (full occupancy).
+    #
+    # Members: seeds 71/72/73 (unbiased) + 74 (:contact, p_bias = 0.5), all
+    # K = 120, n_steps = 3500, mc_steps = 100; seeds are the first scanned,
+    # not selected on their deviations. Offsets are folded into the gates as
+    # issue #186 specifies (offset-aware K = 120 gates): per stat per mu row,
+    # offset = the mean deviation from the exact grand sums over the three
+    # unbiased seeds and the row's three temperatures; gate = 3x the maximum
+    # residual |dev - offset| over ALL FOUR members (so every member sits
+    # >= 3x inside its gate). Digit-for-digit residual maxima (reproduced by
+    # running this file with FREEBIRD_CUBOCT_IGREF_CALIBRATE=1; gates
+    # evaluate after all RNG use, so comment/tolerance edits never
+    # invalidate the calibration):
+    #
+    #   lnXi  row 1: offset +0.015549904629894596
+    #     unbiased max 0.0756902696062428   (seed 72, 200 K)
+    #     contact  max 0.18422345940164508  (200 K)      gate 0.5527
+    #   lnXi  row 2: offset -0.012233619456831275
+    #     unbiased max 0.3169651201965435   (seed 73, 300 K)
+    #     contact  max 0.42874254779132176  (200 K)      gate 1.2863
+    #   lnXi  row 3: offset -0.15657333856486272
+    #     unbiased max 0.6655533323089293   (seed 73, 200 K)
+    #     contact  max 0.9442795529943964   (200 K)      gate 2.8329
+    #   meanN row 1: offset -0.01322238703461942
+    #     unbiased max 0.1518554036133445   (seed 73, 300 K)
+    #     contact  max 0.20149496329287075  (250 K)      gate 0.6045
+    #   meanN row 2: offset -0.13610795675848053
+    #     unbiased max 0.40111004303506903  (seed 73, 200 K)
+    #     contact  max 0.8105573891917334   (200 K)      gate 2.4317
+    #   meanN row 3: offset -0.029388454031590665
+    #     unbiased max 0.33924860365093973  (seed 71, 300 K)
+    #     contact  max 0.11001799842401343  (300 K)      gate 1.0178
+    #   varN  row 1: offset +0.03305623604750547
+    #     unbiased max 0.2138071159273987   (seed 73, 300 K)
+    #     contact  max 0.033976982900384915 (200 K)      gate 0.6415
+    #   varN  row 2: offset -0.2671108767327802
+    #     unbiased max 0.8165602033979901   (seed 71, 200 K)
+    #     contact  max 0.3062663641025275   (300 K)      gate 2.4497
+    #   varN  row 3: offset +0.04913320271407429
+    #     unbiased max 0.20047113177004405  (seed 71, 250 K)
+    #     contact  max 0.21139588976394919  (300 K)      gate 0.6342
+    #   meanU row 1: offset +0.0002199685765479365
+    #     unbiased max 0.004859023401123861 (seed 73, 300 K)
+    #     contact  max 0.005156558737498416 (300 K)      gate 0.015470
+    #   meanU row 2: offset +0.0063656655773413244
+    #     unbiased max 0.01797782612331277  (seed 73, 200 K)
+    #     contact  max 0.03751881712916904  (200 K)      gate 0.11256
+    #   meanU row 3: offset +0.0014783976304835683
+    #     unbiased max 0.02022309469461337  (seed 71, 300 K)
+    #     contact  max 0.006516969480520046 (300 K)      gate 0.060670
+    #
+    # Failability: every gate sits at <= 0.41 of its row's smallest
+    # per-point attainable deviation sup (mean_N sup = max(N_ex, 12 - N_ex)
+    # >= 6.0; var_N sup = max(V_ex, 36 - V_ex) >= 29.2; mean_U sup =
+    # max(|E_gs - U_ex|, |U_ex|) >= 0.214; lnXi is a log-sum estimator,
+    # unbounded below at every point). The worst ratio is mean_N row 2:
+    # 2.4317 / 6.0 = 0.41.
+    #
+    # Kish N_eff minima (floor 60 gated on every grid point): seed 71
+    # 89.8626807564595, seed 72 95.22891484341172, seed 73 89.75703787575497,
+    # contact 86.1519052984775 -- the LOW-fugacity corner (mu_lo, 200 K)
+    # binds for all four members.
+    #
+    # Finite-K note (the issue #186 calibration decision): at the shipped
+    # depth (n_steps/K ~ 29 nats, full descent to E_gs plus the live tail)
+    # the measured common offsets are small -- |offset| <= 0.157 nats for
+    # lnXi, above -- rather than the +0.19/+0.32 nats the issue's probes
+    # recorded, so the offset fold is retained as specified but is not
+    # load-bearing at this depth. K = 480 measurement (nearest-neighbor-only
+    # variant, own coverage-matched grid mus = [-0.08757, -0.04066, 0.00622],
+    # z0 = 0.15147134295752862, seeds 91/92/93, n_steps = 14000): center-row
+    # mean lnXi deviation +0.013846 nats, grid-wide max |dev| 0.228308; the
+    # same variant at K = 120 (seeds 81/82/83, n_steps = 3500) measures
+    # center-row mean -0.017549, grid-wide max 0.572417 -- the spread
+    # contracts ~2x at 4x K while the mean stays ~0.01-0.02 nats, the
+    # finite-K attribution of the residual scatter.
+    # ========================================================================
+    @testset "ideal-gas-referenced closure on the finite cuboctahedral shell" begin
+        cb_kb = 8.617333262e-5
+        # Full 2^12 enumeration through the library energy (the identity to
+        # the independent pair-plus-field sum is pinned in the testset above)
+        cb_e_tab = Vector{Float64}(undef, 4096)
+        cb_n_tab = Vector{Int}(undef, 4096)
+        cb_occ = cb.components[1]
+        for m in 0:4095
+            for s in 1:12
+                cb_occ[s] = ((m >> (s - 1)) & 1) == 1
+            end
+            cb_e_tab[m+1] = ustrip(u"eV", interacting_energy(cb, cb_ham))
+            cb_n_tab[m+1] = count_ones(m)
+        end
+        cb_occ .= false
+        cb_e_gs = minimum(cb_e_tab)
+        @test cb_e_gs ≈ -0.5354339112332822 rtol = 1e-12
+
+        function cb_exact(mu, T)
+            beta = 1 / (cb_kb * T)
+            lt = beta .* (mu .* cb_n_tab .- cb_e_tab)
+            mx = maximum(lt)
+            w = exp.(lt .- mx)
+            Z = sum(w)
+            mN = sum(w .* cb_n_tab) / Z
+            (logXi=mx + log(Z), mean_N=mN,
+             var_N=sum(w .* cb_n_tab .^ 2) / Z - mN^2,
+             mean_U=sum(w .* cb_e_tab) / Z)
+        end
+
+        # mu grid from the calibration ledger; the exact-coverage pins keep
+        # the grid honest (coverage 0.05-0.95 grid-wide, 0.50 center row)
+        cb_mus = [-0.07569, -0.04461, -0.01358]
+        cb_Ts = [200.0, 250.0, 300.0]
+        @test cb_exact(cb_mus[1], 200.0).mean_N / 12 ≈ 0.05 atol = 1e-3
+        @test cb_exact(cb_mus[2], 250.0).mean_N / 12 ≈ 0.50 atol = 1e-3
+        @test cb_exact(cb_mus[3], 200.0).mean_N / 12 ≈ 0.95 atol = 1e-3
+        cb_z0 = exp(cb_mus[2] / (cb_kb * 250.0))
+
+        function cb_run(seed; routine=MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3))
+            Random.seed!(seed)   # the parameters' random_seed field is not consumed
+            ws = [LatticeWalker(deepcopy(cb), energy=0.0u"eV", iter=0)
+                  for _ in 1:120]
+            ls = LatticeGasWalkers(ws, cb_ham; assign_energy=false)
+            p = IdealGasReferencedGCNSParameters(mc_steps=100,
+                reference_fugacity=cb_z0, energy_perturbation=1e-9,
+                allowed_fail_count=100_000)
+            df, out, pout = ideal_gas_referenced_nested_sampling(
+                ls, p, Int64(3500), routine, obs_save)
+            obs_cleanup()
+            liveE = [w.energy.val for w in out.walkers]
+            liveN = [Int(sum(w.configuration.components[1])) for w in out.walkers]
+            st = gc_thermodynamic_stats_ideal_ref(df, 12, cb_z0, cb_mus, cb_Ts,
+                120; ω0=121 / 120, live_emax=liveE, live_numbers=liveN)
+            return (df=df, st=st, pout=pout)
+        end
+
+        # ---- all RNG use happens here; every gate below evaluates afterwards ----
+        cb_runs = [cb_run(71), cb_run(72), cb_run(73),
+                   cb_run(74; routine=MCGrandCanonicalMoves(p_move=0.4,
+                       p_insert=0.3, p_bias=0.5, bias_predicate=:contact,
+                       bias_shells=1))]
+
+        if get(ENV, "FREEBIRD_CUBOCT_IGREF_CALIBRATE", "0") == "1"
+            for (mem, seed) in zip(cb_runs, (71, 72, 73, 74))
+                println("calib cuboct seed $seed: Neff_min=",
+                        repr(minimum(mem.st.N_eff)), " argmin=",
+                        argmin(mem.st.N_eff))
+                for s in (:logXi, :mean_N, :var_N, :mean_U)
+                    for i in 1:3
+                        devs = [getfield(mem.st, s)[i, j] -
+                                getfield(cb_exact(cb_mus[i], cb_Ts[j]), s)
+                                for j in 1:3]
+                        println("  $s mu[$i]: ", join(repr.(devs), "  "))
+                    end
+                end
+            end
+        end
+
+        # offsets and gates from the calibration ledger above
+        cb_off_XI = [0.015550, -0.012234, -0.156573]
+        cb_off_N = [-0.013222, -0.136108, -0.029388]
+        cb_off_V = [0.033056, -0.267111, 0.049133]
+        cb_off_U = [0.000220, 0.006366, 0.001478]
+        cb_gate_XI = [0.5527, 1.2863, 2.8329]
+        cb_gate_N = [0.6045, 2.4317, 1.0178]
+        cb_gate_V = [0.6415, 2.4497, 0.6342]
+        cb_gate_U = [0.015470, 0.11256, 0.060670]
+
+        for mem in cb_runs
+            # ledger shape: the lattice route keeps the three-column ledger
+            # (no log_compression column: the lattice step methods keep the
+            # four-value return; pinned for MCRandomWalkClone ladders in
+            # test-ns-plateau-ties.jl)
+            @test names(mem.df) == ["iter", "emax", "num_particles"]
+            @test issorted(mem.df.emax, rev=true)
+            # the ladder reaches the ground manifold (full occupancy), up to
+            # the run's 1e-9 tie-breaking perturbation
+            @test minimum(mem.df.emax) <= cb_e_gs + 1e-6
+            # geometric cluster moves have no GenericLattice method (the
+            # guard in MonteCarloMoves throws); clusters_freq stays 0 in
+            # every member and no cluster move is ever attempted
+            @test mem.pout.move_stats[:cluster_attempted] == 0
+            @test mem.pout.move_stats[:swap_attempted] > 0
+        end
+        # the :contact member really drove the biased sub-channel
+        @test cb_runs[4].pout.move_stats[:insert_biased_attempted] > 0
+        @test cb_runs[4].pout.move_stats[:insert_biased_accepted] > 0
+
+        for mem in cb_runs
+            for (i, mu) in enumerate(cb_mus), (j, T) in enumerate(cb_Ts)
+                ex = cb_exact(mu, T)
+                # Kish floor: gates run only on points passing it, and every
+                # grid point passes (calibrated minima 86.2-95.2 at the
+                # low-fugacity 200 K corner, which binds for all members)
+                @test mem.st.N_eff[i, j] >= 60
+                @test abs(mem.st.logXi[i, j] - ex.logXi - cb_off_XI[i]) <=
+                      cb_gate_XI[i]
+                @test abs(mem.st.mean_N[i, j] - ex.mean_N - cb_off_N[i]) <=
+                      cb_gate_N[i]
+                @test abs(mem.st.var_N[i, j] - ex.var_N - cb_off_V[i]) <=
+                      cb_gate_V[i]
+                @test abs(mem.st.mean_U[i, j] - ex.mean_U - cb_off_U[i]) <=
+                      cb_gate_U[i]
+            end
+        end
+    end
+
+    # ================================================================
     @testset "Langmuir closure off the keyword-square path" begin
         # On-site term only (zero couplings): E = eps N exactly, so
         # Xi(mu, T) = (1 + z e^{-beta eps})^M with z = e^{beta mu}, and

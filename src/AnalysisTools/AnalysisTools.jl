@@ -60,6 +60,42 @@ function ωᵢ(iters::AbstractVector{Int}, n_walkers::Int; n_cull::Int=1, ω0::F
 end
 
 """
+    ωᵢ(log_compression::AbstractVector{Float64}; ω0::Float64=1.0)
+
+Calculates the \$\\omega\$ factors (per-row prior-mass shells) from a ledger's per-cull
+log-compression column, as recorded by the serial atomistic `nested_sampling_step!`
+methods. Row `i`'s shell is
+```math
+\\omega_i = X_{i-1} - X_i, \\qquad X_i = \\omega_0 \\prod_{j \\le i} t_j,
+```
+where \$t_j = \\exp(\\texttt{log\\_compression}_j)\$ is the compression factor charged
+for cull \$j\$ (`n/(n+1)` for an ordinary cull from `n` live walkers, `(n-1)/n` for a
+plateau tie evicted without replacement). For a tie-free fixed-`K` ledger the column is
+uniformly `log(K/(K+1))` and this method with the default `ω0 = 1.0` agrees with the
+iteration-based method as `ωᵢ(1:n, K; ω0=(K+1)/K)` up to floating-point evaluation
+order: here `ω0` is the total prior mass before the first cull, whereas the `(K+1)/K`
+factor conventionally passed to the iteration-based method only undoes that method's
+iteration-count offset — do not pass it here. Ledgers containing plateau tie blocks
+REQUIRE this method, since the iteration-based weights assume a constant per-cull
+compression and over-compress plateaus.
+
+# Arguments
+- `log_compression::AbstractVector{Float64}`: The ledger's per-cull log-compression
+  values, in row order.
+- `ω0::Float64`: The total prior mass before the first cull. Default is 1.0, which is
+  correct for ledgers produced by `nested_sampling`; the summed shells then equal
+  `1 - exp(sum(log_compression))`, with the remainder being the live-set tail.
+
+# Returns
+- A vector of \$\\omega\$ factors.
+"""
+function ωᵢ(log_compression::AbstractVector{Float64}; ω0::Float64=1.0)
+    X = ω0 .* exp.(cumsum(log_compression))
+    Xprev = [ω0; X[1:end-1]]
+    return Xprev .- X
+end
+
+"""
     partition_function(β::Float64, ωi::Vector{Float64}, Ei::Vector{Float64})
 
 Calculates the partition function for the given \$\\beta\$, \$\\omega\$ factors, and energies.

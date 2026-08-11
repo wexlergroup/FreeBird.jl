@@ -443,6 +443,85 @@
     end
 
 
+    @testset "accept_range forwarding (issue #182)" begin
+        using Random
+
+        # Same-seed A/B pair on the serial atomistic path, the issue #182
+        # reproducer verbatim. adjust_step_size draws no randomness, so the
+        # two runs share every random stream and can differ only through the
+        # forwarded acceptance window.
+        function step_size_trajectory(range::Tuple{Float64,Float64})
+            Random.seed!(1234)
+            walkers = AtomWalker.(generate_initial_configs(20, 562.5, 3))
+            ls = LJAtomWalkers(walkers, LJParameters(epsilon=0.1, sigma=2.5, cutoff=4.0))
+            ns_params = NestedSamplingParameters(mc_steps=100, step_size=0.1, accept_range=range)
+            traj = Float64[]
+            for i in 1:200
+                nested_sampling_step!(ls, ns_params, MCRandomWalkClone(); ns_iteration=i)
+                push!(traj, ns_params.step_size)
+            end
+            return traj
+        end
+
+        traj_default = step_size_trajectory((0.25, 0.75))
+        traj_extreme = step_size_trajectory((0.95, 0.99))
+
+        @test traj_default[end] != traj_extreme[end]
+        # The default-window final equals the pre-fix dev value bit-exactly
+        # (the forwarded field equals the previously hardcoded (0.25, 0.75)),
+        # pinning that the fix is behavior-preserving for every run that used
+        # the default window.
+        @test traj_default[end] == 0.5758006961260272
+        @test traj_extreme[end] == 0.02206751763986903
+        @test findfirst(i -> traj_default[i] != traj_extreme[i], 1:200) == 11
+
+        # Same-seed A/B pair on the serial LJSurfaceWalkers path: the frozen
+        # 4-H surface fixture from the step tests above, with deterministically
+        # offset free walkers so the initial live set carries no exact ties.
+        function surface_final_step_size(range::Tuple{Float64,Float64})
+            Random.seed!(4321)
+            box = [[10.0u"Å", 0u"Å", 0u"Å"],
+                   [0u"Å", 10.0u"Å", 0u"Å"],
+                   [0u"Å", 0u"Å", 10.0u"Å"]]
+            lj = LJParameters(epsilon=0.1, sigma=2.5, cutoff=3.5, shift=false)
+            ljs = CompositeParameterSets(3, [lj for _ in 1:6])
+            surf_list = [:H => [0.0, 0.0, 0.0],
+                         :H => [0.0, 0.5, 0.0],
+                         :H => [0.5, 0.0, 0.0],
+                         :H => [0.5, 0.5, 0.0]]
+            surface = AtomWalker(FastSystem(periodic_system(surf_list, box, fractional=true)); freeze_species=[:H])
+            surface.energy_frozen_part = interacting_energy(surface.configuration, lj)
+            walkers = [AtomWalker(FastSystem(periodic_system(
+                           [:H => [0.2 + 0.02k, 0.5, 0.5],
+                            :H => [0.4, 0.5 + 0.02k, 0.5],
+                            :O => [0.6, 0.5, 0.5 + 0.02k]],
+                           box, fractional=true))) for k in 1:5]
+            ls = LJSurfaceWalkers(walkers, ljs, surface; assign_energy=true)
+            ns_params = NestedSamplingParameters(mc_steps=100, step_size=0.1, accept_range=range)
+            for i in 1:120
+                nested_sampling_step!(ls, ns_params, MCRandomWalkClone(); ns_iteration=i)
+            end
+            return ns_params.step_size
+        end
+
+        surf_default = surface_final_step_size((0.25, 0.75))
+        surf_extreme = surface_final_step_size((0.95, 0.99))
+
+        @test surf_default != surf_extreme
+        # Calibrated on this fixture (first divergence at step 1), so the
+        # inequality above is not vacuous; both windows leave the hardcoded
+        # pre-fix behavior.
+        @test surf_default == 0.1676010422687346
+        @test surf_extreme == 0.0019666745633144527
+
+        # The "adjust_step_size function tests" testset above covers the
+        # helper itself, including an explicit custom range, and passes
+        # unchanged. The threaded, distributed, and mixed-moves call sites
+        # carry the identical one-line forward and are covered by the shared
+        # pattern (issue #182 test plan, item 3).
+    end
+
+
     @testset "nested_sampling_loop functions tests" begin
         @testset "AtomWalkers cases tests" begin
             # Setup test system

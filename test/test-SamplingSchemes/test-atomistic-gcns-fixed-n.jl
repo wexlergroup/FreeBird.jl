@@ -695,7 +695,7 @@ end
         for (idx, N) in enumerate(N_values)
             (N == 0 || N == 1) && continue
             df = ns_outputs[idx]
-            @test names(df) == ["iter", "emax"]
+            @test names(df) == ["iter", "emax", "log_compression"]
             @test nrow(df) >= 0.5 * n_ns_steps
             @test length(live_emax_all[idx]) == K
         end
@@ -1034,7 +1034,7 @@ end
         for (idx, N) in enumerate(N_values)
             N == 0 && continue
             df = ns_outputs[idx]
-            @test names(df) == ["iter", "emax"]
+            @test names(df) == ["iter", "emax", "log_compression"]
             @test nrow(df) >= 0.5 * n_ns_steps
             @test length(live_emax_all[idx]) == K
         end

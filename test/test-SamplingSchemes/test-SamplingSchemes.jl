@@ -20,5 +20,7 @@
     include("test-hard-core-lattices.jl")
     # test per-dead-point observable recording and its post-processing
     include("test-ns-observables.jl")
+    # test plateau-aware tie eviction in the serial atomistic NS steps
+    include("test-ns-plateau-ties.jl")
 
 end

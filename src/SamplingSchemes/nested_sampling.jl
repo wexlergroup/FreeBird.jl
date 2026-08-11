@@ -22,6 +22,11 @@ e.g. (0.25, 0.75) means that the step size will decrease if the acceptance rate 
 - `cluster_p_history::Vector{Float64}`: Trajectory of cluster_p values after each adaptive adjustment.
 - `cluster_accept_history::Vector{Float64}`: Acceptance rate at each adaptive adjustment.
 - `cluster_adjust_iterations::Vector{Int}`: NS iteration index at each adaptive adjustment.
+- `plateau_refill_target::Int64`: Internal bookkeeping for plateau-aware culling in the
+  serial atomistic steps: the live-set size to restore once a block of exact energy ties
+  has been fully evicted without replacement. `0` (the default) means no plateau block is
+  in progress; the field is set and cleared by `nested_sampling_step!` and should not be
+  set by callers.
 """
 mutable struct NestedSamplingParameters <: SamplingParameters
     mc_steps::Int64
@@ -40,6 +45,7 @@ mutable struct NestedSamplingParameters <: SamplingParameters
     cluster_p_history::Vector{Float64}
     cluster_accept_history::Vector{Float64}
     cluster_adjust_iterations::Vector{Int}
+    plateau_refill_target::Int64
 end
 
 function NestedSamplingParameters(;
@@ -59,8 +65,9 @@ function NestedSamplingParameters(;
             cluster_p_history::Vector{Float64}=Float64[],
             cluster_accept_history::Vector{Float64}=Float64[],
             cluster_adjust_iterations::Vector{Int}=Int[],
+            plateau_refill_target::Int64=0,
             )
-    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, accept_range, fail_count, allowed_fail_count, energy_perturbation, random_seed, cluster_p, cluster_accepted, cluster_total, cluster_p_history, cluster_accept_history, cluster_adjust_iterations)
+    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, accept_range, fail_count, allowed_fail_count, energy_perturbation, random_seed, cluster_p, cluster_accepted, cluster_total, cluster_p_history, cluster_accept_history, cluster_adjust_iterations, plateau_refill_target)
 end
 
 """
@@ -473,7 +480,7 @@ function update_iter!(liveset::AbstractLiveSet)
     end
 end
 
-const _RESERVED_LEDGER_COLUMNS = (:iter, :emax, :omega, :energy, :num_particles)
+const _RESERVED_LEDGER_COLUMNS = (:iter, :emax, :omega, :energy, :num_particles, :log_compression)
 
 """
     _validate_observables(observables, liveset::AbstractLiveSet)
@@ -529,9 +536,50 @@ end
 
 
 """
+    _tie_block_length(walkers)
+
+Return the number of leading walkers in an energy-sorted (descending) walker vector whose
+energies are bit-exactly equal to the worst walker's energy. A return value of `1` means
+the energy ceiling is unique; a larger value means the ceiling sits on an exact energy
+plateau (the generic outcome of truncated pair potentials over configuration spaces with
+vacuum, where the potential is exactly zero beyond every cutoff sphere).
+"""
+function _tie_block_length(walkers)
+    e1 = walkers[1].energy
+    n = 1
+    while n < length(walkers) && walkers[n+1].energy == e1
+        n += 1
+    end
+    return n
+end
+
+"""
     nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine)
 
 Perform a single step of the nested sampling algorithm using the Monte Carlo random walk routine.
+
+Exact energy ties at the ceiling (an energy plateau) are handled with plateau-aware
+compression following Fowlie, Handley and Su, Mon. Not. R. Astron. Soc. 503, 1199 (2021):
+when two or more live walkers tie the ceiling bit-exactly, the tied walkers are evicted
+one by one without replacement, each eviction compressing the prior volume by
+`(n_live - 1)/n_live` with the shrinking live count, and the live set is refilled by
+cloning and decorrelating survivors below the plateau only once the last tied walker has
+been evicted. A normal (unique-ceiling) cull compresses by `n_live/(n_live + 1)` as
+before. The per-cull log-compression is returned as a fifth value and recorded by the
+[`nested_sampling`](@ref) driver in a `log_compression` ledger column, consumed by the
+log-compression method of `ωᵢ`; for tie-free ledgers the column is uniformly
+`log(K/(K+1))` and the legacy iteration-based weights are unchanged. One documented
+corner keeps the previous semantics: if the ENTIRE live set ties (every walker on the
+plateau), no survivor samples the sub-plateau region, so the step falls back to the
+ordinary clone-and-walk cull with replacement, charging `n_live/(n_live + 1)`; the
+plateau under-compression bias of that corner is confined to runs whose live set is
+entirely on a plateau, which for an i.i.d. initialization occurs with probability
+`f^K` for plateau prior fraction `f` (about 1% at `f = 0.91`, `K = 48`, but about 21%
+at `K = 16` — raise `K` when the vacuum fraction is large). This plateau handling
+applies to the two SERIAL `MCRoutine` step methods (`AtomWalkers` and
+`LJSurfaceWalkers`); the parallel, distributed, and mixed-moves step methods keep the
+previous fixed-compression semantics and their ledgers carry no `log_compression`
+column.
 
 # Arguments
 - `liveset::AtomWalkers`: The set of atom walkers.
@@ -543,13 +591,59 @@ Perform a single step of the nested sampling algorithm using the Monte Carlo ran
 - `emax`: The highest energy recorded during the step.
 - `liveset`: The updated set of atom walkers.
 - `ns_params`: The updated nested sampling parameters.
+- `log_t`: The log of the prior-volume compression factor charged for this cull
+  (`missing` when no walker was culled).
 """
 function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine; ns_iteration::Int=0)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.potential
+    # Validate the routine before any walker is touched: the plateau branch below
+    # evicts without running a walk, so an unsupported routine or dimension must
+    # error here rather than silently evicting on tie steps.
+    mc_routine isa Union{MCRandomWalkMaxE, MCRandomWalkClone} || error("Unsupported MCRoutine type: $mc_routine")
+    length(mc_routine.dims) in (2, 3) || error("Unsupported dimensions: $(mc_routine.dims)")
     iter::Union{Missing,Int} = missing
     emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
+    log_t::Union{Missing,Float64} = missing
+    n_live = length(ats)
+    n_tied = _tie_block_length(ats)
+    if (n_tied >= 2 || ns_params.plateau_refill_target != 0) && n_tied < n_live
+        # Plateau block: evict the worst tied walker without replacement
+        # (Fowlie-Handley-Su), charging (n_live - 1)/n_live with the shrinking
+        # live count. With the refill target set and a unique ceiling, this is
+        # the last tied walker of the block: evict it, then refill.
+        if ns_params.plateau_refill_target == 0
+            ns_params.plateau_refill_target = n_live
+        end
+        popfirst!(ats)
+        update_iter!(liveset)
+        iter = liveset.walkers[1].iter
+        log_t = log((n_live - 1) / n_live)
+        if n_tied == 1
+            # The plateau is exhausted: refill by cloning survivors and
+            # decorrelating strictly below the plateau energy (volume-neutral;
+            # no ledger row), then clear the block state.
+            refill_fails = 0
+            while length(ats) < ns_params.plateau_refill_target && refill_fails < ns_params.allowed_fail_count
+                # The refill walk uses the routine's own dimension constraint so
+                # refilled clones stay on the constrained prior manifold.
+                if length(mc_routine.dims) == 3
+                    accept_r, _, at_r = MC_random_walk!(ns_params.mc_steps, deepcopy(rand(ats)), lj, ns_params.step_size, emax)
+                else
+                    accept_r, _, at_r = MC_random_walk_2D!(ns_params.mc_steps, deepcopy(rand(ats)), lj, ns_params.step_size, emax; dims=mc_routine.dims)
+                end
+                if accept_r
+                    push!(ats, at_r)
+                else
+                    refill_fails += 1
+                end
+            end
+            length(ats) < ns_params.plateau_refill_target && @warn "Plateau refill left the live set at $(length(ats)) of $(ns_params.plateau_refill_target) walkers after $(refill_fails) failed decorrelation attempts; subsequent culls are charged with the actual live count."
+            ns_params.plateau_refill_target = 0
+        end
+        return iter, emax, liveset, ns_params, log_t
+    end
     if mc_routine isa MCRandomWalkMaxE
         to_walk = deepcopy(ats[1])
     elseif mc_routine isa MCRandomWalkClone
@@ -573,13 +667,14 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         update_iter!(liveset)
         ns_params.fail_count = 0
         iter = liveset.walkers[1].iter
+        log_t = log(n_live / (n_live + 1))
     else
         # @warn "Failed to accept MC move"
         emax = missing
         ns_params.fail_count += 1
     end
     adjust_step_size(ns_params, rate)
-    return iter, emax, liveset, ns_params
+    return iter, emax, liveset, ns_params, log_t
 end
 
 """
@@ -763,12 +858,53 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSampl
     return iter, emax[end], liveset, ns_params
 end
 
+"""
+    nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine)
+
+Serial nested-sampling step for surface livesets. Identical to the `AtomWalkers` serial
+method — including the plateau-aware handling of exact energy ties, the fifth
+`log_t` return value, and the all-tied fallback documented there — except that every
+decorrelation and refill walk carries the frozen surface and only `dims == [1, 2, 3]`
+is supported.
+"""
 function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine; ns_iteration::Int=0)
     sort_by_energy!(liveset)
     ats = liveset.walkers
     lj = liveset.potential
+    # Validate the routine before any walker is touched (the plateau branch below
+    # evicts without running a walk); this method's walks are 3D-only.
+    mc_routine isa Union{MCRandomWalkMaxE, MCRandomWalkClone} || error("Unsupported MCRoutine type: $mc_routine")
+    length(mc_routine.dims) == 3 || error("Unsupported dimensions: $(mc_routine.dims)")
     iter::Union{Missing,Int} = missing
     emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
+    log_t::Union{Missing,Float64} = missing
+    n_live = length(ats)
+    n_tied = _tie_block_length(ats)
+    if (n_tied >= 2 || ns_params.plateau_refill_target != 0) && n_tied < n_live
+        # Plateau block: evict the worst tied walker without replacement
+        # (Fowlie-Handley-Su); see the AtomWalkers method docstring.
+        if ns_params.plateau_refill_target == 0
+            ns_params.plateau_refill_target = n_live
+        end
+        popfirst!(ats)
+        update_iter!(liveset)
+        iter = liveset.walkers[1].iter
+        log_t = log((n_live - 1) / n_live)
+        if n_tied == 1
+            refill_fails = 0
+            while length(ats) < ns_params.plateau_refill_target && refill_fails < ns_params.allowed_fail_count
+                accept_r, _, at_r = MC_random_walk!(ns_params.mc_steps, deepcopy(rand(ats)), lj, ns_params.step_size, emax, liveset.surface)
+                if accept_r
+                    push!(ats, at_r)
+                else
+                    refill_fails += 1
+                end
+            end
+            length(ats) < ns_params.plateau_refill_target && @warn "Plateau refill left the live set at $(length(ats)) of $(ns_params.plateau_refill_target) walkers after $(refill_fails) failed decorrelation attempts; subsequent culls are charged with the actual live count."
+            ns_params.plateau_refill_target = 0
+        end
+        return iter, emax, liveset, ns_params, log_t
+    end
     if mc_routine isa MCRandomWalkMaxE
         to_walk = deepcopy(ats[1])
     elseif mc_routine isa MCRandomWalkClone
@@ -789,13 +925,14 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSampl
         update_iter!(liveset)
         ns_params.fail_count = 0
         iter = liveset.walkers[1].iter
+        log_t = log(n_live / (n_live + 1))
     else
         # @warn "Failed to accept MC move"
         emax = missing
         ns_params.fail_count += 1
     end
     adjust_step_size(ns_params, rate)
-    return iter, emax, liveset, ns_params
+    return iter, emax, liveset, ns_params, log_t
 end
 
 """
@@ -1178,6 +1315,9 @@ function nested_sampling(liveset::AbstractLiveSet,
         empty!(ns_params.cluster_accept_history)
         empty!(ns_params.cluster_adjust_iterations)
     end
+    # Defensive: a parameters object recovered from a run that ended inside a
+    # plateau block must not arm a fresh run's first cull as a tie eviction.
+    ns_params.plateau_refill_target = 0
     df = DataFrame(iter=Int[], emax=Float64[])
     if observables !== nothing
         mc_routine isa MCRoutineParallel && throw(ArgumentError(
@@ -1209,7 +1349,12 @@ function nested_sampling(liveset::AbstractLiveSet,
             sort_by_energy!(liveset)
             culled = liveset.walkers[1]
         end
-        iter, emax, liveset, ns_params = nested_sampling_step!(liveset, ns_params, mc_routine; ns_iteration=i)
+        step_ret = nested_sampling_step!(liveset, ns_params, mc_routine; ns_iteration=i)
+        iter, emax, liveset, ns_params = step_ret[1], step_ret[2], step_ret[3], step_ret[4]
+        # Serial atomistic steps additionally return the per-cull log-compression
+        # (plateau-aware culling); other step methods keep the four-value return
+        # and their ledgers gain no column.
+        log_t = length(step_ret) >= 5 ? step_ret[5] : missing
         @debug "n_step $i, iter: $iter, emax: $emax"
         if ns_params.fail_count >= ns_params.allowed_fail_count
             @warn "Failed to accept MC move $(ns_params.allowed_fail_count) times in a row. Reset step size!"
@@ -1225,12 +1370,16 @@ function nested_sampling(liveset::AbstractLiveSet,
                     "routine is not supported with `observables`/" *
                     "`dead_point_callback`")
             end
-            if observables === nothing
-                push!(df, (iter, emax.val))
-            else
-                push!(df, (iter, emax.val,
-                           (Float64(f(culled.configuration)) for (_, f) in observables)...))
+            if log_t !== missing && !hasproperty(df, :log_compression)
+                # Every accepted row of a log-compression-emitting run carries a
+                # value, and the first accepted row is the first push, so the
+                # column can be added lazily without backfilling.
+                df[!, :log_compression] = Float64[]
             end
+            row = observables === nothing ? (iter, emax.val) :
+                (iter, emax.val,
+                 (Float64(f(culled.configuration)) for (_, f) in observables)...)
+            push!(df, log_t === missing ? row : (row..., log_t))
             dead_point_callback === nothing || dead_point_callback(iter, culled)
         end
         print_message(i, iter, emax, ns_params.step_size, print_info, liveset)

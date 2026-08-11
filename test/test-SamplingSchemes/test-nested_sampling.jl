@@ -488,9 +488,11 @@
                 ns_params_copy = deepcopy(ns_params)
                 df, updated_liveset, updated_params = nested_sampling(
                     liveset, ns_params_copy, n_steps, MCRandomWalkMaxE(), save_strategy)
-                
+
                 @test df isa DataFrame
-                @test names(df) == ["iter", "emax"]
+                # Serial atomistic ledgers carry the per-cull log-compression
+                # column (plateau-aware culling); parallel ledgers do not.
+                @test names(df) == ["iter", "emax", "log_compression"]
                 @test nrow(df) ≤ n_steps
                 @test length(updated_liveset.walkers) == length(liveset.walkers)
                 @test eltype(df.iter) == Int

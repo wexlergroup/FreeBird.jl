@@ -284,6 +284,60 @@
             @test sl.components == replica.components
         end
 
+        @testset "GenericLattice guard" begin
+            using Random
+            # Geometric cluster moves carry square and triangular reflection
+            # maps only; a GenericLattice configuration gets the same loud
+            # guard so a cluster-armed routine fails at the move's definition
+            # with a descriptive ArgumentError instead of a raw MethodError
+            # from inside the sampling loop (the keyword MCMixedMoves
+            # constructor arms cluster moves by default).
+            gen = MLattice{1,GenericLattice}(
+                [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0],
+                [(0.0, 0.0, 0.0)],
+                (3, 1, 1),
+                (false, false, false),
+                [1.1],
+                [[true, false, false]],
+                fill(false, 3))
+            err = try
+                geometric_cluster_swap!(gen, 0.3)
+                nothing
+            catch e
+                e
+            end
+            @test err isa ArgumentError
+            @test occursin("square and triangular", err.msg)
+            @test occursin("GenericLattice", err.msg)
+
+            # The guard consumes no randomness: a guarded throw leaves the
+            # global RNG stream untouched.
+            Random.seed!(11)
+            probe = rand(UInt64)
+            Random.seed!(11)
+            try
+                geometric_cluster_swap!(gen, 0.3)
+            catch
+            end
+            @test rand(UInt64) === probe
+
+            # End to end: the cluster-armed keyword routine surfaces the
+            # guard's ArgumentError through the sampling step, while the
+            # positional back-compat form stays clusters-free and completes.
+            ham = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
+            walkers = [LatticeWalker(deepcopy(gen), energy=0.0u"eV", iter=0) for _ in 1:4]
+            ls = LatticeGasWalkers(walkers, ham)
+            params = NestedSamplingParameters(mc_steps=10)
+            @test_throws ArgumentError SamplingSchemes.nested_sampling_step!(ls, params, MCMixedMoves())
+            Random.seed!(99)
+            walkers2 = [LatticeWalker(deepcopy(gen), energy=0.0u"eV", iter=0) for _ in 1:4]
+            ls2 = LatticeGasWalkers(walkers2, ham)
+            save_strategy = SaveEveryN(n_traj=10^6, n_snap=10^6, n_info=10^6)
+            df, ls3, _ = nested_sampling(ls2, NestedSamplingParameters(mc_steps=10), 30, MCMixedMoves(5, 1), save_strategy)
+            @test size(df, 1) >= 1
+            @test length(ls3.walkers) == 4
+        end
+
         # ---- triangular lattice (two-site centered-rectangular basis) ----
 
         @testset "triangular reflection: half-grid round-trip" begin

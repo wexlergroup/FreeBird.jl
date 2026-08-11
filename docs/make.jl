@@ -6,7 +6,6 @@ makedocs(;
     pages=[
             "FreeBird.jl" => "index.md",
             "Tutorials" => "tutorials.md",
-            "Custom Hamiltonians" => "CustomHamiltonians.md",
             "Examples" => "examples.md",
             "Interface with Python for MLIPs" => "MLIPs.md",
             "Modules and Documentation" => [

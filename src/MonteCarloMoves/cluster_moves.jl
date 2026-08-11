@@ -266,3 +266,18 @@ function geometric_cluster_swap!(lattice::MLattice{C,TriangularLattice}, p::Floa
 
     return lattice
 end
+
+"""
+    geometric_cluster_swap!(lattice::MLattice{C,GenericLattice}, p::Float64)
+
+Guard method: geometric cluster moves are defined only for the square and triangular
+geometries, whose reflection maps are integer grid involutions on the site indices; a
+`GenericLattice` carries no such map, so this method always throws a descriptive
+`ArgumentError` before drawing any randomness. Use swap-only decorrelation
+(`clusters_freq = 0`) for generic geometries.
+"""
+function geometric_cluster_swap!(lattice::MLattice{C,GenericLattice}, p::Float64) where C
+    throw(ArgumentError("geometric_cluster_swap! supports square and triangular " *
+        "lattices only, got a GenericLattice configuration; use swap-only " *
+        "decorrelation (clusters_freq = 0) for generic geometries"))
+end

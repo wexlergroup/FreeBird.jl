@@ -135,6 +135,110 @@ FreeBird.EnergyEval.interacting_energy(lattice::SLattice, h::ExtBadHam) = 1.6
             end
         end
 
+        @testset "LJSurfaceWalkers constructor validation tests" begin
+            # These testsets build fresh fixtures rather than sharing the
+            # `surface` above: the constructors mutate the surface walker
+            # (frozen flags, and `energy_frozen_part` under
+            # `compute_frozen_energy=true`), and the keyword tests need a
+            # surface whose `energy_frozen_part` still sits at its
+            # 0.0u"eV" default.
+            ads_list = [:H => [0.5, 0.5, 0.35]]
+            # one-component adsorbate walkers
+            make_adsorbates(n) = [AtomWalker(FastSystem(periodic_system(ads_list, box, fractional=true))) for _ in 1:n]
+            make_surface() = AtomWalker(FastSystem(periodic_system(surf_list, box, fractional=true)); freeze_species=[:H])
+            ljs2 = CompositeParameterSets(2, [lj, lj, lj])  # adsorbate + surface
+
+            @testset "bare LJParameters rejected at dispatch" begin
+                # No surface energy path can evaluate a bare LJParameters
+                # (the five-argument interacting_energy and the same-surface
+                # single_site_energy methods exist only for
+                # CompositeParameterSets), so both constructor forms accept
+                # only the composite type and a bare parameter set fails at
+                # dispatch, before any energy work.
+                walkers = make_adsorbates(1)
+                surface = make_surface()
+                @test_throws MethodError LJSurfaceWalkers(walkers, lj, surface)
+                @test_throws MethodError LJSurfaceWalkers(walkers, lj, surface, :threads)
+            end
+
+            @testset "component-count validation" begin
+                # The surface energy paths append the surface as the LAST
+                # parameter-set component, so the parameter set must carry
+                # C + 1 components over C-component walkers; a mismatch
+                # raises a descriptive ArgumentError on both constructor
+                # forms. The matching layouts need no new coverage here:
+                # the LJSurfaceWalkers testsets above construct
+                # three-over-two (`ljs` over the two-component H/O
+                # walkers), and the sampling-scheme suites construct
+                # two-over-one.
+                walkers = make_adsorbates(1)
+                surface = make_surface()
+                @test_throws ArgumentError LJSurfaceWalkers(walkers, ljs, surface)
+                @test_throws ArgumentError LJSurfaceWalkers(walkers, ljs, surface, :threads)
+                err = try
+                    LJSurfaceWalkers(walkers, ljs, surface)
+                    nothing
+                catch e
+                    e
+                end
+                @test err isa ArgumentError
+                @test occursin("3-component parameters", err.msg)
+                @test occursin("1-component walkers", err.msg)
+                @test occursin("expected 2", err.msg)
+            end
+
+            @testset "frozen-part energy bookkeeping" begin
+                # With the adsorbent self-energy assigned by hand (the
+                # documented idiom), every walker total is the
+                # walker-surface interacting energy plus the surface
+                # self-energy, carried through the copied
+                # energy_frozen_part: the self-energy enters each total
+                # exactly once.
+                surface = make_surface()
+                surface.energy_frozen_part = interacting_energy(surface.configuration, lj)
+                ls = LJSurfaceWalkers(make_adsorbates(3), ljs2, surface)
+                for w in ls.walkers
+                    @test w.energy == interacting_energy(w.configuration, ljs2, w.list_num_par, w.frozen, surface.configuration) + surface.energy_frozen_part
+                    @test w.energy_frozen_part == surface.energy_frozen_part
+                end
+            end
+
+            @testset "compute_frozen_energy keyword" begin
+                # Reference construction: the hand-assigned idiom.
+                surface_hand = make_surface()
+                surface_hand.energy_frozen_part = interacting_energy(surface_hand.configuration, lj)
+                ls_hand = LJSurfaceWalkers(make_adsorbates(3), ljs2, surface_hand)
+
+                # compute_frozen_energy=true starts from an unset surface
+                # and must reproduce the hand-assigned construction
+                # bit-identically, on both constructor forms.
+                surface_kw = make_surface()
+                ls_kw = LJSurfaceWalkers(make_adsorbates(3), ljs2, surface_kw; compute_frozen_energy=true)
+                @test surface_kw.energy_frozen_part === surface_hand.energy_frozen_part
+                surface_kwp = make_surface()
+                ls_kwp = LJSurfaceWalkers(make_adsorbates(3), ljs2, surface_kwp, :threads; compute_frozen_energy=true)
+                @test surface_kwp.energy_frozen_part === surface_hand.energy_frozen_part
+                for i in 1:3
+                    @test ls_kw.walkers[i].energy === ls_hand.walkers[i].energy
+                    @test ls_kw.walkers[i].energy_frozen_part === ls_hand.walkers[i].energy_frozen_part
+                    @test ls_kwp.walkers[i].energy === ls_hand.walkers[i].energy
+                    @test ls_kwp.walkers[i].energy_frozen_part === ls_hand.walkers[i].energy_frozen_part
+                end
+
+                # The default leaves an unset surface at 0.0u"eV" (the
+                # silent omission the docstring documents): construction
+                # succeeds, no walker carries the self-energy, and the two
+                # constructions differ by exactly the surface self-energy.
+                surface_def = make_surface()
+                ls_def = LJSurfaceWalkers(make_adsorbates(3), ljs2, surface_def)
+                @test surface_def.energy_frozen_part == 0.0u"eV"
+                for i in 1:3
+                    @test ls_def.walkers[i].energy_frozen_part == 0.0u"eV"
+                    @test ls_def.walkers[i].energy + surface_hand.energy_frozen_part === ls_hand.walkers[i].energy
+                end
+            end
+        end
+
         @testset "LJAtomWalkers struct and functions tests" begin
             
             # Create multiple walkers with different configurations

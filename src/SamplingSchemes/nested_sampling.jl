@@ -704,15 +704,17 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
 
     if length(mc_routine.dims) == 3
         random_walk_function = MC_random_walk!
+        walk_kwargs = NamedTuple()
     elseif length(mc_routine.dims) == 2
         random_walk_function = MC_random_walk_2D!
+        walk_kwargs = (dims = mc_routine.dims,)
     else
         error("Unsupported dimensions: $(mc_routine.dims)")
     end
 
     mc_steps_per_worker = ceil(Int, ns_params.mc_steps / nworkers()) # distribute the total MC steps among workers
 
-    walking = [remotecall(random_walk_function, workers()[i], mc_steps_per_worker, to_walk, lj, ns_params.step_size, emax[mc_routine.n_cull]) for (i,to_walk) in enumerate(to_walks)]
+    walking = [remotecall(random_walk_function, workers()[i], mc_steps_per_worker, to_walk, lj, ns_params.step_size, emax[mc_routine.n_cull]; walk_kwargs...) for (i,to_walk) in enumerate(to_walks)]
     walked = fetch.(walking)
     finalize.(walking) # finalize the remote calls, clear the memory
 
@@ -771,14 +773,16 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
 
     if length(mc_routine.dims) == 3
         random_walk_function = MC_random_walk!
+        walk_kwargs = NamedTuple()
     elseif length(mc_routine.dims) == 2
         random_walk_function = MC_random_walk_2D!
+        walk_kwargs = (dims = mc_routine.dims,)
     else
         error("Unsupported dimensions: $(mc_routine.dims)")
     end
 
 
-    walking = [remotecall(random_walk_function, workers()[i], ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax[end]) for (i,to_walk) in enumerate(to_walks)]
+    walking = [remotecall(random_walk_function, workers()[i], ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax[end]; walk_kwargs...) for (i,to_walk) in enumerate(to_walks)]
     walked = fetch.(walking)
     finalize.(walking) # finalize the remote calls, clear the memory
 
@@ -823,9 +827,10 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSampl
 
     if length(mc_routine.dims) == 3
         random_walk_function = MC_random_walk!
-    elseif length(mc_routine.dims) == 2
-        random_walk_function = MC_random_walk_2D!
     else
+        # The surface walks are 3D-only, matching the serial surface step's
+        # restriction: a length-2 dims would select a walk method with no
+        # surface variant and fail as a MethodError on the worker.
         error("Unsupported dimensions: $(mc_routine.dims)")
     end
 

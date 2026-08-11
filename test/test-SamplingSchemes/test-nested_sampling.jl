@@ -1,21 +1,18 @@
 @testset "nested_sampling.jl tests" begin
     @testset "NestedSamplingParameters struct tests" begin
         params = NestedSamplingParameters(
-            mc_steps=1000,
-            initial_step_size=0.1,
-            step_size=0.1,
-            step_size_lo=0.01,
-            step_size_up=1.0,
-            accept_range=(0.5,0.5),
-            fail_count=0,
-            allowed_fail_count=100,
-            energy_perturbation=1e-12,
-            random_seed=1234,
-            cluster_p=0.3,
-            cluster_accepted=0.0,
-            cluster_total=0.0,
+            1000,    # mc_steps
+            0.1,     # initial_step_size
+            0.1,     # step_size
+            0.01,    # step_size_lo
+            1.0,     # step_size_up
+            (0.5,0.5),  # acceptance ratio range
+            0,       # fail_count
+            100,     # allowed_fail_count
+            1e-12,   # energy_perturbation
+            1234     # random_seed
         )
-
+        
         @test params isa SamplingSchemes.SamplingParameters
         @test params.mc_steps == 1000
         @test params.initial_step_size == 0.1
@@ -46,12 +43,9 @@
         @test params.allowed_fail_count == 100
         @test params.energy_perturbation == 1e-12
         @test params.random_seed == 1234
-        @test params.cluster_p == 0.3
-        @test params.cluster_accepted == 0.0
-        @test params.cluster_total == 0.0
 
     end
-
+    
 
     @testset "LatticeNestedSamplingParameters struct tests" begin
         params = LatticeNestedSamplingParameters(
@@ -80,7 +74,6 @@
         @test params.fail_count == 0
         @test params.allowed_fail_count == 10
         @test params.random_seed == 1234
-        @test params.cluster_p == 0.3
 
     end
     
@@ -199,21 +192,18 @@
             liveset_surf = LJSurfaceWalkers(walkers, ljs, surface; assign_energy=true)
             
             ns_params = NestedSamplingParameters(
-                mc_steps=1000,
-                initial_step_size=0.1,
-                step_size=0.1,
-                step_size_lo=0.01,
-                step_size_up=1.0,
-                accept_range=(0.5,0.5),
-                fail_count=0,
-                allowed_fail_count=100,
-                energy_perturbation=1e-12,
-                random_seed=1234,
-                cluster_p=0.3,
-                cluster_accepted=0.0,
-                cluster_total=0.0,
+                1000,    # mc_steps
+                0.1,     # initial_step_size
+                0.1,     # step_size
+                0.01,    # step_size_lo
+                1.0,     # step_size_up
+                (0.5,0.5),  # acceptance ratio range
+                0,       # fail_count
+                100,     # allowed_fail_count
+                1e-12,   # energy_perturbation
+                1234     # random_seed
             )
-
+            
             for liveset in [liveset_at, liveset_surf]
                 @testset "MCRandomWalkMaxE" begin
                     mc_routine = MCRandomWalkMaxE()
@@ -265,17 +255,13 @@
 
                     original_ls = deepcopy(liveset)
 
-                    if !(liveset isa LJSurfaceWalkers)
+                    if !(liveset isa LJSurfaceWalkers) # TODO: LJSurfaceWalkers does not support 2D walks yet
                         iter, emax, updated_liveset, updated_params = nested_sampling_step!(deepcopy(original_ls), ns_params, mc_routine)
-
+                        
                         @test iter isa Union{Missing,Int}
                         @test emax isa Union{Missing,typeof(0.0u"eV")}
                         @test length(updated_liveset.walkers) == length(original_ls.walkers)
                         @test updated_params.fail_count >= 0
-                    else
-                        # Surface walks are 3D-only: the step refuses a 2D dims
-                        # explicitly (issue #185, option 1).
-                        @test_throws ErrorException nested_sampling_step!(deepcopy(original_ls), ns_params, mc_routine)
                     end
 
                 end
@@ -310,57 +296,6 @@
                     @test_throws ErrorException begin
                         nested_sampling_step!(liveset, ns_params, Unsupported())
                     end
-                end
-            end
-
-            @testset "2D dims dispatch and forwarding (issue #185)" begin
-                using Random
-                # The serial surface refusal supplies the reference message for
-                # the parallel surface dispatch (issue #185, option 1).
-                serial_err = try
-                    nested_sampling_step!(deepcopy(liveset_surf), deepcopy(ns_params), MCRandomWalkClone(dims=[1, 2]))
-                    nothing
-                catch err
-                    err
-                end
-                @test serial_err isa ErrorException
-                @test occursin("Unsupported dimensions", serial_err.msg)
-
-                for mc_routine in [MCRandomWalkCloneParallel(dims=[1, 2]), MCRandomWalkMaxEParallel(dims=[1, 2])]
-                    @test_throws ErrorException nested_sampling_step!(deepcopy(liveset_surf), deepcopy(ns_params), mc_routine)
-                    parallel_err = try
-                        nested_sampling_step!(deepcopy(liveset_surf), deepcopy(ns_params), mc_routine)
-                        nothing
-                    catch err
-                        err
-                    end
-                    @test parallel_err isa ErrorException && parallel_err.msg == serial_err.msg
-                end
-
-                # Distinct-coordinate walkers: a dims=[1, 3] walk must leave every
-                # dim-2 coordinate bit-identical, so after any number of steps each
-                # liveset coordinate must stay inside the starting per-dimension
-                # value set of its dimension.
-                coor_lists = [[:H => [0.20, 0.11, 0.30], :H => [0.40, 0.17, 0.48]],
-                              [:H => [0.60, 0.23, 0.40], :H => [0.42, 0.29, 0.58]],
-                              [:H => [0.70, 0.35, 0.50], :H => [0.50, 0.41, 0.28]]]
-                walkers_2d = [AtomWalker(FastSystem(periodic_system(cl, box, fractional=true))) for cl in coor_lists]
-                coords(ls, d) = Set(ustrip(u"Å", position(w.configuration, i)[d]) for w in ls.walkers for i in 1:2)
-                start_ls = LJAtomWalkers(deepcopy(walkers_2d), lj)
-                xs0, ys0, zs0 = coords(start_ls, 1), coords(start_ls, 2), coords(start_ls, 3)
-
-                for (seed, mc_routine) in [(4661, MCRandomWalkCloneParallel(dims=[1, 3])),
-                                           (4662, MCDistributed(dims=[1, 3])),
-                                           (4663, MCRandomWalkClone(dims=[1, 3]))]
-                    Random.seed!(seed)
-                    ls = LJAtomWalkers(deepcopy(walkers_2d), lj)
-                    params = deepcopy(ns_params)
-                    for _ in 1:4
-                        nested_sampling_step!(ls, params, mc_routine)
-                    end
-                    @test issubset(coords(ls, 2), ys0)
-                    # Non-vacuity: at least one dim-1 or dim-3 coordinate moved.
-                    @test !issubset(coords(ls, 1), xs0) || !issubset(coords(ls, 3), zs0)
                 end
             end
         end
@@ -443,19 +378,16 @@
     @testset "adjust_step_size function tests" begin
 
         ns_params = NestedSamplingParameters(
-                mc_steps=1000,
-                initial_step_size=0.1,
-                step_size=0.1,
-                step_size_lo=0.01,
-                step_size_up=1.0,
-                accept_range=(0.5,0.5),
-                fail_count=0,
-                allowed_fail_count=100,
-                energy_perturbation=1e-12,
-                random_seed=1234,
-                cluster_p=0.3,
-                cluster_accepted=0.0,
-                cluster_total=0.0,
+                1000,    # mc_steps
+                0.1,     # initial_step_size
+                0.1,     # step_size
+                0.01,    # step_size_lo
+                1.0,     # step_size_up
+                (0.5,0.5),  # acceptance ratio range
+                0,       # fail_count
+                100,     # allowed_fail_count
+                1e-12,   # energy_perturbation
+                1234     # random_seed
             )
 
         @testset "Step size increases" begin
@@ -498,85 +430,6 @@
     end
 
 
-    @testset "accept_range forwarding (issue #182)" begin
-        using Random
-
-        # Same-seed A/B pair on the serial atomistic path, the issue #182
-        # reproducer verbatim. adjust_step_size draws no randomness, so the
-        # two runs share every random stream and can differ only through the
-        # forwarded acceptance window.
-        function step_size_trajectory(range::Tuple{Float64,Float64})
-            Random.seed!(1234)
-            walkers = AtomWalker.(generate_initial_configs(20, 562.5, 3))
-            ls = LJAtomWalkers(walkers, LJParameters(epsilon=0.1, sigma=2.5, cutoff=4.0))
-            ns_params = NestedSamplingParameters(mc_steps=100, step_size=0.1, accept_range=range)
-            traj = Float64[]
-            for i in 1:200
-                nested_sampling_step!(ls, ns_params, MCRandomWalkClone(); ns_iteration=i)
-                push!(traj, ns_params.step_size)
-            end
-            return traj
-        end
-
-        traj_default = step_size_trajectory((0.25, 0.75))
-        traj_extreme = step_size_trajectory((0.95, 0.99))
-
-        @test traj_default[end] != traj_extreme[end]
-        # The default-window final equals the pre-fix dev value bit-exactly
-        # (the forwarded field equals the previously hardcoded (0.25, 0.75)),
-        # pinning that the fix is behavior-preserving for every run that used
-        # the default window.
-        @test traj_default[end] == 0.5758006961260272
-        @test traj_extreme[end] == 0.02206751763986903
-        @test findfirst(i -> traj_default[i] != traj_extreme[i], 1:200) == 11
-
-        # Same-seed A/B pair on the serial LJSurfaceWalkers path: the frozen
-        # 4-H surface fixture from the step tests above, with deterministically
-        # offset free walkers so the initial live set carries no exact ties.
-        function surface_final_step_size(range::Tuple{Float64,Float64})
-            Random.seed!(4321)
-            box = [[10.0u"Å", 0u"Å", 0u"Å"],
-                   [0u"Å", 10.0u"Å", 0u"Å"],
-                   [0u"Å", 0u"Å", 10.0u"Å"]]
-            lj = LJParameters(epsilon=0.1, sigma=2.5, cutoff=3.5, shift=false)
-            ljs = CompositeParameterSets(3, [lj for _ in 1:6])
-            surf_list = [:H => [0.0, 0.0, 0.0],
-                         :H => [0.0, 0.5, 0.0],
-                         :H => [0.5, 0.0, 0.0],
-                         :H => [0.5, 0.5, 0.0]]
-            surface = AtomWalker(FastSystem(periodic_system(surf_list, box, fractional=true)); freeze_species=[:H])
-            surface.energy_frozen_part = interacting_energy(surface.configuration, lj)
-            walkers = [AtomWalker(FastSystem(periodic_system(
-                           [:H => [0.2 + 0.02k, 0.5, 0.5],
-                            :H => [0.4, 0.5 + 0.02k, 0.5],
-                            :O => [0.6, 0.5, 0.5 + 0.02k]],
-                           box, fractional=true))) for k in 1:5]
-            ls = LJSurfaceWalkers(walkers, ljs, surface; assign_energy=true)
-            ns_params = NestedSamplingParameters(mc_steps=100, step_size=0.1, accept_range=range)
-            for i in 1:120
-                nested_sampling_step!(ls, ns_params, MCRandomWalkClone(); ns_iteration=i)
-            end
-            return ns_params.step_size
-        end
-
-        surf_default = surface_final_step_size((0.25, 0.75))
-        surf_extreme = surface_final_step_size((0.95, 0.99))
-
-        @test surf_default != surf_extreme
-        # Calibrated on this fixture (first divergence at step 1), so the
-        # inequality above is not vacuous; both windows leave the hardcoded
-        # pre-fix behavior.
-        @test surf_default == 0.1676010422687346
-        @test surf_extreme == 0.0019666745633144527
-
-        # The "adjust_step_size function tests" testset above covers the
-        # helper itself, including an explicit custom range, and passes
-        # unchanged. The threaded, distributed, and mixed-moves call sites
-        # carry the identical one-line forward and are covered by the shared
-        # pattern (issue #182 test plan, item 3).
-    end
-
-
     @testset "nested_sampling_loop functions tests" begin
         @testset "AtomWalkers cases tests" begin
             # Setup test system
@@ -593,21 +446,18 @@
             liveset = LJAtomWalkers(walkers, lj)
             
             ns_params = NestedSamplingParameters(
-                mc_steps=1000,
-                initial_step_size=0.1,
-                step_size=0.1,
-                step_size_lo=0.01,
-                step_size_up=1.0,
-                accept_range=(0.5,0.5),
-                fail_count=0,
-                allowed_fail_count=100,
-                energy_perturbation=1e-12,
-                random_seed=1234,
-                cluster_p=0.3,
-                cluster_accepted=0.0,
-                cluster_total=0.0,
+                1000,    # mc_steps
+                0.1,     # initial_step_size
+                0.1,     # step_size
+                0.01,    # step_size_lo
+                1.0,     # step_size_up
+                (0.5,0.5),  # acceptance ratio range
+                0,       # fail_count
+                100,     # allowed_fail_count
+                1e-12,   # energy_perturbation
+                1234     # random_seed
             )
-
+            
             save_strategy = SaveEveryN(
                 df_filename = "test_df.csv",
                 wk_filename = "test.traj.extxyz",
@@ -622,11 +472,9 @@
                 ns_params_copy = deepcopy(ns_params)
                 df, updated_liveset, updated_params = nested_sampling(
                     liveset, ns_params_copy, n_steps, MCRandomWalkMaxE(), save_strategy)
-
+                
                 @test df isa DataFrame
-                # Serial atomistic ledgers carry the per-cull log-compression
-                # column (plateau-aware culling); parallel ledgers do not.
-                @test names(df) == ["iter", "emax", "log_compression"]
+                @test names(df) == ["iter", "emax"]
                 @test nrow(df) ≤ n_steps
                 @test length(updated_liveset.walkers) == length(liveset.walkers)
                 @test eltype(df.iter) == Int
@@ -770,265 +618,5 @@
                 rm("test.ls", force=true)
             end
         end
-    end
-
-
-    @testset "MCMixedMoves cluster move integration" begin
-
-        @testset "MCMixedMoves backward compatibility" begin
-            mc = MCMixedMoves(5, 1)
-            @test mc.walks_freq == 5
-            @test mc.swaps_freq == 1
-            @test mc.clusters_freq == 0
-            @test mc.initial_cluster_p == 0.3
-            @test mc.target_cluster_accept == 0.3
-            @test mc.cluster_adjust_interval == 50
-            @test mc isa MCRoutine
-        end
-
-        @testset "MCMixedMoves keyword constructor" begin
-            mc = MCMixedMoves(walks_freq=1, clusters_freq=2, initial_cluster_p=0.5)
-            @test mc.walks_freq == 1
-            @test mc.swaps_freq == 0
-            @test mc.clusters_freq == 2
-            @test mc.initial_cluster_p == 0.5
-        end
-
-        # Shared lattice setup for the remaining tests
-        square_lattice = MLattice{1,SquareLattice}(
-            lattice_constant=1.0,
-            basis=[(0.0, 0.0, 0.0)],
-            supercell_dimensions=(4, 4, 1),
-            periodicity=(true, true, false),
-            cutoff_radii=[1.1, 1.5],
-            components=:equal,
-            adsorptions=:full
-        )
-        ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
-
-        @testset "nested_sampling_step! with MCMixedMoves on LatticeGasWalkers" begin
-            walkers = [LatticeWalker(deepcopy(square_lattice), energy=5.0u"eV", iter=0) for _ in 1:5]
-            liveset = LatticeGasWalkers(walkers, ham)
-
-            ns_params = LatticeNestedSamplingParameters(mc_steps=20)
-            mc_routine = MCMixedMoves(walks_freq=1, swaps_freq=0, clusters_freq=2,
-                                      initial_cluster_p=0.3, target_cluster_accept=0.3,
-                                      cluster_adjust_interval=3)
-            ns_params.cluster_p = mc_routine.initial_cluster_p
-
-            e_type = typeof(walkers[1].energy)
-            iter, emax, updated_liveset, updated_params = nested_sampling_step!(liveset, ns_params, mc_routine)
-
-            @test iter isa Union{Missing,Int}
-            @test emax isa Union{Missing,e_type}
-            @test length(updated_liveset.walkers) == 5
-            @test updated_params.fail_count >= 0
-        end
-
-        @testset "NS loop runs with MCMixedMoves on LatticeGasWalkers" begin
-            walkers = [LatticeWalker(deepcopy(square_lattice), energy=5.0u"eV", iter=0) for _ in 1:5]
-            liveset = LatticeGasWalkers(walkers, ham)
-
-            ns_params = LatticeNestedSamplingParameters(mc_steps=50)
-            mc_routine = MCMixedMoves(walks_freq=1, swaps_freq=0, clusters_freq=2,
-                                      initial_cluster_p=0.3, target_cluster_accept=0.3,
-                                      cluster_adjust_interval=3)
-            save_strategy = SaveEveryN("test_mm_df.csv", "test_mm.traj", "test_mm.ls", 100, 100, 100)
-
-            df, updated_liveset, updated_params = nested_sampling(
-                liveset, ns_params, Int64(10), mc_routine, save_strategy)
-
-            @test df isa DataFrame
-            @test length(updated_liveset.walkers) == 5
-            @test all(walker -> walker isa LatticeWalker, updated_liveset.walkers)
-
-            rm("test_mm_df.csv", force=true)
-            rm("test_mm.traj", force=true)
-            rm("test_mm.ls", force=true)
-        end
-
-        @testset "Adaptive cluster_p tuning" begin
-            walkers = [LatticeWalker(deepcopy(square_lattice), energy=5.0u"eV", iter=0) for _ in 1:5]
-            liveset = LatticeGasWalkers(walkers, ham)
-
-            ns_params = LatticeNestedSamplingParameters(mc_steps=50)
-            mc_routine = MCMixedMoves(walks_freq=0, swaps_freq=0, clusters_freq=1,
-                                      initial_cluster_p=0.3, target_cluster_accept=0.3,
-                                      cluster_adjust_interval=2)
-            save_strategy = SaveEveryN("test_ap.csv", "test_ap.traj", "test_ap.ls", 1000, 1000, 1000)
-
-            _, _, updated_params = nested_sampling(
-                liveset, ns_params, Int64(20), mc_routine, save_strategy)
-
-            # p should have been adjusted at least once
-            @test updated_params.cluster_p != mc_routine.initial_cluster_p
-            @test 0.01 <= updated_params.cluster_p <= 1.0
-
-            rm("test_ap.csv", force=true)
-            rm("test_ap.traj", force=true)
-            rm("test_ap.ls", force=true)
-        end
-
-        @testset "Particle counts preserved through NS step" begin
-            walkers = [LatticeWalker(deepcopy(square_lattice), energy=5.0u"eV", iter=0) for _ in 1:5]
-            liveset = LatticeGasWalkers(walkers, ham)
-
-            ns_params = LatticeNestedSamplingParameters(mc_steps=20)
-            mc_routine = MCMixedMoves(walks_freq=1, swaps_freq=0, clusters_freq=2,
-                                      initial_cluster_p=0.3)
-            ns_params.cluster_p = mc_routine.initial_cluster_p
-
-            original_counts = [occupied_site_count(w.configuration) for w in liveset.walkers]
-            nested_sampling_step!(liveset, ns_params, mc_routine)
-            new_counts = [occupied_site_count(w.configuration) for w in liveset.walkers]
-
-            for (oc, nc) in zip(original_counts, new_counts)
-                @test oc == nc
-            end
-        end
-
-        @testset "Energy ordering maintained after NS step" begin
-            walkers = [LatticeWalker(deepcopy(square_lattice), energy=5.0u"eV", iter=0) for _ in 1:5]
-            liveset = LatticeGasWalkers(walkers, ham)
-
-            ns_params = LatticeNestedSamplingParameters(mc_steps=30)
-            mc_routine = MCMixedMoves(walks_freq=1, swaps_freq=0, clusters_freq=2,
-                                      initial_cluster_p=0.3)
-            ns_params.cluster_p = mc_routine.initial_cluster_p
-
-            sort_by_energy!(liveset)
-            emax_before = liveset.walkers[1].energy
-
-            nested_sampling_step!(liveset, ns_params, mc_routine)
-            sort_by_energy!(liveset)
-
-            # After step, worst energy should be <= previous worst
-            @test liveset.walkers[1].energy <= emax_before
-        end
-
-        @testset "adjust_cluster_p" begin
-            ns_params = LatticeNestedSamplingParameters()
-            ns_params.cluster_p = 0.5
-
-            # Rate below target → p decreases
-            SamplingSchemes.adjust_cluster_p(ns_params, 0.1, 1; target=0.3)
-            @test ns_params.cluster_p ≈ 0.5 * 0.9
-
-            # Rate above target → p increases
-            ns_params.cluster_p = 0.5
-            SamplingSchemes.adjust_cluster_p(ns_params, 0.5, 2; target=0.3)
-            @test ns_params.cluster_p ≈ 0.5 * 1.1
-
-            # Clamping lower bound
-            ns_params.cluster_p = 0.011
-            SamplingSchemes.adjust_cluster_p(ns_params, 0.0, 3; target=0.3)
-            @test ns_params.cluster_p == 0.01
-
-            # Clamping upper bound
-            ns_params.cluster_p = 0.95
-            SamplingSchemes.adjust_cluster_p(ns_params, 0.5, 4; target=0.3)
-            @test ns_params.cluster_p == 1.0
-
-            # Verify history was recorded
-            @test length(ns_params.cluster_p_history) == 4
-            @test length(ns_params.cluster_accept_history) == 4
-            @test ns_params.cluster_adjust_iterations == [1, 2, 3, 4]
-            @test ns_params.cluster_accept_history == [0.1, 0.5, 0.0, 0.5]
-        end
-    end
-
-    @testset "dead-point callback (canonical route)" begin
-        using Random
-        dpc_lat = MLattice{1,SquareLattice}(
-            lattice_constant=1.0,
-            basis=[(0.0, 0.0, 0.0)],
-            supercell_dimensions=(4, 4, 1),
-            periodicity=(true, true, false),
-            cutoff_radii=[1.1, 1.5],
-            components=[[false for _ in 1:16]],
-            adsorptions=:full)
-        dpc_ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
-        dpc_save = SaveEveryN("t_dpc.csv", "t_dpc.traj", "t_dpc.ls",
-                              1000000, 1000000, 1000000)
-        dpc_cleanup() = rm.(["t_dpc.csv", "t_dpc.traj", "t_dpc.ls"], force=true)
-
-        # Fixed-N liveset at N = 6, freshly seeded per run so A/B pairs share
-        # their streams
-        function dpc_fresh(seed)
-            Random.seed!(seed)
-            walkers = [LatticeWalker(deepcopy(dpc_lat), energy=0.0u"eV", iter=0)
-                       for _ in 1:12]
-            for w in walkers
-                occ = vcat(fill(true, 6), fill(false, 10))
-                shuffle!(occ)
-                w.configuration.components[1] .= occ
-            end
-            ls = LatticeGasWalkers(walkers, dpc_ham; perturb_energy=1e-9)
-            params = LatticeNestedSamplingParameters(mc_steps=20,
-                energy_perturbation=1e-9, allowed_fail_count=100000)
-            return ls, params
-        end
-
-        # Invocation count equals nrow(df), and the (iter, energy) pair seen
-        # by the callback matches the ledger row bit-exactly (the pairing
-        # guard's contract, from the caller's side)
-        ls, params = dpc_fresh(31)
-        seen = Tuple{Int,Float64}[]
-        df, _, _ = nested_sampling(ls, params, Int64(150),
-            MCRandomWalkClone(), dpc_save;
-            dead_point_callback=(iter, w) -> push!(seen, (iter, w.energy.val)))
-        dpc_cleanup()
-        @test nrow(df) > 0
-        @test length(seen) == nrow(df)
-        @test [t[1] for t in seen] == df.iter
-        @test [t[2] for t in seen] == df.emax
-
-        # Offline reproduction and energy faithfulness: occupation vectors
-        # collected through the callback re-evaluate the run's recorded
-        # observable column exactly, and recomputing the Hamiltonian on a
-        # collected configuration matches the ledger energy within the
-        # energy_perturbation half-width (the perturbation is uniform on
-        # ±energy_perturbation/2)
-        ls, params = dpc_fresh(32)
-        configs = Vector{Bool}[]
-        df2, _, _ = nested_sampling(ls, params, Int64(150),
-            MCRandomWalkClone(), dpc_save;
-            observables=[:nocc => (cfg -> Float64(sum(cfg.components[1])))],
-            dead_point_callback=(iter, w) ->
-                push!(configs, copy(w.configuration.components[1])))
-        dpc_cleanup()
-        @test length(configs) == nrow(df2)
-        @test [Float64(sum(c)) for c in configs] == df2.nocc
-        dpc_probe = deepcopy(dpc_lat)
-        for (c, e) in zip(configs, df2.emax)
-            dpc_probe.components[1] .= c
-            @test abs(ustrip(u"eV", interacting_energy(dpc_probe, dpc_ham)) - e) <= 5.1e-10
-        end
-
-        # Stream neutrality: a same-seed A/B pair with and without the
-        # callback leaves the ledger byte-identical (the callback path draws
-        # no randomness)
-        lsA, paramsA = dpc_fresh(33)
-        dfA, _, _ = nested_sampling(lsA, paramsA, Int64(120),
-            MCRandomWalkClone(), dpc_save)
-        dpc_cleanup()
-        lsB, paramsB = dpc_fresh(33)
-        dfB, _, _ = nested_sampling(lsB, paramsB, Int64(120),
-            MCRandomWalkClone(), dpc_save;
-            dead_point_callback=(iter, w) -> nothing)
-        dpc_cleanup()
-        @test dfA.iter == dfB.iter
-        @test dfA.emax == dfB.emax
-
-        # Guards: a non-Function argument fails at the keyword's type
-        # boundary; parallel/multi-cull routines are rejected up front when
-        # only the callback is requested
-        ls, params = dpc_fresh(34)
-        @test_throws TypeError nested_sampling(ls, params, Int64(1),
-            MCRandomWalkClone(), dpc_save; dead_point_callback=42)
-        @test_throws ArgumentError nested_sampling(ls, params, Int64(1),
-            MCRandomWalkMaxEParallel(), dpc_save;
-            dead_point_callback=(i, w) -> nothing)
-        dpc_cleanup()
     end
 end

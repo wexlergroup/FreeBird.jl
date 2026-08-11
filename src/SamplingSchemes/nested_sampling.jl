@@ -673,7 +673,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         emax = missing
         ns_params.fail_count += 1
     end
-    adjust_step_size(ns_params, rate)
+    adjust_step_size(ns_params, rate; range=ns_params.accept_range)
     return iter, emax, liveset, ns_params, log_t
 end
 
@@ -750,7 +750,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     ns_params.fail_count = 0
     iter = liveset.walkers[1].iter
 
-    adjust_step_size(ns_params, rate)
+    adjust_step_size(ns_params, rate; range=ns_params.accept_range)
     return iter, emax[mc_routine.n_cull], liveset, ns_params
 end
 
@@ -802,7 +802,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     ns_params.fail_count = 0
     iter = liveset.walkers[1].iter
 
-    adjust_step_size(ns_params, rate)
+    adjust_step_size(ns_params, rate; range=ns_params.accept_range)
     return iter, emax[end], liveset, ns_params
 end
 
@@ -854,7 +854,7 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSampl
     ns_params.fail_count = 0
     iter = liveset.walkers[1].iter
 
-    adjust_step_size(ns_params, rate)
+    adjust_step_size(ns_params, rate; range=ns_params.accept_range)
     return iter, emax[end], liveset, ns_params
 end
 
@@ -931,7 +931,7 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSampl
         emax = missing
         ns_params.fail_count += 1
     end
-    adjust_step_size(ns_params, rate)
+    adjust_step_size(ns_params, rate; range=ns_params.accept_range)
     return iter, emax, liveset, ns_params, log_t
 end
 
@@ -978,7 +978,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         emax = missing
         ns_params.fail_count += 1
     end
-    adjust_step_size(ns_params, rate)
+    adjust_step_size(ns_params, rate; range=ns_params.accept_range)
 
     return iter, emax, liveset, ns_params
 end
@@ -1031,7 +1031,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     ns_params.fail_count = 0
     iter = liveset.walkers[1].iter
 
-    adjust_step_size(ns_params, rate)
+    adjust_step_size(ns_params, rate; range=ns_params.accept_range)
     return iter, emax[1], liveset, ns_params
 end
 

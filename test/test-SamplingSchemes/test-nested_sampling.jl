@@ -265,13 +265,17 @@
 
                     original_ls = deepcopy(liveset)
 
-                    if !(liveset isa LJSurfaceWalkers) # TODO: LJSurfaceWalkers does not support 2D walks yet
+                    if !(liveset isa LJSurfaceWalkers)
                         iter, emax, updated_liveset, updated_params = nested_sampling_step!(deepcopy(original_ls), ns_params, mc_routine)
-                        
+
                         @test iter isa Union{Missing,Int}
                         @test emax isa Union{Missing,typeof(0.0u"eV")}
                         @test length(updated_liveset.walkers) == length(original_ls.walkers)
                         @test updated_params.fail_count >= 0
+                    else
+                        # Surface walks are 3D-only: the step refuses a 2D dims
+                        # explicitly (issue #185, option 1).
+                        @test_throws ErrorException nested_sampling_step!(deepcopy(original_ls), ns_params, mc_routine)
                     end
 
                 end
@@ -306,6 +310,57 @@
                     @test_throws ErrorException begin
                         nested_sampling_step!(liveset, ns_params, Unsupported())
                     end
+                end
+            end
+
+            @testset "2D dims dispatch and forwarding (issue #185)" begin
+                using Random
+                # The serial surface refusal supplies the reference message for
+                # the parallel surface dispatch (issue #185, option 1).
+                serial_err = try
+                    nested_sampling_step!(deepcopy(liveset_surf), deepcopy(ns_params), MCRandomWalkClone(dims=[1, 2]))
+                    nothing
+                catch err
+                    err
+                end
+                @test serial_err isa ErrorException
+                @test occursin("Unsupported dimensions", serial_err.msg)
+
+                for mc_routine in [MCRandomWalkCloneParallel(dims=[1, 2]), MCRandomWalkMaxEParallel(dims=[1, 2])]
+                    @test_throws ErrorException nested_sampling_step!(deepcopy(liveset_surf), deepcopy(ns_params), mc_routine)
+                    parallel_err = try
+                        nested_sampling_step!(deepcopy(liveset_surf), deepcopy(ns_params), mc_routine)
+                        nothing
+                    catch err
+                        err
+                    end
+                    @test parallel_err isa ErrorException && parallel_err.msg == serial_err.msg
+                end
+
+                # Distinct-coordinate walkers: a dims=[1, 3] walk must leave every
+                # dim-2 coordinate bit-identical, so after any number of steps each
+                # liveset coordinate must stay inside the starting per-dimension
+                # value set of its dimension.
+                coor_lists = [[:H => [0.20, 0.11, 0.30], :H => [0.40, 0.17, 0.48]],
+                              [:H => [0.60, 0.23, 0.40], :H => [0.42, 0.29, 0.58]],
+                              [:H => [0.70, 0.35, 0.50], :H => [0.50, 0.41, 0.28]]]
+                walkers_2d = [AtomWalker(FastSystem(periodic_system(cl, box, fractional=true))) for cl in coor_lists]
+                coords(ls, d) = Set(ustrip(u"Å", position(w.configuration, i)[d]) for w in ls.walkers for i in 1:2)
+                start_ls = LJAtomWalkers(deepcopy(walkers_2d), lj)
+                xs0, ys0, zs0 = coords(start_ls, 1), coords(start_ls, 2), coords(start_ls, 3)
+
+                for (seed, mc_routine) in [(4661, MCRandomWalkCloneParallel(dims=[1, 3])),
+                                           (4662, MCDistributed(dims=[1, 3])),
+                                           (4663, MCRandomWalkClone(dims=[1, 3]))]
+                    Random.seed!(seed)
+                    ls = LJAtomWalkers(deepcopy(walkers_2d), lj)
+                    params = deepcopy(ns_params)
+                    for _ in 1:4
+                        nested_sampling_step!(ls, params, mc_routine)
+                    end
+                    @test issubset(coords(ls, 2), ys0)
+                    # Non-vacuity: at least one dim-1 or dim-3 coordinate moved.
+                    @test !issubset(coords(ls, 1), xs0) || !issubset(coords(ls, 3), zs0)
                 end
             end
         end

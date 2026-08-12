@@ -12,6 +12,8 @@
     include("test-grand_canonical_ns.jl")
     # test ideal-gas-referenced grand-canonical nested sampling
     include("test-ideal-gas-ref-gcns.jl")
+    # test atomistic ideal-gas-referenced grand-canonical nested sampling
+    include("test-atomistic-igref-gcns.jl")
     # test atomistic GC-NS fixed-N post-processing (ideal gas reference)
     include("test-atomistic-gcns-fixed-n.jl")
     # test lattice GC-NS fixed-N post-processing

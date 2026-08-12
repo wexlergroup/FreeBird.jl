@@ -1290,5 +1290,72 @@
             end
         end
     end
-    
+
+    @testset "empty-configuration handling tests" begin
+        box = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]]u"Å"
+        pbc = (true, true, true)
+        at1 = FastSystem(atomic_system([:Ar => [1.0, 1.0, 1.0]u"Å"], box, pbc))
+        empty_at = FastSystem(cell_vectors(at1), periodicity(at1),
+                              empty(position(at1, :)), empty(species(at1, :)), empty(mass(at1, :)))
+        at2 = FastSystem(atomic_system([:Ar => [1.0, 1.0, 1.0]u"Å", :Ar => [3.0, 3.0, 3.0]u"Å"], box, pbc))
+
+        @testset "helpers on empty systems and zero-count components" begin
+            comps = split_components(empty_at, [0])
+            @test length(comps) == 1
+            @test length(comps[1]) == 0
+            @test cell_vectors(comps[1]) == cell_vectors(empty_at)
+            @test periodicity(comps[1]) == periodicity(empty_at)
+
+            mixed = split_components(at2, [0, 2])
+            @test map(length, mixed) == [0, 2]
+            @test position(mixed[2], :) == position(at2, :)
+            @test species(mixed[2], :) == species(at2, :)
+
+            @test AbstractWalkers.split_components_by_chemical_species(empty_at) == FastSystem[]
+
+            list_num_par, sorted = sort_components_by_atomic_number(empty_at)
+            @test isempty(list_num_par)
+            @test length(sorted) == 0
+            @test cell_vectors(sorted) == cell_vectors(empty_at)
+
+            list_num_par_nm, sorted_nm = sort_components_by_atomic_number(empty_at, merge_same_species=false)
+            @test isempty(list_num_par_nm)
+            @test length(sorted_nm) == 0
+        end
+
+        @testset "nonempty outputs unchanged by the retyped helpers" begin
+            mixed_at = FastSystem(atomic_system([:H => [1.0, 1.0, 1.0]u"Å",
+                                                 :O => [2.0, 2.0, 2.0]u"Å",
+                                                 :H => [3.0, 3.0, 3.0]u"Å"], box, pbc))
+            comps = AbstractWalkers.split_components_by_chemical_species(mixed_at)
+            @test map(length, comps) == [2, 1]  # H (Z = 1) before O (Z = 8)
+            @test position(comps[1], 1) == position(mixed_at, 1)
+            @test position(comps[1], 2) == position(mixed_at, 3)
+            @test position(comps[2], 1) == position(mixed_at, 2)
+        end
+
+        @testset "zero-particle AtomWalker{1} round-trip" begin
+            w = AtomWalker{1}(empty_at)
+            @test w.list_num_par == [0]
+            @test w.frozen == [false]
+            lj = LJParameters()
+            @test interacting_energy(w.configuration, lj) == 0.0u"eV"
+            @test interacting_energy(w.configuration, lj, w.list_num_par, w.frozen) == 0.0u"eV"
+            @test frozen_energy(w.configuration, lj, w.list_num_par, [true]) == 0.0u"eV"
+        end
+
+        @testset "convenience constructor rejects empty input legibly" begin
+            @test_throws ArgumentError AtomWalker(empty_at)
+        end
+
+        @testset "liveset accepts a zero-particle walker" begin
+            w0 = AtomWalker{1}(empty_at)
+            w2 = AtomWalker{1}(at2)
+            ls = LJAtomWalkers([w0, w2], LJParameters())
+            @test length(ls.walkers) == 2
+            @test ls.walkers[1].energy == 0.0u"eV"
+            @test isfinite(ustrip(ls.walkers[2].energy))
+        end
+    end
+
 end

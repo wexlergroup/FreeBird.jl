@@ -2006,3 +2006,417 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
 
     return df, liveset, params
 end
+"""
+    struct MCAtomGrandCanonicalMoves <: MCRoutine
+
+Move routine for atomistic ideal-gas-referenced grand-canonical nested sampling:
+single-atom displacements mixed with continuous-space insertions and deletions through
+the atomistic `MC_grand_canonical_walk!` kernel. Deliberately lean: the lattice
+`MCGrandCanonicalMoves` carries cluster and biased-insertion configuration that has no
+continuous-space counterpart yet, and silently ignored fields on a mismatched routine
+are a known hazard class.
+
+# Fields
+- `p_move::Float64`: Probability of a displacement move.
+- `p_insert::Float64`: Probability of an insertion move (deletion takes the remainder).
+"""
+struct MCAtomGrandCanonicalMoves <: MCRoutine
+    p_move::Float64
+    p_insert::Float64
+    function MCAtomGrandCanonicalMoves(; p_move::Float64=0.5, p_insert::Float64=0.25)
+        if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
+            throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
+        end
+        new(p_move, p_insert)
+    end
+end
+
+"""
+    mutable struct AtomisticIGRefGCNSParameters <: SamplingParameters
+
+Parameters for atomistic energy-sorted ideal-gas-referenced grand-canonical nested
+sampling. The sampler is athermal: the chemical potential and the temperature never
+enter a run; both enter only in the post-run reduction to Ξ(μ, T).
+
+# Fields
+- `mc_steps::Int64`: MCMC steps per replacement walker.
+- `reference_activity::typeof(1.0u"Å^-3")`: The reference activity z0 (dimension inverse
+  volume). The driver folds the dimensionless z0V once from the walkers' shared
+  orthorhombic cell.
+- `species::Symbol`: Chemical identity of inserted particles, passed explicitly because
+  a walker's configuration may be empty.
+- `initial_step_size::Float64`: Initial displacement step size (Angstrom).
+- `step_size::Float64`: Current displacement step size (mutable runtime state).
+- `step_size_lo::Float64`: Lower bound for the step-size adjustment.
+- `step_size_up::Float64`: Upper bound for the step-size adjustment.
+- `accept_range::Tuple{Float64,Float64}`: Acceptance-rate window forwarded to the
+  step-size adjustment.
+- `fail_count::Int64`: Consecutive failed replacements.
+- `allowed_fail_count::Int64`: Maximum consecutive failures before the driver's stall
+  contract fires (see `ideal_gas_referenced_nested_sampling`).
+- `plateau_refill_target::Int64`: Live-set size to restore after a plateau eviction
+  block (mutable runtime state; reset at driver entry).
+- `move_stats::Dict{Symbol,Int}`: Run-total per-move-type attempt/accept counters
+  accumulated from every decorrelation walk (cleared once at run start).
+
+Three fields carried by sibling parameter structs are deliberately absent. No `n_max`:
+the reference measure has unbounded particle-number support, and a cap silently
+truncates its mass and biases the evidence (the kernel's keyword exists for bounded
+constructions only; this sampler never sets it). No `energy_perturbation`: exact energy
+ties are handled by the plateau-aware eviction machinery, and perturbing recorded
+energies would break the exactly-zero closed-form checks this construction is validated
+against. No `random_seed`: the lattice ideal-gas-referenced sibling documents its field
+as not consumed by the sampling loop; seed the global RNG before the run instead.
+"""
+mutable struct AtomisticIGRefGCNSParameters <: SamplingParameters
+    mc_steps::Int64
+    reference_activity::typeof(1.0u"Å^-3")
+    species::Symbol
+    initial_step_size::Float64
+    step_size::Float64
+    step_size_lo::Float64
+    step_size_up::Float64
+    accept_range::Tuple{Float64,Float64}
+    fail_count::Int64
+    allowed_fail_count::Int64
+    plateau_refill_target::Int64
+    move_stats::Dict{Symbol,Int}
+end
+
+"""
+    AtomisticIGRefGCNSParameters(;
+        mc_steps=100, reference_activity=0.01u"Å^-3", species=:H,
+        initial_step_size=0.5, step_size=0.5, step_size_lo=0.01, step_size_up=2.0,
+        accept_range=(0.25, 0.75), fail_count=0, allowed_fail_count=10,
+        plateau_refill_target=0, move_stats=Dict{Symbol,Int}())
+
+Convenience constructor for `AtomisticIGRefGCNSParameters`. `reference_activity` (z0)
+must be positive; choose it so z0V sits near the particle-number range of interest, as
+post-run reweighting to a target (μ, T) carries a factor `(z/z0)^N` per sample whose
+effective sample size degrades away from the reference.
+"""
+function AtomisticIGRefGCNSParameters(;
+    mc_steps::Int64=100,
+    reference_activity::typeof(1.0u"Å^-3")=0.01u"Å^-3",
+    species::Symbol=:H,
+    initial_step_size::Float64=0.5,
+    step_size::Float64=0.5,
+    step_size_lo::Float64=0.01,
+    step_size_up::Float64=2.0,
+    accept_range::Tuple{Float64,Float64}=(0.25, 0.75),
+    fail_count::Int64=0,
+    allowed_fail_count::Int64=10,
+    plateau_refill_target::Int64=0,
+    move_stats::Dict{Symbol,Int}=Dict{Symbol,Int}(),
+)
+    if reference_activity <= 0.0u"Å^-3"
+        throw(ArgumentError("reference_activity must be positive"))
+    end
+    AtomisticIGRefGCNSParameters(
+        mc_steps, reference_activity, species,
+        initial_step_size, step_size, step_size_lo, step_size_up, accept_range,
+        fail_count, allowed_fail_count, plateau_refill_target, move_stats,
+    )
+end
+
+"""
+    _atomistic_igref_z0V(liveset::AtomWalkers, params::AtomisticIGRefGCNSParameters)
+
+Validate the liveset for the atomistic ideal-gas-referenced construction (single
+unfrozen component per walker, one shared orthorhombic cell) and return the
+dimensionless product of the reference activity and the cell volume.
+"""
+function _atomistic_igref_z0V(liveset::AtomWalkers, params::AtomisticIGRefGCNSParameters)
+    isempty(liveset.walkers) && throw(ArgumentError("the liveset carries no walkers"))
+    cellv = cell_vectors(liveset.walkers[1].configuration)
+    for i in 1:3, j in 1:3
+        if i != j && !iszero(ustrip(cellv[i][j]))
+            throw(ArgumentError("the atomistic ideal-gas-referenced construction assumes an orthorhombic cell (consistent with pbc_dist); found a nonzero off-diagonal cell component"))
+        end
+    end
+    for walker in liveset.walkers
+        walker isa AtomWalker{1} || throw(ArgumentError("every walker must be a single-component AtomWalker{1}"))
+        any(walker.frozen) && throw(ArgumentError("the atomistic ideal-gas-referenced construction requires unfrozen walkers"))
+        cell_vectors(walker.configuration) == cellv || throw(ArgumentError("all walkers must share one cell"))
+    end
+    V = cellv[1][1] * cellv[2][2] * cellv[3][3]
+    return ustrip(Unitful.NoUnits, params.reference_activity * V)
+end
+
+"""
+    _init_atomistic_igref_walkers!(liveset::AtomWalkers,
+                                   params::AtomisticIGRefGCNSParameters,
+                                   z0V::Float64)
+
+Initialize walkers as exact i.i.d. draws from the continuous ideal-gas prior at the
+reference activity: each walker's particle count is Poisson(z0V) and its positions are
+uniform in the cell.
+"""
+function _init_atomistic_igref_walkers!(liveset::AtomWalkers,
+                                        params::AtomisticIGRefGCNSParameters,
+                                        z0V::Float64)
+    pot = liveset.potential
+    cellv = cell_vectors(liveset.walkers[1].configuration)
+    box = (cellv[1][1], cellv[2][2], cellv[3][3])
+    for walker in liveset.walkers
+        while walker.list_num_par[1] > 0
+            remove_particle!(walker, walker.list_num_par[1])
+        end
+        n = rand(Poisson(z0V))
+        for _ in 1:n
+            pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
+            insert_particle!(walker, pos, params.species)
+        end
+        AbstractLiveSets.assign_frozen_energy!(walker, pot)
+        assign_energy!(walker, pot)
+        # Reset the iteration counter: a stale counter from a reused liveset
+        # corrupts the prior-volume bookkeeping
+        walker.iter = 0
+    end
+    return liveset
+end
+
+"""
+    nested_sampling_step!(liveset::AtomWalkers,
+                          params::AtomisticIGRefGCNSParameters,
+                          mc_routine::MCAtomGrandCanonicalMoves;
+                          ns_iteration::Int=0, z0V::Union{Nothing,Float64}=nothing)
+
+Perform one step of atomistic energy-sorted ideal-gas-referenced grand-canonical nested
+sampling: sort by energy (descending), handle exact ceiling ties with the plateau-aware
+eviction machinery of the canonical atomistic steps (refill walks run the grand-canonical
+kernel, so refilled clones may re-enter at a different particle count; the compression
+bookkeeping counts walkers, not particle-number sectors), otherwise cull the worst walker
+and decorrelate a strictly-below-ceiling clone through `MC_grand_canonical_walk!` under
+the z0-weighted prior. Accepted clones (cull and refill alike) have their energies
+re-anchored by a from-scratch `interacting_energy` recompute and are re-checked against
+the ceiling before entering the live set: the kernel's incremental bookkeeping leaves
+rounding dust that would otherwise fragment bit-exact energy plateaus into artificial
+sub-levels and admit clones whose true energy sits on, not below, the ceiling.
+
+# Returns
+- `iter`: Iteration number (or `missing` if the step failed).
+- `emax`: The energy of the culled walker (with units; `missing` on failure).
+- `num_particles`: The particle count of the culled walker (`missing` on failure).
+- `liveset`: The updated liveset.
+- `params`: The updated parameters.
+- `log_t`: The log prior-volume compression charged for this cull (`missing` on failure).
+"""
+function nested_sampling_step!(liveset::AtomWalkers,
+                               params::AtomisticIGRefGCNSParameters,
+                               mc_routine::MCAtomGrandCanonicalMoves;
+                               ns_iteration::Int=0,
+                               z0V::Union{Nothing,Float64}=nothing)
+    z0V === nothing && (z0V = _atomistic_igref_z0V(liveset, params))
+    sort_by_energy!(liveset)
+    ats = liveset.walkers
+    pot = liveset.potential
+    iter::Union{Missing,Int} = missing
+    emax::Union{Missing,typeof(0.0u"eV")} = ats[1].energy
+    num_particles::Union{Missing,Int} = ats[1].list_num_par[1]
+    log_t::Union{Missing,Float64} = missing
+    n_live = length(ats)
+    n_tied = _tie_block_length(ats)
+    if (n_tied >= 2 || params.plateau_refill_target != 0) && n_tied < n_live
+        # Plateau block: evict the worst tied walker without replacement
+        # (Fowlie-Handley-Su), charging (n_live - 1)/n_live with the shrinking
+        # live count; see the canonical atomistic step for the full contract.
+        if params.plateau_refill_target == 0
+            params.plateau_refill_target = n_live
+        end
+        popfirst!(ats)
+        update_iter!(liveset)
+        iter = liveset.walkers[1].iter
+        log_t = log((n_live - 1) / n_live)
+        if n_tied == 1
+            # The plateau is exhausted: refill by cloning survivors and
+            # decorrelating strictly below the plateau energy with the
+            # grand-canonical kernel (volume-neutral; no ledger row).
+            refill_fails = 0
+            while length(ats) < params.plateau_refill_target && refill_fails < params.allowed_fail_count
+                accept_r, _, at_r, _ = MC_grand_canonical_walk!(
+                    params.mc_steps, deepcopy(rand(ats)), pot, emax;
+                    z0V=z0V, species=params.species,
+                    p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
+                    step_size=params.step_size)
+                if accept_r
+                    # Re-anchor the clone's energy from scratch: the kernel's
+                    # incremental bookkeeping leaves dust that would fragment
+                    # bit-exact plateaus and admit sub-ceiling dust crossings
+                    at_r.energy = interacting_energy(at_r.configuration, pot,
+                        at_r.list_num_par, at_r.frozen) + at_r.energy_frozen_part
+                    accept_r = at_r.energy < emax
+                end
+                if accept_r
+                    push!(ats, at_r)
+                else
+                    refill_fails += 1
+                end
+            end
+            length(ats) < params.plateau_refill_target && @warn "Plateau refill left the live set at $(length(ats)) of $(params.plateau_refill_target) walkers after $(refill_fails) failed decorrelation attempts; subsequent culls are charged with the actual live count."
+            params.plateau_refill_target = 0
+        end
+        return iter, emax, num_particles, liveset, params, log_t
+    end
+    # Ordinary cull: strictly-below-ceiling parent selection, mirroring the
+    # lattice ideal-gas-referenced step
+    eligible = [k for k in 2:n_live if ats[k].energy < emax]
+    parent_idx = isempty(eligible) ? rand(2:n_live) : rand(eligible)
+    to_walk = deepcopy(ats[parent_idx])
+    accept, rate, to_walk, move_stats = MC_grand_canonical_walk!(
+        params.mc_steps, to_walk, pot, emax;
+        z0V=z0V, species=params.species,
+        p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
+        step_size=params.step_size)
+    if accept
+        # Re-anchor the clone's energy from scratch (see the refill branch)
+        to_walk.energy = interacting_energy(to_walk.configuration, pot,
+            to_walk.list_num_par, to_walk.frozen) + to_walk.energy_frozen_part
+        accept = to_walk.energy < emax
+    end
+    if accept
+        push!(ats, to_walk)
+        popfirst!(ats)
+        update_iter!(liveset)
+        params.fail_count = 0
+        iter = liveset.walkers[1].iter
+        log_t = log(n_live / (n_live + 1))
+    else
+        emax = missing
+        num_particles = missing
+        params.fail_count += 1
+    end
+    _accumulate_move_stats!(params, move_stats)
+    adjust_step_size(params, rate; range=params.accept_range)
+    return iter, emax, num_particles, liveset, params, log_t
+end
+
+"""
+    ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
+                                         params::AtomisticIGRefGCNSParameters,
+                                         n_steps::Int64,
+                                         mc_routine::MCAtomGrandCanonicalMoves,
+                                         save_strategy::DataSavingStrategy;
+                                         observables=nothing,
+                                         dead_point_callback=nothing,
+                                         stop_on_stall::Bool=true)
+
+Run the atomistic energy-sorted ideal-gas-referenced grand-canonical nested sampling
+loop. Walkers are initialized as exact i.i.d. draws from the continuous ideal-gas prior
+at the reference activity (particle counts Poisson(z0V), positions uniform in the cell),
+then the loop iterates: remove the highest-energy walker, record (E, N, log-compression),
+replace with a strictly-below-ceiling clone decorrelated by the grand-canonical kernel
+under the z0-weighted prior. Exact ceiling ties are handled by the plateau-aware
+eviction machinery. Neither the chemical potential nor the temperature enters the run.
+
+Stall contract: when `params.fail_count` reaches `params.allowed_fail_count`, the driver
+warns once and, with `stop_on_stall=true` (the default), returns the partial ledger and
+the intact live set instead of consuming the remaining iteration budget on proposals
+that cannot be accepted. A fully degenerate live set (every configuration at exactly one
+energy, the zero-interaction limit) is a legitimate terminal state whose entire prior
+mass sits in the live set; the subsequent ledger reduction is then exact. With
+`stop_on_stall=false` the driver keeps the warn-and-continue contract of the sibling
+loops (the failure counter is reset and the loop continues).
+
+Observable callbacks must handle empty configurations: under this construction a
+walker's particle count may be zero.
+
+# Returns
+- `df::DataFrame`: Columns `[:iter, :emax, :num_particles, :log_compression]`, plus one
+  column per requested observable. Zero-accept runs return the schema with no rows.
+- `liveset::AtomWalkers`: The final liveset (surviving walkers).
+- `params::AtomisticIGRefGCNSParameters`: Updated parameters.
+"""
+function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
+                                              params::AtomisticIGRefGCNSParameters,
+                                              n_steps::Int64,
+                                              mc_routine::MCAtomGrandCanonicalMoves,
+                                              save_strategy::DataSavingStrategy;
+                                              observables::Union{Nothing,AbstractVector{<:Pair{Symbol,<:Any}}}=nothing,
+                                              dead_point_callback::Union{Nothing,Function}=nothing,
+                                              stop_on_stall::Bool=true)
+    z0V = _atomistic_igref_z0V(liveset, params)
+    _init_atomistic_igref_walkers!(liveset, params, z0V)
+
+    # Parameter-reuse hazards: runtime state never leaks between runs
+    params.plateau_refill_target = 0
+    params.fail_count = 0
+    empty!(params.move_stats)
+
+    df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[], log_compression=Float64[])
+    if observables !== nothing
+        _validate_observables(observables, liveset)
+        for (name, _) in observables
+            df[!, name] = Float64[]
+        end
+    end
+    culled = nothing
+    empty_frame_warned = false
+
+    for i in 1:n_steps
+        print_info = i % save_strategy.n_info == 0
+        # The save layer cannot represent a zero-atom frame, and this
+        # construction produces empty walkers by design (the reference measure
+        # puts mass e^{-z0V} on N = 0): skip those writes with one warning
+        if length(liveset.walkers[1].configuration) > 0
+            write_walker_every_n(liveset.walkers[1], i, save_strategy)
+        elseif !empty_frame_warned
+            @warn "Skipping trajectory/live-set writes that would contain a zero-atom frame: the save layer cannot represent one."
+            empty_frame_warned = true
+        end
+
+        if observables !== nothing || dead_point_callback !== nothing
+            # Pre-sort with the step's own comparator (energy, descending)
+            # and hold the walker the step will cull; see `nested_sampling`.
+            sort_by_energy!(liveset)
+            culled = liveset.walkers[1]
+        end
+
+        iter, emax, n_par, liveset, params, log_t = nested_sampling_step!(
+            liveset, params, mc_routine; ns_iteration=i, z0V=z0V)
+
+        @debug "Atomistic IG-ref GC-NS step $i, iter: $iter, emax: $emax, N: $n_par"
+
+        if params.fail_count >= params.allowed_fail_count
+            if stop_on_stall
+                @warn "Atomistic IG-ref GC-NS: $(params.allowed_fail_count) consecutive failed replacements; returning the partial ledger and the intact live set (stop_on_stall=true)."
+                break
+            else
+                @warn "Atomistic IG-ref GC-NS: Failed $(params.allowed_fail_count) times in a row."
+                params.fail_count = 0
+            end
+        end
+
+        if !(iter isa typeof(missing))
+            if culled !== nothing
+                emax == culled.energy || error(
+                    "Atomistic IG-ref GC-NS observable recording: dead-point/observable " *
+                    "pairing lost (step culled a walker with energy $emax, " *
+                    "but the pre-sorted worst walker had $(culled.energy))")
+            end
+            if observables === nothing
+                push!(df, (iter, emax.val, n_par, log_t))
+            else
+                push!(df, (iter, emax.val, n_par, log_t,
+                           (Float64(f(culled.configuration)) for (_, f) in observables)...))
+            end
+            dead_point_callback === nothing || dead_point_callback(iter, culled)
+        end
+
+        if print_info && !(iter isa typeof(missing))
+            @info "Atomistic IG-ref GC-NS iter: $(iter), E: $(emax), N: $(n_par)"
+        elseif print_info && iter isa typeof(missing)
+            @info "Atomistic IG-ref GC-NS MC move failed, step: $(i)"
+        end
+
+        write_df_every_n(df, i, save_strategy)
+        if all(w -> length(w.configuration) > 0, liveset.walkers)
+            write_ls_every_n(liveset, i, save_strategy)
+        elseif !empty_frame_warned
+            @warn "Skipping trajectory/live-set writes that would contain a zero-atom frame: the save layer cannot represent one."
+            empty_frame_warned = true
+        end
+    end
+
+    return df, liveset, params
+end

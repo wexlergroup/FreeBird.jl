@@ -164,6 +164,42 @@ end
 
 AtomWalkers(walkers::Vector{AtomWalker{C}}, potential::PyMLPotential; assign_energy=true) where C = MLIPAtomWalkers(walkers, potential; assign_energy=assign_energy)
 
+"""
+    struct GenericAtomWalkers{P<:AbstractPotential} <: AtomWalkers
+
+The `GenericAtomWalkers` struct represents a collection of atom walkers interacting through
+any `AbstractPotential`, for potential types that have no dedicated walker collection
+(for example the analytic reference potential `IdealGasParameters`).
+
+# Fields
+- `walkers::Vector{AtomWalker{C}}`: A vector of atom walkers, where `C` is the number of components.
+- `potential::P`: The potential.
+
+# Constructor
+- `GenericAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::P; assign_energy=true)`:
+    Constructs a new `GenericAtomWalkers` object with the given walkers and potential.
+    If `assign_energy=true`, each walker's frozen-part and total energies are assigned
+    through the single-walker `assign_frozen_energy!` and `assign_energy!` paths, honoring
+    `list_num_par` and `frozen`.
+
+Initial scope: no constant-frozen-part caching (each walker's frozen part is computed
+individually), and canonical nested sampling flows through the generic `AbstractPotential`
+fallback of `MC_random_walk!` (full-energy evaluation per step), a performance note rather
+than a defect.
+"""
+struct GenericAtomWalkers{P<:AbstractPotential} <: AtomWalkers
+    walkers::Vector{AtomWalker{C}} where C
+    potential::P
+    function GenericAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::P; assign_energy=true) where {C, P<:AbstractPotential}
+        if assign_energy
+            for walker in walkers
+                assign_frozen_energy!(walker, pot)
+                assign_energy!(walker, pot)
+            end
+        end
+        return new{P}(walkers, pot)
+    end
+end
 
 """
     struct LJSurfaceWalkers <: AtomWalkers

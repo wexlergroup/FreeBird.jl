@@ -662,4 +662,83 @@ FreeBird.EnergyEval.interacting_energy(lattice::SLattice, h::ExtBadHam) = 1.6
         @test liveS == liveD
     end
 
+    @testset "GenericAtomWalkers tests" begin
+        using Random
+        box = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]]u"Å"
+        pbc = (true, true, true)
+        mkconfig(coords) = FastSystem(atomic_system([:Ar => SVector{3}(c)u"Å" for c in coords], box, pbc))
+
+        @testset "IdealGasParameters construction assigns exact zeros" begin
+            # the zero-particle liveset case is owned by the empty-configuration
+            # hardening's tests and the regression coverage's pipeline lock
+            overlap = AtomWalker{1}(mkconfig([[5.0, 5.0, 5.0], [5.05, 5.0, 5.0], [5.0, 5.05, 5.0]]))
+            spread = AtomWalker{1}(mkconfig([[1.0, 1.0, 1.0], [8.0, 8.0, 8.0]]))
+            ls = GenericAtomWalkers([overlap, spread], IdealGasParameters())
+            @test ls isa GenericAtomWalkers{IdealGasParameters}
+            @test ls isa AtomWalkers
+            @test all(w.energy == 0.0u"eV" for w in ls.walkers)
+            @test all(w.energy_frozen_part == 0.0u"eV" for w in ls.walkers)
+        end
+
+        @testset "digit identity against LJAtomWalkers" begin
+            lj = LJParameters(epsilon=0.05, sigma=2.5, cutoff=4.0)
+            coords = [[[1.0, 1.0, 1.0], [3.5, 1.0, 1.0], [1.0, 4.0, 1.0]],
+                      [[2.0, 2.0, 2.0], [4.5, 2.0, 2.0], [2.0, 2.0, 6.0]]]
+            ws_g = [AtomWalker{1}(mkconfig(c)) for c in coords]
+            ws_l = [AtomWalker{1}(mkconfig(c)) for c in coords]
+            ls_g = GenericAtomWalkers(ws_g, lj)
+            ls_l = LJAtomWalkers(ws_l, lj)
+            @test all(ls_g.walkers[i].energy == ls_l.walkers[i].energy for i in eachindex(coords))
+            # frozen-bearing walker: per-walker frozen part matches the LJ path's value
+            mixed = FastSystem(atomic_system([:H => [1.0, 1.0, 1.0]u"Å", :H => [2.6, 1.0, 1.0]u"Å",
+                                              :Ar => [5.0, 5.0, 5.0]u"Å"], box, pbc))
+            wf_g = AtomWalker(mixed; freeze_species=[:H])
+            wf_l = AtomWalker(mixed; freeze_species=[:H])
+            lsf_g = GenericAtomWalkers([wf_g], lj)
+            lsf_l = LJAtomWalkers([wf_l], lj; const_frozen_part=false)
+            @test lsf_g.walkers[1].energy == lsf_l.walkers[1].energy
+            @test lsf_g.walkers[1].energy_frozen_part == lsf_l.walkers[1].energy_frozen_part
+        end
+
+        @testset "serial canonical nested sampling completes with the full schema" begin
+            Random.seed!(53531)
+            lj = LJParameters(epsilon=0.01, sigma=2.5)
+            walkers = AtomWalker{1}[]
+            for _ in 1:8
+                coords = [[rand() * 10.0, rand() * 10.0, rand() * 10.0] for _ in 1:3]
+                push!(walkers, AtomWalker{1}(mkconfig(coords)))
+            end
+            ls = GenericAtomWalkers(walkers, lj)
+            ns_params = NestedSamplingParameters(mc_steps=40, initial_step_size=0.5,
+                                                 step_size=0.5, step_size_lo=0.01,
+                                                 step_size_up=2.0, allowed_fail_count=1000)
+            save_strategy = SaveEveryN(df_filename="_test_generic_ns.csv",
+                                       wk_filename="_test_generic_ns.traj.extxyz",
+                                       ls_filename="_test_generic_ns.ls.extxyz",
+                                       n_traj=100_000, n_snap=100_000, n_info=100_000)
+            df, ls_out, _ = nested_sampling(ls, ns_params, 60, MCRandomWalkClone(), save_strategy)
+            rm("_test_generic_ns.csv", force=true)
+            rm("_test_generic_ns.traj.extxyz", force=true)
+            rm("_test_generic_ns.ls.extxyz", force=true)
+            @test nrow(df) > 0
+            @test "iter" in names(df) && "emax" in names(df)
+            @test "log_compression" in names(df)
+            @test all(df.log_compression .< 0.0)
+            @test issorted(df.emax, rev=true)
+            @test length(ls_out.walkers) == 8
+        end
+
+        @testset "dispatch remains unambiguous for the concrete livesets" begin
+            lj = LJParameters()
+            ws = [AtomWalker{1}(mkconfig([[1.0, 1.0, 1.0], [4.0, 4.0, 4.0]]))]
+            @test AtomWalkers(ws, lj) isa LJAtomWalkers
+            @test GenericAtomWalkers(ws, lj) isa GenericAtomWalkers{LJParameters}
+            surf = AtomWalker(FastSystem(atomic_system([:Pt => [5.0, 5.0, 5.0]u"Å"], box, pbc));
+                              freeze_species=[:Pt])
+            cps = CompositeParameterSets(2, [lj, lj, lj])
+            ws_surf = [AtomWalker{1}(mkconfig([[1.0, 1.0, 1.0]]))]
+            @test LJSurfaceWalkers(ws_surf, cps, surf; compute_frozen_energy=true) isa LJSurfaceWalkers
+        end
+    end
+
 end

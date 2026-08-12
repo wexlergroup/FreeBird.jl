@@ -645,6 +645,10 @@
     # Corner z0V = 32.0, seeds {1,2,3,42423}: max devs mean 3.41e-1, var 1.11,
     #   A_ins 3.62e-3, A_del(conditioned) 5.9e-3.
     # Two-state n_max = 1 at z0V = 0.6, seeds {1,2,3,42424}: max dev f1 4.26e-3.
+    # The zero-interaction digit pin (seed 424242) is architecture-exact (every
+    # energy is exactly 0.0 eV, so no rounding enters the trajectory); the
+    # interacting pin (seed 424243) gates its energy at rtol 1e-12 to tolerate
+    # compiler-level rounding drift along the same trajectory.
     # Gates ship at >= 3x the max deviation per stat per corner. Off-by-one foil
     # sensitivity (exact birth-death mean at z0V = 0.5): shift +0.1778, so the
     # mean gate 0.012 detects it with ~15x headroom (asserted in-test).
@@ -865,7 +869,10 @@
             w2 = mkwalker()
             MC_grand_canonical_walk!(5000, w2, lj, 1.0e5u"eV"; z0V=4.0, species=:Ar, step_size=1.0)
             @test w2.list_num_par[1] == 4
-            @test ustrip(u"eV", w2.energy) == -0.0014312826195886537
+            # rtol 1e-12: tolerate compiler-level rounding drift along the same
+            # trajectory (observed stable across architectures at authoring); a
+            # stream or trajectory change fails loudly
+            @test isapprox(ustrip(u"eV", w2.energy), -0.0014312826195886537; rtol=1e-12)
         end
     end
 

@@ -4,12 +4,16 @@
 # - Initializer moments at K = 200, z0V = 3, seeds {1,2,3,52521}: max devs
 #   mean 0.25, var 0.339; gates ship at >= 3x (0.75 and 1.05).
 # - Tie-block fixture (seed 52530): eviction charges are DETERMINISTIC
-#   [log(5/6), log(4/5), log(3/4), log(2/3)] and the refilled live set is
-#   pinned to particle counts [2, 2, 2, 3, 3, 3]: the refill walks run the
-#   grand-canonical kernel, so refilled clones re-enter at different particle
-#   counts (the N-changing refill contract). Accepted clones are re-anchored
-#   by a from-scratch energy recompute, so refilled walkers carry genuinely
-#   negative energies (partial-well configurations), never rounding dust.
+#   [log(5/6), log(4/5), log(3/4), log(2/3)] (exact logs of integer ratios,
+#   architecture-exact). The refill outcome is trajectory-dependent and
+#   architecture-sensitive at the ulp level (macOS-aarch64 refilled to
+#   particle counts [2, 2, 2, 3, 3, 3]; ubuntu-x64 under Julia 1.12 to
+#   [2, 2, 2, 3, 4, 5]: rounding drift flips accept/reject decisions inside
+#   the refill walks), so the outcome asserts are trajectory-robust: the live
+#   set is restored to size, every walker sits genuinely below the plateau
+#   (negative energy, never rounding dust, thanks to the from-scratch
+#   re-anchoring of accepted clones), and at least one refilled clone
+#   re-entered at a different particle count (the N-changing refill contract).
 # - End-to-end determinism at K = 16, seed 52522: two runs digit-identical.
 @testset "atomistic ideal-gas-referenced GC-NS tests" begin
     using Random
@@ -125,8 +129,12 @@
         @test npars == [1, 1, 1, 1]
         @test length(ls.walkers) == 6
         @test params.plateau_refill_target == 0
-        @test sort([w.list_num_par[1] for w in ls.walkers]) == [2, 2, 2, 3, 3, 3]
+        # trajectory-robust refill asserts (the exact particle-count multiset is
+        # architecture-sensitive; see the calibration ledger)
         @test all(w.energy < 0.0u"eV" for w in ls.walkers)
+        @test any(w.list_num_par[1] != 2 for w in ls.walkers)
+        @test all(1 <= w.list_num_par[1] <= 8 for w in ls.walkers)
+        @test all(length(w.configuration) == w.list_num_par[1] for w in ls.walkers)
     end
 
     @testset "dilute interacting end-to-end with same-seed determinism" begin

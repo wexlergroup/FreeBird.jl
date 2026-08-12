@@ -2,11 +2,17 @@
 # grand-canonical route.
 #
 # Calibration ledger:
-# - (a) The canonical-ladder digit pins were recorded by running the identical
-#   fixture on dev @ 6b9d030 and on this change set's bytes: the two streams
-#   agree digit-for-digit (rows 60, last emax -0.024149711142342864 eV,
-#   live-energy sum -0.20617927437954883 eV, last log-compression
-#   -0.11778303565638351), so the pins lock the shared stream against drift.
+# - (a) The canonical-ladder pins were recorded by running the identical
+#   fixture on dev @ 6b9d030 and on that change set's bytes: the two streams
+#   agree digit-for-digit on one machine (rows 60, last emax
+#   -0.024149711142342864 eV, live-energy sum -0.20617927437954883 eV, last
+#   log-compression -0.11778303565638351). Across architectures and compiler
+#   versions the same trajectory reproduces these values only to the last one
+#   or two ulps (ubuntu-x64 under Julia 1.12 measured -0.024149711142342878
+#   against the macOS-aarch64 recording), so the pins gate at rtol 1e-12: a
+#   genuine stream change produces order-one deviations and still fails
+#   loudly, while compiler-level rounding drift along the same trajectory
+#   passes.
 # - (b) Ideal-gas pipeline (K = 512, z0V = 4, 50 requested steps stalling at 5,
 #   mu grid at target zV = {2.8, 4, 5.2}, seeds {1,2,3,81811}): per-point max
 #   devs logXi 0.063, mean_N {0.084, 0.139, 0.386}, var_N {0.142, 0.498, 1.518};
@@ -64,9 +70,11 @@
         df, lso, _ = nested_sampling(ls, p, 60, MCRandomWalkClone(), save)
         clean("ab")
         @test nrow(df) == 60
-        @test df.emax[end] == -0.024149711142342864
-        @test sum(ustrip(u"eV", w.energy) for w in lso.walkers) == -0.20617927437954883
-        @test df.log_compression[end] == -0.11778303565638351
+        # rtol 1e-12: tolerate compiler-level rounding drift along the same
+        # trajectory (see the calibration ledger); a stream change fails loudly
+        @test isapprox(df.emax[end], -0.024149711142342864; rtol=1e-12)
+        @test isapprox(sum(ustrip(u"eV", w.energy) for w in lso.walkers), -0.20617927437954883; rtol=1e-12)
+        @test isapprox(df.log_compression[end], -0.11778303565638351; rtol=1e-12)
     end
 
     @testset "end-to-end ideal-gas pipeline closes against the closed forms (seed 81811)" begin

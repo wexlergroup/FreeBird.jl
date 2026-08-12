@@ -12,13 +12,15 @@ Split the system into components based on the number of particles in each compon
 # Returns
 - `components`: An array of `FastSystem` objects representing the components of the system.
 
+An empty system, or a zero-count component, yields a zero-atom `FastSystem` carrying the
+parent system's cell and periodicity.
 """
 function split_components(at::AbstractSystem, list_num_par::Vector{Int})
     components = Array{FastSystem}(undef, length(list_num_par))
     comp_cut = vcat([0],cumsum(list_num_par))
     comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:length(list_num_par)]
     for i in 1:length(list_num_par)
-        new_list = empty([Symbol(atomic_symbol(at[1])) => position(at[1])])
+        new_list = Pair{Symbol, eltype(position(at, :))}[]
         pos = position(at, comp_split[i])
         symbols = [Symbol(atomic_symbol(at[i])) for i in comp_split[i]]
         for i in 1:length(pos)
@@ -41,6 +43,7 @@ Split an `AbstractSystem` into multiple components based on the chemical species
 
 # Returns
 An array of `FastSystem` objects, each representing a component of the input system.
+An empty system returns an empty array.
 
 # Example
 ```jldoctest
@@ -78,7 +81,7 @@ function split_components_by_chemical_species(at::AbstractSystem)
     species = sort!(unique(list_species))
     components = Array{FastSystem}(undef, length(species))
     for i in 1:length(species)
-        new_list = empty([Symbol(atomic_symbol(at[1])) => position(at[1])])
+        new_list = Pair{Symbol, eltype(position(at, :))}[]
         pos = position(at, findall(x->x==species[i],list_species))
         symbols = [Symbol(atomic_symbol(at[i])) for i in findall(x->x==species[i],list_species)]
         for i in 1:length(pos)
@@ -124,7 +127,7 @@ Sorts the components of an `AbstractSystem` object `at` by their atomic number.
 - `list_num_par::Vector{Int64}`: A vector containing the number of each component species.
 - `new_list::FastSystem`: A new `FastSystem` object with the sorted components.
 
-The function first extracts the atomic numbers of the components in `at`. If `merge_same_species` is `true`, it sorts the unique species and counts the number of each species. If `merge_same_species` is `false`, it creates a list of species and their counts. It then sorts the species and counts by atomic number. Finally, it constructs a new `FastSystem` object with the sorted components and returns the list of species counts and the new `FastSystem` object.
+The function first extracts the atomic numbers of the components in `at`. If `merge_same_species` is `true`, it sorts the unique species and counts the number of each species. If `merge_same_species` is `false`, it creates a list of species and their counts. It then sorts the species and counts by atomic number. Finally, it constructs a new `FastSystem` object with the sorted components and returns the list of species counts and the new `FastSystem` object. An empty system returns an empty `list_num_par` and a zero-atom system, under either flag.
 
 # Examples
 ```jldoctest
@@ -157,12 +160,12 @@ julia> AbstractWalkers.sort_components_by_atomic_number(at)
 """
 function sort_components_by_atomic_number(at::AbstractSystem; merge_same_species=true)
     list_species = [atomic_number(at, i) for i in 1:length(at)]
-    new_list = empty([Symbol(atomic_symbol(at[1])) => position(at[1])])
+    new_list = Pair{Symbol, eltype(position(at, :))}[]
     if merge_same_species
         species = sort!(unique(list_species))
         list_num_par = [count(x->x==s, list_species) for s in species]
     elseif !merge_same_species
-        species = [list_species[1]; [list_species[i] for i in 2:length(list_species) if list_species[i] != list_species[i-1]]]
+        species = isempty(list_species) ? empty(list_species) : [list_species[1]; [list_species[i] for i in 2:length(list_species) if list_species[i] != list_species[i-1]]]
         list_num_par = Vector{Int64}()
         i = 1
         while i <= length(list_species)

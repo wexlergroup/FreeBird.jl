@@ -99,6 +99,7 @@ function interacting_energy(at::AbstractSystem,
                             frozen::Vector{Bool}
                             ) where {C,P<:SingleComponentPotential{Pairwise}}
     check_num_components(C, list_num_par, frozen)
+    length(at) == 0 && return 0.0u"eV"
     energy = 0.0u"eV"
     components = split_components(at, list_num_par)
     # intra-component interactions
@@ -143,6 +144,7 @@ function interacting_energy(at::AbstractSystem,
                             frozen::Vector{Bool},
                             surface::AbstractSystem
                             ) where {C,P<:SingleComponentPotential{Pairwise}}
+    length(at) == 0 && return 0.0u"eV"
     energy = 0.0u"eV"
     components_at = split_components(at, list_num_par)
     components = [components_at..., surface] # combine components from at and surface
@@ -195,6 +197,7 @@ function interacting_energy(at::AbstractSystem,
     if length(list_num_par) != length(frozen)
         throw(ArgumentError("The number of frozen and free parts does not match the length of the number of components."))
     end
+    length(at) == 0 && return 0.0u"eV"
     energy = 0.0u"eV"
     components = split_components(at, list_num_par)
     # intra-component interactions

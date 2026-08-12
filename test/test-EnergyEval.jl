@@ -834,4 +834,21 @@
         end
     end
 
+    @testset "empty-configuration energy fast paths" begin
+        box = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]]u"Å"
+        pbc = (true, true, true)
+        seed_at = FastSystem(atomic_system([:Ar => [1.0, 1.0, 1.0]u"Å"], box, pbc))
+        empty_at = FastSystem(cell_vectors(seed_at), periodicity(seed_at),
+                              empty(position(seed_at, :)), empty(species(seed_at, :)), empty(mass(seed_at, :)))
+        lj = LJParameters()
+        cps = CompositeParameterSets(2, [lj, lj, lj])
+
+        @test interacting_energy(empty_at, lj) == 0.0u"eV"
+        @test interacting_energy(empty_at, lj, [0], [false]) == 0.0u"eV"
+        @test interacting_energy(empty_at, cps, [0, 0], [false, false]) == 0.0u"eV"
+        @test interacting_energy(empty_at, cps, [0], [false], seed_at) == 0.0u"eV"
+        @test frozen_energy(empty_at, lj, [0], [true]) == 0.0u"eV"
+        @test frozen_energy(empty_at, cps, [0, 0], [true, true]) == 0.0u"eV"
+    end
+
 end

@@ -1114,3 +1114,189 @@ function MC_grand_canonical_walk!(n_steps::Int,
             insert_biased_accepted=insert_biased_accepted,
             delete_attempted=delete_attempted, delete_accepted=delete_accepted)
 end
+
+"""
+    gc_insert_acceptance_ratio(z0V::Float64, n::Int, p_insert::Float64, p_delete::Float64)
+    gc_delete_acceptance_ratio(z0V::Float64, n::Int, p_insert::Float64, p_delete::Float64)
+
+Metropolis acceptance ratios for the continuous-space grand-canonical kernel, with `n` the
+PRE-move particle count in both directions. `z0V` is the dimensionless product of the
+reference activity (dimension inverse volume) and the cell volume. The insertion ratio is
+the proposal-density form z0 * p_delete / ((n + 1) * p_insert * q(r)) with the uniform
+channel's q = 1/V folded in, so the shipped arithmetic is literally
+z0V * (p_delete / p_insert) / (n + 1); a future biased-insertion channel enters by
+evaluating a different proposal density q in place of the folded 1/V, mirroring the
+composite-density pattern of the lattice kernel above.
+"""
+gc_insert_acceptance_ratio(z0V::Float64, n::Int, p_insert::Float64, p_delete::Float64) =
+    z0V * (p_delete / p_insert) / (n + 1)
+
+gc_delete_acceptance_ratio(z0V::Float64, n::Int, p_insert::Float64, p_delete::Float64) =
+    (p_insert / p_delete) * n / z0V
+
+"""
+    MC_grand_canonical_walk!(n_steps::Int, at::AtomWalker{1}, pot::SingleComponentPotential{Pairwise}, emax::typeof(0.0u"eV");
+                             z0V::Float64, species, p_move::Float64=0.5, p_insert::Float64=0.25,
+                             step_size::Float64=0.5, n_max::Int=typemax(Int))
+
+Perform a grand-canonical Monte Carlo walk on a continuous-space `AtomWalker{1}` below a
+nested-sampling energy ceiling: single-atom displacements mixed with uniform-in-cell
+insertions and uniform-among-particles deletions, under the Metropolis corrections that
+preserve the activity-z0-weighted reference measure. The continuous counterpart
+of the lattice `MC_grand_canonical_walk!` above; the site-counting acceptance ratios of the
+lattice kernel do not apply here and are replaced by the volume-and-activity forms of
+`gc_insert_acceptance_ratio`/`gc_delete_acceptance_ratio` (pre-move particle count in both).
+
+Requirements: a single unfrozen component, and an orthorhombic cell (consistent with
+`pbc_dist`); both are validated on entry.
+
+Random-number stream contract (fixed by tests): one channel draw per step; a displacement
+draws one particle index and the three walk displacements; an insertion draws three position
+uniforms (x, y, z) plus the Metropolis uniform only when its ratio is below one; a deletion
+draws one particle index plus the conditional Metropolis uniform. Guard skips (a
+displacement or deletion proposed at N = 0, an insertion proposed above `n_max`) consume
+only the channel draw and are not counted as attempts. The energy ceiling is checked before
+the Metropolis ratio, so ceiling rejections draw no Metropolis uniform. Energies are updated
+incrementally through `single_site_energy` on the same audited path the displacement walks
+use, with insertions evaluated by insert-then-revert.
+
+# Arguments
+- `n_steps::Int`: The number of Monte Carlo steps to perform.
+- `at::AtomWalker{1}`: The walker to evolve; a single unfrozen component.
+- `pot::SingleComponentPotential{Pairwise}`: The pairwise potential.
+- `emax::typeof(0.0u"eV")`: The nested-sampling energy ceiling (strict-below acceptance).
+- `z0V::Float64`: Dimensionless product of the reference activity and the cell volume.
+- `species`: Chemical identity (a `Symbol` or `ChemicalSpecies`) of inserted particles;
+  passed explicitly because the configuration may be empty.
+- `p_move::Float64=0.5`: Probability of a displacement move.
+- `p_insert::Float64=0.25`: Probability of an insertion move (deletion takes the remainder).
+- `step_size::Float64=0.5`: Maximum displacement per direction, in Angstrom.
+- `n_max::Int=typemax(Int)`: Upper bound on the particle count, for bounded constructions
+  only. A finite cap truncates the unbounded particle-number support of the reference
+  measure and biases the evidence; production callers must leave it inactive.
+
+# Returns
+- `accept_this_walker::Bool`: Whether at least one move was accepted.
+- `accept_rate::Float64`: Fraction of accepted moves over `n_steps`.
+- `at::AtomWalker{1}`: The updated walker.
+- `move_stats::NamedTuple`: Per-move-type attempt/accept counters
+  (`move_*`, `insert_*`, `delete_*`); attempts are counted at proposal, ceiling rejections
+  included, guard skips excluded.
+"""
+function MC_grand_canonical_walk!(n_steps::Int,
+                                  at::AtomWalker{1},
+                                  pot::SingleComponentPotential{Pairwise},
+                                  emax::typeof(0.0u"eV");
+                                  z0V::Float64,
+                                  species::Union{Symbol, ChemicalSpecies},
+                                  p_move::Float64=0.5,
+                                  p_insert::Float64=0.25,
+                                  step_size::Float64=0.5,
+                                  n_max::Int=typemax(Int))
+    if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
+        throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
+    end
+    if z0V <= 0.0
+        throw(ArgumentError("z0V must be positive"))
+    end
+    if any(at.frozen)
+        throw(ArgumentError("the continuous grand-canonical kernel requires an unfrozen single-component walker"))
+    end
+    config = at.configuration
+    cellv = cell_vectors(config)
+    for i in 1:3, j in 1:3
+        if i != j && !iszero(ustrip(cellv[i][j]))
+            throw(ArgumentError("the continuous grand-canonical kernel assumes an orthorhombic cell (consistent with pbc_dist); found a nonzero off-diagonal cell component"))
+        end
+    end
+    box = (cellv[1][1], cellv[2][2], cellv[3][3])
+
+    n_accept = 0
+    accept_this_walker = false
+    p_delete = 1.0 - p_move - p_insert
+    move_attempted = 0
+    move_accepted = 0
+    insert_attempted = 0
+    insert_accepted = 0
+    delete_attempted = 0
+    delete_accepted = 0
+
+    for _ in 1:n_steps
+        r = rand()
+        n = at.list_num_par[1]
+        if r < p_move
+            # Displacement: ceiling check only (nested-sampling walk, no Metropolis)
+            n == 0 && continue          # guard skip: nothing to move
+            move_attempted += 1
+            i_at = rand(1:n)
+            prewalk_energy = single_site_energy(i_at, config, pot, at.list_num_par)
+            orig_pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
+            pos = single_atom_random_walk!(orig_pos, step_size)
+            pos = periodic_boundary_wrap!(pos, config)
+            config.position[i_at] = pos
+            postwalk_energy = single_site_energy(i_at, config, pot, at.list_num_par)
+            proposed_energy = at.energy + (postwalk_energy - prewalk_energy)
+            if proposed_energy >= emax
+                config.position[i_at] = orig_pos
+            else
+                at.energy = proposed_energy
+                n_accept += 1
+                move_accepted += 1
+                accept_this_walker = true
+            end
+        elseif r < p_move + p_insert
+            # Insertion: uniform in the cell, insert-evaluate-revert
+            (n + 1 > n_max || p_insert <= 0.0) && continue   # guard skip
+            insert_attempted += 1
+            pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
+            insert_particle!(at, pos, species)
+            e_site = single_site_energy(n + 1, config, pot, at.list_num_par)
+            proposed_energy = at.energy + e_site
+            accept = true
+            if proposed_energy >= emax
+                accept = false
+            else
+                ratio = gc_insert_acceptance_ratio(z0V, n, p_insert, p_delete)
+                if ratio < 1.0 && rand() >= ratio
+                    accept = false
+                end
+            end
+            if accept
+                at.energy = proposed_energy
+                n_accept += 1
+                insert_accepted += 1
+                accept_this_walker = true
+            else
+                remove_particle!(at, n + 1)
+            end
+        else
+            # Deletion: uniform among particles; nothing mutates until acceptance
+            (n == 0 || p_delete <= 0.0) && continue          # guard skip
+            delete_attempted += 1
+            i_at = rand(1:n)
+            e_site = single_site_energy(i_at, config, pot, at.list_num_par)
+            proposed_energy = at.energy - e_site
+            accept = true
+            if proposed_energy >= emax
+                accept = false
+            else
+                ratio = gc_delete_acceptance_ratio(z0V, n, p_insert, p_delete)
+                if ratio < 1.0 && rand() >= ratio
+                    accept = false
+                end
+            end
+            if accept
+                remove_particle!(at, i_at)
+                at.energy = proposed_energy
+                n_accept += 1
+                delete_accepted += 1
+                accept_this_walker = true
+            end
+        end
+    end
+
+    return accept_this_walker, n_accept / max(n_steps, 1), at,
+           (move_attempted=move_attempted, move_accepted=move_accepted,
+            insert_attempted=insert_attempted, insert_accepted=insert_accepted,
+            delete_attempted=delete_attempted, delete_accepted=delete_accepted)
+end

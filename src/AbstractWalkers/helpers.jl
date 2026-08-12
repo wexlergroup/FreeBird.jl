@@ -192,6 +192,58 @@ function sort_components_by_atomic_number(at::AbstractSystem; merge_same_species
 end
 
 """
+    insert_particle!(walker::AtomWalker{1}, pos, species)
+
+Append one particle of `species` (a `Symbol` or `ChemicalSpecies`) at position `pos` to the
+walker's configuration, updating `list_num_par` in the same call. The two mutations are kept
+in lockstep here so the configuration arrays and the particle count cannot drift apart. The
+operation is purely structural: the walker's `energy` is not touched and the component's
+frozen flag is not consulted; callers own the energy bookkeeping (see
+`MC_grand_canonical_walk!`).
+
+# Arguments
+- `walker::AtomWalker{1}`: The single-component walker to extend.
+- `pos`: The new particle's position (any 3-vector of lengths accepted by the configuration).
+- `species`: The chemical identity of the new particle.
+
+# Returns
+- `walker::AtomWalker{1}`: The updated walker.
+"""
+function insert_particle!(walker::AtomWalker{1}, pos, species)
+    config = walker.configuration
+    sp = species isa ChemicalSpecies ? species : ChemicalSpecies(species)
+    push!(config.position, pos)
+    push!(config.species, sp)
+    push!(config.mass, mass(sp))
+    walker.list_num_par[1] += 1
+    return walker
+end
+
+"""
+    remove_particle!(walker::AtomWalker{1}, i::Int)
+
+Remove particle `i` from the walker's configuration, order-preserving, updating
+`list_num_par` in the same call. Purely structural, like `insert_particle!`: the walker's
+`energy` is not touched.
+
+# Arguments
+- `walker::AtomWalker{1}`: The single-component walker to shrink.
+- `i::Int`: The index of the particle to remove.
+
+# Returns
+- `walker::AtomWalker{1}`: The updated walker.
+"""
+function remove_particle!(walker::AtomWalker{1}, i::Int)
+    config = walker.configuration
+    checkbounds(config.position, i)
+    deleteat!(config.position, i)
+    deleteat!(config.species, i)
+    deleteat!(config.mass, i)
+    walker.list_num_par[1] -= 1
+    return walker
+end
+
+"""
     view_structure(at::AbstractSystem)
     view_structure(walker::AtomWalker)
 

@@ -628,6 +628,236 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
 end
 
 
+
+
+"""
+    gc_thermodynamic_stats_ideal_ref(df::DataFrame,
+                                     V::typeof(1.0u"Å^3"),
+                                     atomic_mass::typeof(1.0u"u"),
+                                     reference_activity::typeof(1.0u"Å^-3"),
+                                     μ_grid::AbstractVector{<:typeof(1.0u"eV")},
+                                     T_grid::AbstractVector{<:Unitful.Temperature};
+                                     ω0=1.0, live_emax=nothing, live_numbers=nothing,
+                                     observable_cols=Symbol[], live_observables=nothing,
+                                     kb=8.617333262e-5)
+
+Reduce an atomistic energy-sorted ideal-gas-referenced grand-canonical ledger (see the
+`AtomisticIGRefGCNSParameters` method of `ideal_gas_referenced_nested_sampling`) to
+Ξ(μ, T) on an arbitrary (μ, T) grid. The assembly is
+
+```math
+\\log \\Xi(\\mu, T) = z_0 V + \\mathrm{logsumexp}_j\\left[\\log \\omega_j + N_j \\log(z/z_0) - E_j/k_B T\\right]
+```
+
+with `z = exp(μ/kT)/Λ(T)³` the target activity, `z0` the run's reference activity, and
+`e^{z0V}` the reference measure's total mass. The thermal wavelength and the volume enter
+only here: the sampler is athermal and its ledger is reduced, never re-run.
+
+Three conventions are fixed by measurement and documented here:
+- Shell weights follow the log-compression convention of `ωᵢ(log_compression; ω0=1.0)`,
+  evaluated in log space (`log ω_j = log X_{j-1} + log(1 - t_j)`) so deep ladders cannot
+  underflow (the same rationale as the iteration-based assembly above). The
+  `ω0 = (K+1)/K` convention of the iteration-based route must not be applied to
+  compression ledgers: it inflates the total prior mass by exactly `1/K`.
+- The live-set tail carries the mass `ω0·exp(Σ log_compression)` split over
+  `length(live_emax)`, never over the nominal walker count: a run that ends inside a
+  plateau eviction block has fewer live walkers than it started with, and splitting over
+  the nominal count loses `(1 - live/K)` of the terminal mass.
+- A ledger with zero rows is a legal input, produced by zero-accept runs (see the
+  driver's stall contract): the entire prior mass then sits in the live set, which is
+  the exact reduction for a fully degenerate landscape. A ledger that has rows but no
+  `:log_compression` column is rejected: its compression cannot be reconstructed here.
+
+Convention differences among the grand-canonical stats functions: this method and the
+lattice `gc_thermodynamic_stats_ideal_ref` reduce one variable-N ledger against their
+reference measures (`e^{z0V}` here, `(1+z0)^M` there); `gc_thermodynamic_stats_fixed_N`
+stitches per-N canonical ledgers with `(zV)^N/N!` (continuous) or binomial (lattice)
+prefactors; the Ω-sorted `gc_thermodynamic_stats` reweights an Ω-ladder at its run
+chemical potential. Reconciling the ω0/tail conventions across them is a recorded
+follow-up item and out of scope here.
+
+# Arguments
+- `df::DataFrame`: NS output with columns `[:iter, :emax, :num_particles, :log_compression]`.
+- `V::typeof(1.0u"Å^3")`: The cell volume.
+- `atomic_mass::typeof(1.0u"u")`: The particle mass entering Λ(T).
+- `reference_activity::typeof(1.0u"Å^-3")`: The run's reference activity z0 (must match!).
+- `μ_grid::AbstractVector{<:typeof(1.0u"eV")}`: Chemical potential grid (Unitful, eV),
+  matching the atomistic `gc_thermodynamic_stats_fixed_N` convention.
+- `T_grid::AbstractVector{<:Unitful.Temperature}`: Temperature grid (Unitful).
+- `ω0::Float64=1.0`: Total prior mass before the first cull. Leave at 1.0 for ledgers
+  produced by the driver; do not pass the iteration-based route's `(K+1)/K`.
+- `live_emax::Union{Nothing,Vector{Float64}}=nothing`: Energies of the surviving live walkers.
+- `live_numbers::Union{Nothing,Vector{Int}}=nothing`: Particle counts of the surviving live walkers.
+- `observable_cols::AbstractVector{Symbol}=Symbol[]`: Names of extra per-dead-point `df`
+  columns whose reweighted averages are returned in `observables`.
+- `live_observables=nothing`: Required whenever `observable_cols` is non-empty and a
+  live-set tail is supplied; same contract as the lattice method above.
+- `kb::Float64`: Boltzmann constant (default: eV/K).
+
+# Returns
+A `NamedTuple` with the same shape as the lattice method: `logXi`, `mean_N`, `var_N`,
+`mean_U`, `N_eff`, `var_U`, `cov_UN` (each a `Matrix{Float64}` of size
+`(length(μ_grid), length(T_grid))`, indexed `[i_μ, i_T]`), and `observables`
+(`Dict{Symbol,Matrix{Float64}}`). The returned moments are configurational: beyond the
+Λ(T)³ activity conversion this reduction carries no momentum integral, so
+temperature-derivative observables built from it (heat capacities) must add the Λ(T)
+term explicitly, exactly as for `gc_thermodynamic_stats_fixed_N`.
+"""
+function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
+                                          V::typeof(1.0u"Å^3"),
+                                          atomic_mass::typeof(1.0u"u"),
+                                          reference_activity::typeof(1.0u"Å^-3"),
+                                          μ_grid::AbstractVector{<:typeof(1.0u"eV")},
+                                          T_grid::AbstractVector{<:Unitful.Temperature};
+                                          ω0::Float64=1.0,
+                                          live_emax::Union{Nothing,Vector{Float64}}=nothing,
+                                          live_numbers::Union{Nothing,Vector{Int}}=nothing,
+                                          observable_cols::AbstractVector{Symbol}=Symbol[],
+                                          live_observables::Union{Nothing,AbstractDict{Symbol}}=nothing,
+                                          kb::Float64=8.617333262e-5)
+    if reference_activity <= 0.0u"Å^-3"
+        throw(ArgumentError("reference_activity must be positive"))
+    end
+    if V <= 0.0u"Å^3"
+        throw(ArgumentError("V must be positive"))
+    end
+    if (live_emax === nothing) != (live_numbers === nothing)
+        throw(ArgumentError("live_emax and live_numbers must be provided together"))
+    end
+    if live_emax !== nothing && length(live_emax) != length(live_numbers)
+        throw(DimensionMismatch("live_emax and live_numbers must have the same length"))
+    end
+    n_dead = nrow(df)
+    if n_dead == 0 && (live_emax === nothing || isempty(live_emax))
+        throw(ArgumentError("df is empty and no live walkers were provided"))
+    end
+    allunique(observable_cols) || throw(ArgumentError(
+        "observable_cols must not contain duplicate entries"))
+    if n_dead > 0
+        hasproperty(df, :log_compression) || throw(ArgumentError(
+            "the ledger has rows but no :log_compression column, so its compression " *
+            "cannot be reconstructed; only zero-accept (empty) ledgers may omit it"))
+        for col in observable_cols
+            hasproperty(df, col) || throw(ArgumentError(
+                "observable_cols: df has no column :$col"))
+            any(ismissing, df[!, col]) && throw(ArgumentError(
+                "observable_cols: df column :$col contains missing values"))
+        end
+    end
+    if live_observables !== nothing && live_emax === nothing
+        throw(ArgumentError(
+            "live_observables requires live_emax/live_numbers (the live-set tail)"))
+    end
+    if live_observables !== nothing && isempty(observable_cols)
+        throw(ArgumentError(
+            "live_observables was given but observable_cols is empty"))
+    end
+    if !isempty(observable_cols) && live_emax !== nothing
+        if live_observables === nothing
+            throw(ArgumentError(
+                "observable_cols with a live-set tail requires live_observables " *
+                "(the per-column values of the surviving live walkers)"))
+        end
+        if Set(keys(live_observables)) != Set(observable_cols)
+            throw(ArgumentError(
+                "live_observables keys must match observable_cols exactly"))
+        end
+        for col in observable_cols
+            v = live_observables[col]
+            (v isa AbstractVector && all(x -> x isa Real, v)) || throw(ArgumentError(
+                "live_observables[:$col] must be a vector of Real values"))
+            if length(v) != length(live_emax)
+                throw(DimensionMismatch(
+                    "live_observables[:$col] must have one entry per live " *
+                    "walker (length(live_emax) = $(length(live_emax)))"))
+            end
+        end
+    end
+
+    lc = n_dead > 0 ? Vector{Float64}(df.log_compression) : Float64[]
+    if any(x -> !isfinite(x) || x >= 0.0, lc)
+        throw(ArgumentError(
+            "corrupted :log_compression column: every entry must be finite and negative"))
+    end
+
+    # Per-shell log prior-volume weights built directly in log space:
+    # log ω_j = log X_{j-1} + log(1 - t_j), X_j = ω0 Π t_j. The linear shells
+    # underflow on deep ladders, exactly as for the iteration-based assembly.
+    cs = cumsum(lc)
+    log_w0 = n_dead > 0 ?
+        (log(ω0) .+ vcat(0.0, cs[1:end-1]) .+ log.(-expm1.(lc))) : Float64[]
+    Es = n_dead > 0 ? Vector{Float64}(df.emax) : Float64[]
+    Ns = n_dead > 0 ? Vector{Float64}(df.num_particles) : Float64[]
+
+    if live_emax !== nothing && !isempty(live_emax)
+        # Residual prior volume after the last recorded cull, split uniformly
+        # over the SURVIVING walkers (a run ended inside an eviction block has
+        # fewer live walkers than its nominal count)
+        log_tail = log(ω0) + (n_dead > 0 ? cs[end] : 0.0) - log(length(live_emax))
+        log_w0 = vcat(log_w0, fill(log_tail, length(live_emax)))
+        Es = vcat(Es, live_emax)
+        Ns = vcat(Ns, Float64.(live_numbers))
+    end
+
+    As = Dict{Symbol,Vector{Float64}}()
+    for col in observable_cols
+        A = n_dead > 0 ? Vector{Float64}(df[!, col]) : Float64[]
+        if live_emax !== nothing && !isempty(live_emax)
+            A = vcat(A, Vector{Float64}(live_observables[col]))
+        end
+        As[col] = A
+    end
+
+    # Second moments on shifted energies (see the lattice method above)
+    E_shift = isempty(Es) ? 0.0 : minimum(Es)
+    Es_c = Es .- E_shift
+
+    z0V = ustrip(Unitful.NoUnits, reference_activity * V)
+    log_z0 = log(ustrip(u"Å^-3", reference_activity))
+
+    n_mu = length(μ_grid)
+    n_T = length(T_grid)
+    logXi = Matrix{Float64}(undef, n_mu, n_T)
+    mean_N = Matrix{Float64}(undef, n_mu, n_T)
+    var_N = Matrix{Float64}(undef, n_mu, n_T)
+    mean_U = Matrix{Float64}(undef, n_mu, n_T)
+    N_eff = Matrix{Float64}(undef, n_mu, n_T)
+    var_U = Matrix{Float64}(undef, n_mu, n_T)
+    cov_UN = Matrix{Float64}(undef, n_mu, n_T)
+    obs_out = Dict{Symbol,Matrix{Float64}}(
+        col => Matrix{Float64}(undef, n_mu, n_T) for col in observable_cols)
+
+    Threads.@threads for j in 1:n_T
+        T_K = ustrip(u"K", T_grid[j])
+        β = 1.0 / (kb * T_K)
+        logΛ = log(ustrip(u"Å", _thermal_wavelength(atomic_mass, T_grid[j])))
+        for i in 1:n_mu
+            # log z = βμ - 3 log Λ; the reweighting exponent is N log(z/z0) - βE
+            s = β * ustrip(u"eV", μ_grid[i]) - 3.0 * logΛ - log_z0
+            log_w = log_w0 .+ s .* Ns .- β .* Es
+            max_log = maximum(log_w)
+            ws = exp.(log_w .- max_log)
+            sum_w = sum(ws)
+            logXi[i, j] = z0V + max_log + log(sum_w)
+            n_avg = sum(ws .* Ns) / sum_w
+            mean_N[i, j] = n_avg
+            var_N[i, j] = sum(ws .* Ns .^ 2) / sum_w - n_avg^2
+            u_c = sum(ws .* Es_c) / sum_w
+            mean_U[i, j] = u_c + E_shift
+            var_U[i, j] = sum(ws .* Es_c .^ 2) / sum_w - u_c^2
+            cov_UN[i, j] = sum(ws .* Es_c .* Ns) / sum_w - u_c * n_avg
+            for col in observable_cols
+                obs_out[col][i, j] = sum(ws .* As[col]) / sum_w
+            end
+            N_eff[i, j] = sum_w^2 / sum(abs2, ws)
+        end
+    end
+
+    return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U, N_eff=N_eff,
+            var_U=var_U, cov_UN=cov_UN, observables=obs_out)
+end
+
+
 """
     _thermal_wavelength(atomic_mass::typeof(1.0u"u"), T::Unitful.Temperature) -> typeof(1.0u"Å")
 

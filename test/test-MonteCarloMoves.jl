@@ -634,5 +634,240 @@
         end
     end
 
+    # Calibration ledger for the atomistic grand-canonical kernel testsets below
+    # (protocol: burn 2e4 steps, then 2e5 steps sampling N every 10; per-attempt
+    # acceptance references are attempt-conditioned, i.e. deletion guard skips at
+    # N = 0 excluded, matching the kernel's counting contract).
+    # Corner z0V = 0.5, seeds {1,2,3,42421}: max devs mean 3.85e-3, var 4.72e-3,
+    #   P(0) 3.97e-3, A_ins 3.24e-3; A_del is structurally exact 1.0 at this corner.
+    # Corner z0V = 8.0, seeds {1,2,3,42422}: max devs mean 3.31e-2, var 3.27e-1,
+    #   P(0) 1.35e-4, A_ins 1.59e-3, A_del(conditioned) 8.7e-3 (gate 0.027 >= 3x).
+    # Corner z0V = 32.0, seeds {1,2,3,42423}: max devs mean 3.41e-1, var 1.11,
+    #   A_ins 3.62e-3, A_del(conditioned) 5.9e-3.
+    # Two-state n_max = 1 at z0V = 0.6, seeds {1,2,3,42424}: max dev f1 4.26e-3.
+    # Gates ship at >= 3x the max deviation per stat per corner. Off-by-one foil
+    # sensitivity (exact birth-death mean at z0V = 0.5): shift +0.1778, so the
+    # mean gate 0.012 detects it with ~15x headroom (asserted in-test).
+    @testset "atomistic grand-canonical kernel tests" begin
+        using Random
+        box = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]]u"Å"
+        pbc = (true, true, true)
+        seed_at = FastSystem(atomic_system([:Ar => [1.0, 1.0, 1.0]u"Å"], box, pbc))
+        mkempty() = FastSystem(cell_vectors(seed_at), periodicity(seed_at),
+                               empty(position(seed_at, :)), empty(species(seed_at, :)),
+                               empty(mass(seed_at, :)))
+        mkwalker() = (w = AtomWalker{1}(mkempty()); w.energy = 0.0u"eV"; w)
+        lj0 = LJParameters(epsilon=0.0)
+        emax_inf = Inf * u"eV"
+
+        logfact(n) = n == 0 ? 0.0 : sum(log, 1:n)
+        poisson_pmf(lam, n) = exp(n * log(lam) - lam - logfact(n))
+        function poisson_refs(lam; nmax=max(80, ceil(Int, lam + 12 * sqrt(lam))))
+            p = [poisson_pmf(lam, n) for n in 0:nmax]
+            p ./= sum(p)
+            m = sum(n * p[n+1] for n in 0:nmax)
+            v = sum((n - m)^2 * p[n+1] for n in 0:nmax)
+            a_ins = sum(p[n+1] * min(1.0, lam / (n + 1)) for n in 0:nmax)
+            a_del = sum(p[n+1] * min(1.0, n / lam) for n in 0:nmax) / (1 - p[1])
+            return m, v, a_ins, a_del
+        end
+
+        function run_corner(z0V, seed; nburn=20_000, nsteps=200_000, thin=10)
+            Random.seed!(seed)
+            w = mkwalker()
+            MC_grand_canonical_walk!(nburn, w, lj0, emax_inf; z0V=z0V, species=:Ar)
+            ns = Int[]
+            ins_att = 0; ins_acc = 0; del_att = 0; del_acc = 0
+            for _ in 1:(nsteps ÷ thin)
+                _, _, _, stats = MC_grand_canonical_walk!(thin, w, lj0, emax_inf; z0V=z0V, species=:Ar)
+                push!(ns, w.list_num_par[1])
+                ins_att += stats.insert_attempted; ins_acc += stats.insert_accepted
+                del_att += stats.delete_attempted; del_acc += stats.delete_accepted
+            end
+            return mean(ns), var(ns), count(iszero, ns) / length(ns),
+                   ins_acc / max(ins_att, 1), del_acc / max(del_att, 1), w
+        end
+
+        @testset "acceptance-ratio helpers (pre-move N convention)" begin
+            gir = MonteCarloMoves.gc_insert_acceptance_ratio
+            gdr = MonteCarloMoves.gc_delete_acceptance_ratio
+            @test gir(8.0, 0, 0.25, 0.25) == 8.0
+            @test gir(8.0, 7, 0.25, 0.25) == 1.0
+            @test gir(8.0, 15, 0.25, 0.25) == 0.5
+            @test gdr(8.0, 8, 0.25, 0.25) == 1.0
+            @test gdr(8.0, 4, 0.25, 0.25) == 0.5
+            @test gdr(8.0, 1, 0.25, 0.25) == 0.125
+            @test gdr(8.0, 0, 0.25, 0.25) == 0.0
+            # asymmetric channels carry the proposal-probability ratio
+            @test gir(8.0, 3, 0.1, 0.4) == 8.0 * 4.0 / 4
+            @test gdr(8.0, 3, 0.1, 0.4) == 0.25 * 3 / 8.0
+        end
+
+        @testset "argument validation" begin
+            w = mkwalker()
+            @test_throws ArgumentError MC_grand_canonical_walk!(1, w, lj0, emax_inf; z0V=8.0, species=:Ar, p_move=0.9, p_insert=0.2)
+            @test_throws ArgumentError MC_grand_canonical_walk!(1, w, lj0, emax_inf; z0V=0.0, species=:Ar)
+            wf = mkwalker()
+            wf.frozen = [true]
+            @test_throws ArgumentError MC_grand_canonical_walk!(1, wf, lj0, emax_inf; z0V=8.0, species=:Ar)
+            tilted = [[10.0, 0.0, 0.0], [2.0, 10.0, 0.0], [0.0, 0.0, 10.0]]u"Å"
+            wt = AtomWalker{1}(FastSystem(atomic_system([:Ar => [1.0, 1.0, 1.0]u"Å"], tilted, pbc)))
+            @test_throws ArgumentError MC_grand_canonical_walk!(1, wt, lj0, emax_inf; z0V=8.0, species=:Ar)
+        end
+
+        @testset "surgery helpers round-trip byte-identity" begin
+            w = mkwalker()
+            insert_particle!(w, SVector(1.0, 2.0, 3.0)u"Å", :Ar)
+            insert_particle!(w, SVector(4.0, 5.0, 6.0)u"Å", :Ar)
+            pos_before = copy(w.configuration.position)
+            spc_before = copy(w.configuration.species)
+            mss_before = copy(w.configuration.mass)
+            insert_particle!(w, SVector(7.0, 8.0, 9.0)u"Å", :Ar)
+            @test w.list_num_par == [3]
+            @test length(w.configuration) == 3
+            remove_particle!(w, 3)
+            @test w.list_num_par == [2]
+            @test w.configuration.position == pos_before
+            @test w.configuration.species == spc_before
+            @test w.configuration.mass == mss_before
+            # order-preserving removal from the middle
+            remove_particle!(w, 1)
+            @test w.configuration.position == [pos_before[2]]
+            @test_throws BoundsError remove_particle!(w, 5)
+        end
+
+        @testset "RNG-stream contract (forced branches)" begin
+            # Insertion, ratio >= 1: accept with NO Metropolis draw (4 draws total)
+            Random.seed!(778)
+            probe = [rand() for _ in 1:8]
+            @test probe[1] < 0.75    # branch precondition: channel draw lands in the insertion window
+            Random.seed!(778)
+            w = mkwalker()
+            _, _, _, stats = MC_grand_canonical_walk!(1, w, lj0, emax_inf; z0V=1.0e6, species=:Ar, p_move=0.0, p_insert=0.75)
+            @test w.list_num_par == [1]
+            @test (stats.insert_attempted, stats.insert_accepted) == (1, 1)
+            @test rand() == probe[5]
+
+            # Insertion, ratio < 1: Metropolis uniform IS drawn (5 draws; p_delete = 0 forces ratio 0)
+            Random.seed!(778)
+            w = mkwalker()
+            _, _, _, stats = MC_grand_canonical_walk!(1, w, lj0, emax_inf; z0V=8.0, species=:Ar, p_move=0.0, p_insert=1.0)
+            @test w.list_num_par == [0]
+            @test (stats.insert_attempted, stats.insert_accepted) == (1, 0)
+            @test rand() == probe[6]
+
+            # Deletion, ratio >= 1: accept with NO Metropolis draw (2 draws)
+            Random.seed!(777)
+            probe = [rand() for _ in 1:8]
+            @test probe[1] >= 0.25   # branch precondition: channel draw lands in the deletion window
+            Random.seed!(777)
+            w = mkwalker()
+            insert_particle!(w, SVector(5.0, 5.0, 5.0)u"Å", :Ar)
+            _, _, _, stats = MC_grand_canonical_walk!(1, w, lj0, emax_inf; z0V=0.01, species=:Ar, p_move=0.0, p_insert=0.25)
+            @test w.list_num_par == [0]
+            @test (stats.delete_attempted, stats.delete_accepted) == (1, 1)
+            @test rand() == probe[3]
+
+            # Deletion, ratio < 1: Metropolis uniform IS drawn (3 draws)
+            Random.seed!(777)
+            w = mkwalker()
+            insert_particle!(w, SVector(5.0, 5.0, 5.0)u"Å", :Ar)
+            _, _, _, stats = MC_grand_canonical_walk!(1, w, lj0, emax_inf; z0V=1.0e6, species=:Ar, p_move=0.0, p_insert=0.25)
+            @test w.list_num_par == [1]
+            @test (stats.delete_attempted, stats.delete_accepted) == (1, 0)
+            @test rand() == probe[4]
+
+            # Ceiling rejection draws NO Metropolis uniform even at ratio < 1
+            # (the ceiling is checked first): 4 draws total, walker reverted
+            Random.seed!(778)
+            probe778 = [rand() for _ in 1:8]
+            Random.seed!(778)
+            w = mkwalker()
+            _, _, _, stats = MC_grand_canonical_walk!(1, w, lj0, 0.0u"eV"; z0V=0.3, species=:Ar, p_move=0.0, p_insert=0.75)
+            @test w.list_num_par == [0]
+            @test (stats.insert_attempted, stats.insert_accepted) == (1, 0)
+            @test rand() == probe778[5]
+
+            # Guard skips consume only the channel draw and are not counted as attempts
+            Random.seed!(777)
+            w = mkwalker()
+            _, _, _, stats = MC_grand_canonical_walk!(1, w, lj0, emax_inf; z0V=8.0, species=:Ar, p_move=0.0, p_insert=0.25)
+            @test w.list_num_par == [0]
+            @test stats == (move_attempted=0, move_accepted=0, insert_attempted=0,
+                            insert_accepted=0, delete_attempted=0, delete_accepted=0)
+            @test rand() == probe[2]
+            Random.seed!(779)
+            probe779 = [rand() for _ in 1:4]
+            Random.seed!(779)
+            w = mkwalker()
+            _, _, _, stats = MC_grand_canonical_walk!(1, w, lj0, emax_inf; z0V=8.0, species=:Ar, p_move=1.0, p_insert=0.0)
+            @test stats.move_attempted == 0
+            @test rand() == probe779[2]
+        end
+
+        @testset "two-state birth-death closure at n_max = 1" begin
+            Random.seed!(42424)
+            w = mkwalker()
+            MC_grand_canonical_walk!(10_000, w, lj0, emax_inf; z0V=0.6, species=:Ar, n_max=1)
+            n1 = 0
+            tot = 400_000
+            for _ in 1:tot
+                MC_grand_canonical_walk!(1, w, lj0, emax_inf; z0V=0.6, species=:Ar, n_max=1)
+                n1 += w.list_num_par[1]
+            end
+            @test abs(n1 / tot - 0.6 / 1.6) < 0.013
+            @test w.list_num_par[1] <= 1
+        end
+
+        @testset "ideal-gas stationary law (seeded, calibrated)" begin
+            # (z0V, seed, tol_mean, tol_var, tol_p0, tol_ains, tol_adel)
+            corners = [(0.5, 42421, 0.012, 0.015, 0.012, 0.010, 1.0e-12),
+                       (8.0, 42422, 0.10, 1.0, 4.1e-4, 0.005, 0.027),
+                       (32.0, 42423, 1.05, 3.4, Inf, 0.011, 0.018)]
+            for (z0V, seed, tol_m, tol_v, tol_p0, tol_ai, tol_ad) in corners
+                m_ref, v_ref, ai_ref, ad_ref = poisson_refs(z0V)
+                m, v, p0, ai, ad, w = run_corner(z0V, seed)
+                @test abs(m - m_ref) < tol_m
+                @test abs(v - v_ref) < tol_v
+                if isfinite(tol_p0)
+                    @test abs(p0 - poisson_pmf(z0V, 0)) < tol_p0
+                end
+                @test abs(ai - ai_ref) < tol_ai
+                @test abs(ad - ad_ref) < tol_ad
+                # the configuration arrays and the particle count never drift apart
+                @test length(w.configuration) == w.list_num_par[1]
+                @test length(w.configuration.species) == w.list_num_par[1]
+            end
+            # sensitivity: the mean gate at the smallest corner detects the classic
+            # off-by-one insertion bug, whose exact stationary mean follows from the
+            # birth-death recursion p(n+1)/p(n) = a_ins(n)/a_del(n+1)
+            lam = 0.5
+            logp = zeros(101)
+            for n in 0:99
+                num = min(1.0, lam / max(n, 1))       # off-by-one foil
+                den = min(1.0, (n + 1) / lam)
+                logp[n+2] = logp[n+1] + log(num) - log(den)
+            end
+            pfoil = exp.(logp .- maximum(logp))
+            pfoil ./= sum(pfoil)
+            foil_shift = abs(sum(n * pfoil[n+1] for n in 0:100) - lam)
+            @test 0.012 < 0.5 * foil_shift
+        end
+
+        @testset "fixed-seed digit pins (stream shape)" begin
+            Random.seed!(424242)
+            w = mkwalker()
+            MC_grand_canonical_walk!(5000, w, lj0, emax_inf; z0V=8.0, species=:Ar)
+            @test w.list_num_par[1] == 9
+            @test w.energy == 0.0u"eV"
+            lj = LJParameters(epsilon=0.01, sigma=2.5, cutoff=2.5)
+            Random.seed!(424243)
+            w2 = mkwalker()
+            MC_grand_canonical_walk!(5000, w2, lj, 1.0e5u"eV"; z0V=4.0, species=:Ar, step_size=1.0)
+            @test w2.list_num_par[1] == 4
+            @test ustrip(u"eV", w2.energy) == -0.0014312826195886537
+        end
+    end
+
 end
 

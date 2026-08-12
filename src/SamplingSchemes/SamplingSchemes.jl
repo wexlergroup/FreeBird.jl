@@ -49,6 +49,9 @@ export grand_canonical_nested_sampling
 export IdealGasReferencedGCNSParameters
 export ideal_gas_referenced_nested_sampling
 
+export AtomisticIGRefGCNSParameters
+export MCAtomGrandCanonicalMoves
+
 # other sampling schemes
 export exact_enumeration
 export wang_landau

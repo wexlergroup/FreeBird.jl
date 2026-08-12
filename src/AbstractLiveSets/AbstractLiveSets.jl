@@ -22,6 +22,7 @@ export LJAtomWalkers, LatticeGasWalkers
 export LJSurfaceWalkers
 export MLIPAtomWalkers
 export GuptaAtomWalkers
+export GenericAtomWalkers
 export assign_energy!
 
 abstract type AbstractLiveSet end

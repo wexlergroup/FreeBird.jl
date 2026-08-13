@@ -878,3 +878,175 @@
 
 end
 
+
+@testset "atomistic muVT kernel tests" begin
+    using Random
+    # Calibration ledger (gates at >= 3x the max three-seed deviation, per stat):
+    # - Ideal-gas Poisson closure, zV = 3, T = 300 K, seeds 91001/91002/91003:
+    #   max devs mean 0.036, var 0.059, p0 0.0018; gates 0.11, 0.18, 0.0055.
+    # - Fixed-N pair-distance Boltzmann ratio (bins [2.5,2.9)/[3.3,3.7) A,
+    #   quadrature reference 0.7929), seeds 92001/92002/92003: max rel dev
+    #   0.0039; gate 0.012 relative.
+    box = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]]u"Å"
+    pbc = (true, true, true)
+    seed_at = FastSystem(atomic_system([:Ar => [1.0, 1.0, 1.0]u"Å"], box, pbc))
+    mkempty() = FastSystem(cell_vectors(seed_at), periodicity(seed_at),
+                           empty(position(seed_at, :)), empty(species(seed_at, :)),
+                           empty(mass(seed_at, :)))
+    mkwalker() = (w = AtomWalker{1}(mkempty()); w.energy = 0.0u"eV"; w)
+    lj0 = LJParameters(epsilon=0.0)
+    T300 = 300.0
+    logfact(n) = n == 0 ? 0.0 : sum(log, 1:n)
+    poisson_pmf(lam, n) = exp(n * log(lam) - lam - logfact(n))
+
+    @testset "argument validation" begin
+        w = mkwalker()
+        @test_throws ArgumentError MC_muVT_walk!(1, w, lj0, T300; zV=0.0, species=:Ar)
+        @test_throws ArgumentError MC_muVT_walk!(1, w, lj0, 0.0; zV=1.0, species=:Ar)
+        @test_throws ArgumentError MC_muVT_walk!(1, w, lj0, T300; zV=1.0, species=:Ar, p_move=0.7, p_insert=0.4)
+        frozen_w = AtomWalker(FastSystem(atomic_system([:Ar => [1.0, 1.0, 1.0]u"Å"], box, pbc));
+                              freeze_species=[:Ar])
+        @test_throws ArgumentError MC_muVT_walk!(1, frozen_w, lj0, T300; zV=1.0, species=:Ar)
+    end
+
+    @testset "RNG-stream contract (forced branches)" begin
+        # Insertion, combined ratio >= 1 (zV huge, zero-interaction): accept
+        # with NO Metropolis draw (channel + three position uniforms = 4)
+        Random.seed!(778)
+        probe = [rand() for _ in 1:8]
+        @test probe[1] < 0.75
+        Random.seed!(778)
+        w = mkwalker()
+        _, _, stats = MC_muVT_walk!(1, w, lj0, T300; zV=1.0e6, species=:Ar, p_move=0.0, p_insert=0.75)
+        @test w.list_num_par == [1]
+        @test (stats.insert_attempted, stats.insert_accepted) == (1, 1)
+        @test rand() == probe[5]
+
+        # Insertion, combined < 1: the Metropolis uniform IS drawn (5 draws;
+        # p_delete = 0 forces the ratio to zero)
+        Random.seed!(778)
+        w = mkwalker()
+        _, _, stats = MC_muVT_walk!(1, w, lj0, T300; zV=8.0, species=:Ar, p_move=0.0, p_insert=1.0)
+        @test w.list_num_par == [0]
+        @test (stats.insert_attempted, stats.insert_accepted) == (1, 0)
+        @test rand() == probe[6]
+
+        # Deletion, combined >= 1: accept with NO Metropolis draw (2 draws)
+        Random.seed!(777)
+        probe = [rand() for _ in 1:8]
+        @test probe[1] >= 0.25
+        Random.seed!(777)
+        w = mkwalker()
+        insert_particle!(w, SVector(5.0, 5.0, 5.0)u"Å", :Ar)
+        _, _, stats = MC_muVT_walk!(1, w, lj0, T300; zV=0.01, species=:Ar, p_move=0.0, p_insert=0.25)
+        @test w.list_num_par == [0]
+        @test (stats.delete_attempted, stats.delete_accepted) == (1, 1)
+        @test rand() == probe[3]
+
+        # Deletion, combined < 1: the Metropolis uniform IS drawn (3 draws)
+        Random.seed!(777)
+        w = mkwalker()
+        insert_particle!(w, SVector(5.0, 5.0, 5.0)u"Å", :Ar)
+        _, _, stats = MC_muVT_walk!(1, w, lj0, T300; zV=1.0e6, species=:Ar, p_move=0.0, p_insert=0.25)
+        @test w.list_num_par == [1]
+        @test (stats.delete_attempted, stats.delete_accepted) == (1, 0)
+        @test rand() == probe[4]
+
+        # Zero-interaction displacement: dU = 0 accepts downhill-style with NO
+        # Metropolis draw (channel + index + three walk displacements = 5)
+        Random.seed!(779)
+        probe779 = [rand() for _ in 1:8]
+        @test probe779[1] < 1.0
+        Random.seed!(779)
+        w = mkwalker()
+        insert_particle!(w, SVector(5.0, 5.0, 5.0)u"Å", :Ar)
+        _, _, stats = MC_muVT_walk!(1, w, lj0, T300; zV=1.0, species=:Ar, p_move=1.0, p_insert=0.0)
+        @test (stats.move_attempted, stats.move_accepted) == (1, 1)
+        @test rand() == probe779[6]
+
+        # Uphill displacement from the exact pair minimum: any move raises the
+        # pair energy, so the Metropolis uniform IS drawn (6 draws)
+        lj_up = LJParameters(epsilon=0.05, sigma=2.5, cutoff=3.0, shift=true)
+        r0 = 2.5 * 2.0^(1 / 6)
+        Random.seed!(781)
+        probe781 = [rand() for _ in 1:8]
+        Random.seed!(781)
+        wp = AtomWalker(FastSystem(atomic_system(
+            [:Ar => [2.0, 5.0, 5.0]u"Å", :Ar => [2.0 + r0, 5.0, 5.0]u"Å"], box, pbc)))
+        wp.energy = interacting_energy(wp.configuration, lj_up, wp.list_num_par, wp.frozen)
+        _, _, stats = MC_muVT_walk!(1, wp, lj_up, T300; zV=1.0, species=:Ar,
+                                    p_move=1.0, p_insert=0.0, step_size=0.3)
+        @test stats.move_attempted == 1
+        @test rand() == probe781[7]
+
+        # Guard skips consume only the channel draw and count no attempt
+        Random.seed!(777)
+        w = mkwalker()
+        _, _, stats = MC_muVT_walk!(1, w, lj0, T300; zV=8.0, species=:Ar, p_move=0.0, p_insert=0.25)
+        @test stats == (move_attempted=0, move_accepted=0, insert_attempted=0,
+                        insert_accepted=0, delete_attempted=0, delete_accepted=0)
+        @test rand() == probe[2]
+    end
+
+    @testset "ideal-gas Poisson closure (seeded, calibrated)" begin
+        Random.seed!(91001)
+        w = mkwalker()
+        MC_muVT_walk!(20_000, w, lj0, T300; zV=3.0, species=:Ar)
+        ns = Int[]
+        for _ in 1:20_000
+            MC_muVT_walk!(10, w, lj0, T300; zV=3.0, species=:Ar)
+            push!(ns, w.list_num_par[1])
+        end
+        @test abs(mean(ns) - 3.0) < 0.11
+        @test abs(var(ns) - 3.0) < 0.18
+        @test abs(count(iszero, ns) / length(ns) - poisson_pmf(3.0, 0)) < 0.0055
+        @test length(w.configuration) == w.list_num_par[1]
+    end
+
+    @testset "fixed-N Boltzmann law for the pair distance (seeded, calibrated)" begin
+        lj = LJParameters(epsilon=0.02, sigma=2.5, cutoff=2.5, shift=true)
+        kb = 8.617333262e-5
+        β = 1 / (kb * T300)
+        u_of(r) = ustrip(u"eV", FreeBird.AbstractPotentials.lj_energy((r)u"Å", lj))
+        simpson(f, a, b; n=2000) = (h = (b - a) / n;
+            h / 3 * sum(k -> f(a + k * h) * (k == 0 || k == n ? 1 : (isodd(k) ? 4 : 2)), 0:n))
+        R_ref = simpson(r -> r^2 * exp(-β * u_of(r)), 2.5, 2.9) /
+                simpson(r -> r^2 * exp(-β * u_of(r)), 3.3, 3.7)
+        Random.seed!(92001)
+        w = AtomWalker(FastSystem(atomic_system(
+            [:Ar => [2.0, 5.0, 5.0]u"Å", :Ar => [4.8, 5.0, 5.0]u"Å"], box, pbc)))
+        w.energy = interacting_energy(w.configuration, lj, w.list_num_par, w.frozen)
+        MC_muVT_walk!(50_000, w, lj, T300; zV=1.0, species=:Ar, p_move=1.0, p_insert=0.0, step_size=0.8)
+        c1 = 0; c2 = 0
+        for _ in 1:200_000
+            MC_muVT_walk!(5, w, lj, T300; zV=1.0, species=:Ar, p_move=1.0, p_insert=0.0, step_size=0.8)
+            d = ustrip(u"Å", FreeBird.EnergyEval.pbc_dist(position(w.configuration, 1),
+                                                          position(w.configuration, 2),
+                                                          w.configuration))
+            (2.5 <= d < 2.9) && (c1 += 1)
+            (3.3 <= d < 3.7) && (c2 += 1)
+        end
+        @test abs(c1 / c2 - R_ref) / R_ref < 0.012
+    end
+
+    @testset "incremental-energy drift audit" begin
+        lj = LJParameters(epsilon=0.01, sigma=2.5, cutoff=2.5, shift=true)
+        Random.seed!(93001)
+        w = mkwalker()
+        MC_muVT_walk!(20_000, w, lj, T300; zV=6.0, species=:Ar, step_size=0.6)
+        E_re = interacting_energy(w.configuration, lj, w.list_num_par, w.frozen) + w.energy_frozen_part
+        @test abs(ustrip(u"eV", w.energy - E_re)) < 5e-10
+        @test length(w.configuration) == w.list_num_par[1]
+    end
+
+    @testset "same-seed determinism" begin
+        lj = LJParameters(epsilon=0.01, sigma=2.5, cutoff=2.5, shift=true)
+        outs = map(1:2) do _
+            Random.seed!(94001)
+            w = mkwalker()
+            _, rate, stats = MC_muVT_walk!(5_000, w, lj, T300; zV=4.0, species=:Ar)
+            (w.list_num_par[1], ustrip(u"eV", w.energy), rate, stats)
+        end
+        @test outs[1] == outs[2]
+    end
+end

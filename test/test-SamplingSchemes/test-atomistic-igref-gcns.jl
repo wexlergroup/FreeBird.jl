@@ -512,3 +512,108 @@ end
         @test e1.num_particles == e2.num_particles
     end
 end
+
+@testset "cavity-bias plumbing for the ideal-gas-referenced driver" begin
+    using Random
+    # Calibration ledger: driver-level biased (p_bias = 0.4, r = 2.3 A,
+    # grid = 10) vs uniform runs on the dilute LJ fixture (z0V = 6, K = 16,
+    # 150 steps, logXi at the 300 K anchor; seeds 7400x/7410x): diffs 0.2027,
+    # 0.6164, 0.1150, mixed signs; gate 1.85 nats (3x the max). This wiring
+    # gate is deliberately loose: the kernel-level stationarity, invariance,
+    # and locator-oracle tests carry the sharp end of the bias correctness.
+    cav_L = 12.0
+    cav_box = [[cav_L * u"Å", 0u"Å", 0u"Å"],
+               [0u"Å", cav_L * u"Å", 0u"Å"],
+               [0u"Å", 0u"Å", cav_L * u"Å"]]
+    cav_lj = LJParameters(epsilon=0.01, sigma=2.5, cutoff=3.0, shift=true)
+    function cav_uwalker(N)
+        while true
+            coor = [:Ar => [rand(), rand(), rand()] for _ in 1:N]
+            sys = FastSystem(periodic_system(coor, cav_box, fractional=true))
+            E = ustrip(u"eV", interacting_energy(sys, cav_lj))
+            (isfinite(E) && E < 100.0) && return AtomWalker(sys)
+        end
+    end
+    cav_save(tag) = SaveEveryN(df_filename="_$(tag).csv", wk_filename="_$(tag).w.extxyz",
+                               ls_filename="_$(tag).l.extxyz",
+                               n_traj=10^8, n_snap=10^8, n_info=10^8)
+    cav_rm(tag) = for f in ("_$(tag).csv", "_$(tag).w.extxyz", "_$(tag).l.extxyz")
+        rm(f, force=true)
+    end
+    function cav_run(routine, seed, tag; n_steps=150)
+        Random.seed!(seed)
+        ls = LJAtomWalkers([cav_uwalker(1) for _ in 1:16], cav_lj)
+        params = AtomisticIGRefGCNSParameters(mc_steps=100,
+            reference_activity=(6.0 / cav_L^3)u"Å^-3", species=:Ar,
+            allowed_fail_count=100_000)
+        df, fls, pout = ideal_gas_referenced_nested_sampling(ls, params, n_steps, routine, cav_save(tag))
+        cav_rm(tag)
+        return df, fls, pout
+    end
+
+    @testset "routine validation" begin
+        r = MCAtomGrandCanonicalMoves()
+        @test r.p_bias == 0.0 && r.bias_radius == 0.0 && r.bias_grid == 0
+        @test_throws ArgumentError MCAtomGrandCanonicalMoves(p_bias=1.5, bias_radius=2.0, bias_grid=8)
+        @test_throws ArgumentError MCAtomGrandCanonicalMoves(p_bias=0.5)
+        @test_logs (:warn, r"p_bias = 1") match_mode = :any begin
+            MCAtomGrandCanonicalMoves(p_bias=1.0, bias_radius=2.0, bias_grid=8)
+        end
+    end
+
+    @testset "defaults stream identity" begin
+        df1, _, _ = cav_run(MCAtomGrandCanonicalMoves(), 75001, "cd1")
+        df2, _, _ = cav_run(MCAtomGrandCanonicalMoves(p_bias=0.0, bias_radius=0.0, bias_grid=0),
+                            75001, "cd2")
+        @test df1.emax == df2.emax
+        @test df1.num_particles == df2.num_particles
+    end
+
+    @testset "driver-level biased run (seeded, calibrated)" begin
+        kb = 8.617333262e-5
+        lam300 = ustrip(u"Å", FreeBird.AnalysisTools._thermal_wavelength(39.948u"u", 300.0u"K"))
+        mu300 = (kb * 300 * (log(6.0 / cav_L^3) + 3 * log(lam300))) * u"eV"
+        function reduce_run(df, fls)
+            live_e = [ustrip(u"eV", w.energy) for w in fls.walkers]
+            live_n = [w.list_num_par[1] for w in fls.walkers]
+            out = gc_thermodynamic_stats_ideal_ref(df, (cav_L^3)u"Å^3", 39.948u"u",
+                (6.0 / cav_L^3)u"Å^-3", [mu300], [300.0]u"K";
+                live_emax=live_e, live_numbers=live_n)
+            return out.logXi[1, 1]
+        end
+        df_off, fls_off, _ = cav_run(MCAtomGrandCanonicalMoves(), 74001, "coff")
+        df_on, fls_on, p_on = cav_run(MCAtomGrandCanonicalMoves(p_bias=0.4, bias_radius=2.3, bias_grid=10),
+                                      74101, "con")
+        @test names(df_on) == names(df_off)
+        @test abs(reduce_run(df_off, fls_off) - reduce_run(df_on, fls_on)) < 1.85
+        # the biased sub-channel fired and its counters flowed into the run totals
+        @test get(p_on.move_stats, :insert_biased_attempted, 0) > 0
+        @test get(p_on.move_stats, :insert_biased_accepted, 0) <=
+              get(p_on.move_stats, :insert_biased_attempted, 0)
+    end
+
+    @testset "refill-path forwarding" begin
+        # the shipped tie fixture with the channel enabled: the deterministic
+        # eviction charges are unchanged (exact logs of integer ratios), and the
+        # refill path runs the biased kernel without disturbing the contract
+        Random.seed!(52530)
+        dup_sys = FastSystem(periodic_system([:Ar => [0.30, 0.5, 0.5]], cav_box, fractional=true))
+        dups = [AtomWalker{1}(deepcopy(dup_sys)) for _ in 1:4]
+        for d in dups
+            d.energy = 0.0u"eV"
+        end
+        deeper = [cav_uwalker(2) for _ in 1:2]
+        ls = LJAtomWalkers(vcat(dups, deeper), cav_lj)
+        params = AtomisticIGRefGCNSParameters(mc_steps=40,
+            reference_activity=(2.0 / cav_L^3)u"Å^-3", species=:Ar,
+            allowed_fail_count=100_000)
+        routine = MCAtomGrandCanonicalMoves(p_bias=0.4, bias_radius=2.3, bias_grid=10)
+        df, fls, _ = ideal_gas_referenced_nested_sampling(ls, params, 30, routine, cav_save("crf"))
+        cav_rm("crf")
+        # walkers below zero exist (the deeper pair walkers), so the E = 0
+        # plateau of the four duplicates is a genuine tie block
+        charges = df.log_compression[1:3]
+        @test charges ≈ [log(5 / 6), log(4 / 5), log(3 / 4)] atol = 1e-14
+        @test length(fls.walkers) >= 2
+    end
+end

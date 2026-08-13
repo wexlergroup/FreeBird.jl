@@ -2100,10 +2100,12 @@ end
 
 Move routine for atomistic ideal-gas-referenced grand-canonical nested sampling:
 single-atom displacements mixed with continuous-space insertions and deletions through
-the atomistic `MC_grand_canonical_walk!` kernel. Deliberately lean: the lattice
-`MCGrandCanonicalMoves` carries cluster and biased-insertion configuration that has no
-continuous-space counterpart yet, and silently ignored fields on a mismatched routine
-are a known hazard class.
+the atomistic `MC_grand_canonical_walk!` kernel, optionally cavity-biased through the
+kernel's deterministic grid-cell channel (`p_bias`, `bias_radius`, `bias_grid`,
+forwarded verbatim; the defaults keep the uniform channel and its random stream
+bit-identically). Deliberately lean otherwise: the lattice `MCGrandCanonicalMoves`
+carries cluster configuration that has no continuous-space counterpart, and silently
+ignored fields on a mismatched routine are a known hazard class.
 
 # Fields
 - `p_move::Float64`: Probability of a displacement move.
@@ -2129,12 +2131,18 @@ struct MCAtomGrandCanonicalMoves <: MCRoutine
     galilean_steps::Int
     galilean_n_refresh::Int
     galilean_step_size::Float64
+    p_bias::Float64
+    bias_radius::Float64
+    bias_grid::Int
     function MCAtomGrandCanonicalMoves(; p_move::Float64=0.5, p_insert::Float64=0.25,
                                        step_rate_source::Symbol=:mixed,
                                        mc_steps_per_particle::Float64=0.0,
                                        galilean_steps::Int=0,
                                        galilean_n_refresh::Int=8,
-                                       galilean_step_size::Float64=0.5)
+                                       galilean_step_size::Float64=0.5,
+                                       p_bias::Float64=0.0,
+                                       bias_radius::Float64=0.0,
+                                       bias_grid::Int=0)
         if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
             throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
         end
@@ -2147,8 +2155,18 @@ struct MCAtomGrandCanonicalMoves <: MCRoutine
         if galilean_steps < 0 || galilean_n_refresh <= 0 || galilean_step_size <= 0.0
             throw(ArgumentError("galilean_steps must be non-negative and galilean_n_refresh, galilean_step_size positive"))
         end
+        if p_bias < 0.0 || p_bias > 1.0
+            throw(ArgumentError("p_bias must lie in [0, 1]"))
+        end
+        if p_bias > 0.0 && (bias_radius <= 0.0 || bias_grid < 1)
+            throw(ArgumentError("a biased insertion channel (p_bias > 0) requires bias_radius > 0 and bias_grid >= 1"))
+        end
+        if p_bias == 1.0
+            @warn "p_bias = 1: any deletion whose vacated cell is not a post-deletion cavity cell auto-rejects, which can freeze dense states; a mixed channel (p_bias < 1) keeps the chain irreducible." maxlog=1
+        end
         new(p_move, p_insert, step_rate_source, mc_steps_per_particle,
-            galilean_steps, galilean_n_refresh, galilean_step_size)
+            galilean_steps, galilean_n_refresh, galilean_step_size,
+            p_bias, bias_radius, bias_grid)
     end
 end
 
@@ -2408,7 +2426,9 @@ function nested_sampling_step!(liveset::AtomWalkers,
                     _gc_walk_length(params, mc_routine, at_r.list_num_par[1]), at_r, pot, emax;
                     z0V=z0V, species=params.species,
                     p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
-                    step_size=params.step_size)
+                    step_size=params.step_size,
+                    p_bias=mc_routine.p_bias, bias_radius=mc_routine.bias_radius,
+                    bias_grid=mc_routine.bias_grid)
                 if accept_r && mc_routine.galilean_steps > 0 && at_r.list_num_par[1] > 0
                     # Optional reflective decorrelation burst at the clone's
                     # current particle count; measure-preserving at fixed N, so
@@ -2448,7 +2468,9 @@ function nested_sampling_step!(liveset::AtomWalkers,
         _gc_walk_length(params, mc_routine, to_walk.list_num_par[1]), to_walk, pot, emax;
         z0V=z0V, species=params.species,
         p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
-        step_size=params.step_size)
+        step_size=params.step_size,
+        p_bias=mc_routine.p_bias, bias_radius=mc_routine.bias_radius,
+        bias_grid=mc_routine.bias_grid)
     if accept && mc_routine.galilean_steps > 0 && to_walk.list_num_par[1] > 0
         # Optional reflective decorrelation burst (see the refill branch)
         MC_galilean_walk!(mc_routine.galilean_steps, to_walk, pot, emax;

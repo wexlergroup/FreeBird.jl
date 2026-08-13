@@ -1050,3 +1050,176 @@ end
         @test outs[1] == outs[2]
     end
 end
+
+# Test-local pairwise potential for the Galilean measure tests: a harmonic pair
+# whose ceiling-constrained relative coordinate is exactly uniform in a ball
+# (struct defined at file top level; testset bodies cannot define types)
+struct HarmonicPairPotential <: FreeBird.AbstractPotentials.SingleComponentPotential{FreeBird.AbstractPotentials.Pairwise}
+    k::typeof(1.0u"eV/Å^2")
+end
+FreeBird.AbstractPotentials.pair_energy(r::typeof(1.0u"Å"), hp::HarmonicPairPotential) = hp.k * r^2
+
+@testset "Galilean reflective walk kernel" begin
+    using Random
+    # Calibration ledger (gates at >= 3x the max three-seed deviation, per stat):
+    # - Free-particle uniformity (20 A box, 40k trajectories, seeds 8500x):
+    #   max octant-occupancy dev 0.0034 (gate 0.011); mean-x dev 0.031 A (gate 0.1).
+    # - Harmonic-pair ball (k = 0.01 eV/A^2, emax = 0.09 eV, R = 3 A, seeds
+    #   8600x): <r^2> max rel dev 0.0053 vs the closed form 3R^2/5 (gate 0.016);
+    #   the support never exceeds R (exact bound).
+    # - LJ shell vs a rejection-sampled reference (mean pair distance ref
+    #   3.0769, seeds 8800x): max dev 0.0018 (gate 0.006).
+    box20 = [[20.0, 0.0, 0.0], [0.0, 20.0, 0.0], [0.0, 0.0, 20.0]]u"Å"
+    pbc20 = (true, true, true)
+    lj_g = LJParameters(epsilon=0.05, sigma=2.5, cutoff=2.0, shift=true)
+
+    @testset "argument validation and guards" begin
+        w = AtomWalker(FastSystem(atomic_system([:Ar => [5.0, 5.0, 5.0]u"Å"], box20, pbc20)))
+        w.energy = 0.0u"eV"
+        @test_throws ArgumentError MC_galilean_walk!(1, w, lj_g, 1.0u"eV"; step_size=0.0, n_refresh=4)
+        @test_throws ArgumentError MC_galilean_walk!(1, w, lj_g, 1.0u"eV"; step_size=0.5, n_refresh=0)
+        frozen_w = AtomWalker(FastSystem(atomic_system([:Ar => [5.0, 5.0, 5.0]u"Å"], box20, pbc20));
+                              freeze_species=[:Ar])
+        @test_throws ArgumentError MC_galilean_walk!(1, frozen_w, lj_g, 1.0u"eV"; step_size=0.5, n_refresh=4)
+        # non-periodic walls mirror positions without reversing the velocity,
+        # which breaks reversibility: the kernel rejects them at entry
+        open_w = AtomWalker(FastSystem(atomic_system([:Ar => [5.0, 5.0, 5.0]u"Å"], box20,
+                                                     (true, true, false))))
+        open_w.energy = 0.0u"eV"
+        @test_throws ArgumentError MC_galilean_walk!(1, open_w, lj_g, 1.0u"eV"; step_size=0.5, n_refresh=4)
+        # empty walker: unchanged, no acceptance
+        empty_sys = FastSystem(cell_vectors(w.configuration), pbc20,
+                               empty(position(w.configuration, :)),
+                               empty(species(w.configuration, :)),
+                               empty(mass(w.configuration, :)))
+        we = AtomWalker{1}(empty_sys); we.energy = 0.0u"eV"
+        acc, rate, _ = MC_galilean_walk!(3, we, lj_g, 1.0u"eV"; step_size=0.5, n_refresh=4)
+        @test acc == false && rate == 0.0
+        # a single free particle under a non-binding ceiling never reflects
+        Random.seed!(84001)
+        w1 = AtomWalker(FastSystem(atomic_system([:Ar => [5.0, 5.0, 5.0]u"Å"], box20, pbc20)))
+        w1.energy = 0.0u"eV"
+        acc, rate, _ = MC_galilean_walk!(10, w1, LJParameters(epsilon=0.0), 1.0u"eV";
+                                         step_size=2.0, n_refresh=4)
+        @test acc == true && rate == 1.0
+    end
+
+    @testset "Householder reflection: norm preservation and involution" begin
+        Random.seed!(84002)
+        v = [SVector(randn(), randn(), randn()) for _ in 1:4]
+        nrm = sqrt(sum(vi -> sum(abs2, vi), v))
+        v = [vi / nrm for vi in v]
+        g = [SVector(randn(), randn(), randn()) * u"eV/Å" for _ in 1:4]
+        v1, ok1 = FreeBird.MonteCarloMoves._galilean_reflect(v, g)
+        @test ok1
+        @test isapprox(sqrt(sum(vi -> sum(abs2, vi), v1)), 1.0; rtol=1e-12)
+        v2, _ = FreeBird.MonteCarloMoves._galilean_reflect(v1, g)
+        @test all(isapprox(v2[i][k], v[i][k]; atol=1e-13) for i in 1:4 for k in 1:3)
+        # specular answer at an axis-aligned plane: only the x component flips
+        vp = [SVector(0.6, 0.8, 0.0)]
+        gp = [SVector(1.0, 0.0, 0.0) * u"eV/Å"]
+        vr, _ = FreeBird.MonteCarloMoves._galilean_reflect(vp, gp)
+        @test isapprox(vr[1][1], -0.6; atol=1e-14)
+        @test isapprox(vr[1][2], 0.8; atol=1e-14)
+        # zero gradient reports failure and leaves the velocity alone
+        vz, okz = FreeBird.MonteCarloMoves._galilean_reflect(vp, [SVector(0.0, 0.0, 0.0) * u"eV/Å"])
+        @test okz == false && vz === vp
+    end
+
+    @testset "trajectory reversibility through reflections" begin
+        # forward trajectory from (x, v), reverse from (x_end, -v_end): every
+        # trial retraces to the start; per the cross-architecture pin policy the
+        # gate is a floating-point atol, never a digit pin on the cascade
+        w0 = AtomWalker(FastSystem(atomic_system(
+            [:Ar => [10.0, 10.0, 10.0]u"Å", :Ar => [12.9, 10.0, 10.0]u"Å",
+             :Ar => [10.0, 12.9, 10.0]u"Å"], box20, pbc20)))
+        w0.energy = interacting_energy(w0.configuration, lj_g, w0.list_num_par, w0.frozen)
+        emax_r = w0.energy + 0.004u"eV"
+        x0 = copy(w0.configuration.position)
+        n_perturbed = 0
+        for trial in 1:20
+            w = deepcopy(w0)
+            Random.seed!(87000 + trial)
+            raw = [SVector(randn(), randn(), randn()) for _ in 1:3]
+            nrm = sqrt(sum(vi -> sum(abs2, vi), raw))
+            v = [vi / nrm for vi in raw]
+            v_end, ni = FreeBird.MonteCarloMoves._galilean_trajectory!(w, lj_g, emax_r, v, 6, 0.9)
+            ni < 6 && (n_perturbed += 1)
+            v_back = [-vi for vi in v_end]
+            FreeBird.MonteCarloMoves._galilean_trajectory!(w, lj_g, emax_r, v_back, 6, 0.9)
+            dev = maximum(maximum(abs.(ustrip.(u"Å", w.configuration.position[i] - x0[i])))
+                          for i in 1:3)
+            @test dev < 1e-9
+        end
+        # the fixture genuinely exercises reflections and reversals
+        @test n_perturbed == 20
+    end
+
+    @testset "measure preservation: free particle is uniform (seeded, calibrated)" begin
+        Random.seed!(85001)
+        w = AtomWalker(FastSystem(atomic_system([:Ar => [5.0, 5.0, 5.0]u"Å"], box20, pbc20)))
+        w.energy = 0.0u"eV"
+        counts = zeros(Int, 8)
+        xsum = 0.0
+        n_samp = 40_000
+        for _ in 1:n_samp
+            MC_galilean_walk!(1, w, LJParameters(epsilon=0.0), 1.0u"eV"; step_size=4.0, n_refresh=4)
+            p = ustrip.(u"Å", position(w.configuration, 1))
+            counts[1 + (p[1] > 10) + 2 * (p[2] > 10) + 4 * (p[3] > 10)] += 1
+            xsum += p[1]
+        end
+        @test maximum(abs.(counts ./ n_samp .- 0.125)) < 0.011
+        @test abs(xsum / n_samp - 10.0) < 0.1
+    end
+
+    @testset "measure preservation: harmonic pair fills the ball uniformly (seeded, calibrated)" begin
+        # the ceiling-constrained relative coordinate is uniform in the ball of
+        # radius R = sqrt(emax/k): <r^2> = 3R^2/5, and the support never leaves
+        # the ball; the reflection direction here comes from the generic
+        # finite-difference pair_force fallback, exercised in production use
+        hp = HarmonicPairPotential(0.01u"eV/Å^2")
+        Random.seed!(86001)
+        w = AtomWalker(FastSystem(atomic_system(
+            [:Ar => [10.0, 10.0, 10.0]u"Å", :Ar => [11.0, 10.0, 10.0]u"Å"], box20, pbc20)))
+        w.energy = interacting_energy(w.configuration, hp, w.list_num_par, w.frozen)
+        r2sum = 0.0
+        r2max = 0.0
+        n_samp = 40_000
+        for _ in 1:n_samp
+            MC_galilean_walk!(1, w, hp, 0.09u"eV"; step_size=1.5, n_refresh=4)
+            d = pbc_displacement(position(w.configuration, 1), position(w.configuration, 2),
+                                 w.configuration)
+            r2 = sum(x -> ustrip(u"Å", x)^2, d)
+            r2sum += r2
+            r2max = max(r2max, r2)
+        end
+        @test abs(r2sum / n_samp - 5.4) / 5.4 < 0.016
+        @test r2max <= 9.0
+    end
+
+    @testset "measure preservation: LJ shell against a rejection-sampled reference (seeded, calibrated)" begin
+        emax_s = -0.02
+        Random.seed!(1)
+        rs = Float64[]
+        while length(rs) < 400_000
+            r = 5.0 * cbrt(rand())
+            (ustrip(u"eV", FreeBird.AbstractPotentials.lj_energy((r)u"Å", lj_g)) < emax_s) && push!(rs, r)
+        end
+        ref = mean(rs)
+        Random.seed!(88001)
+        w = AtomWalker(FastSystem(atomic_system(
+            [:Ar => [10.0, 10.0, 10.0]u"Å", :Ar => [12.8, 10.0, 10.0]u"Å"], box20, pbc20)))
+        w.energy = interacting_energy(w.configuration, lj_g, w.list_num_par, w.frozen)
+        dsum = 0.0
+        n_samp = 40_000
+        for _ in 1:n_samp
+            MC_galilean_walk!(1, w, lj_g, (emax_s)u"eV"; step_size=0.8, n_refresh=4)
+            dsum += ustrip(u"Å", pbc_dist(position(w.configuration, 1),
+                                          position(w.configuration, 2), w.configuration))
+        end
+        @test abs(dsum / n_samp - ref) < 0.006
+        # full-recompute energies never drift from the configuration
+        E_re = interacting_energy(w.configuration, lj_g, w.list_num_par, w.frozen)
+        @test w.energy == E_re
+    end
+end

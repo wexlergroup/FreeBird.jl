@@ -30,6 +30,7 @@ export lattice_insert_particle!, lattice_delete_particle!
 export lattice_biased_sites
 export MC_grand_canonical_walk!
 export MC_muVT_walk!
+export MC_galilean_walk!
 
 export free_component_index, free_par_index
 

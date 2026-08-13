@@ -32,6 +32,7 @@ export NestedSamplingParameters
 export LatticeNestedSamplingParameters
 export WangLandauParameters
 export MetropolisMCParameters
+export MuVTMCParameters
 
 # nested sampling related functions
 export sort_by_energy!, nested_sampling_step!
@@ -72,6 +73,7 @@ include("nested_sampling.jl")
 include("exact_enumeration.jl")
 
 include("nvt_monte_carlo.jl")
+include("muvt_monte_carlo.jl")
 
 include("wang_landau.jl")
 

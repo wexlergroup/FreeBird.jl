@@ -2009,6 +2009,93 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
     return df, liveset, params
 end
 """
+    struct MCGalileanWalk <: MCRoutine
+
+Move routine for canonical atomistic nested sampling through the Galilean
+reflective walk kernel `MC_galilean_walk!`: all free particles move
+collectively along straight lines, reflecting off the constraint boundary
+through the energy gradient. Clone semantics (a random survivor is cloned and
+decorrelated); three-dimensional only. `ns_params.mc_steps` sets the number of
+trajectories per replacement and `ns_params.step_size` the 3N-space segment
+length, adapted through the standard step-size machinery on the segment rate.
+
+# Fields
+- `n_refresh::Int`: Straight-line segments per trajectory (velocity redrawn
+  between trajectories).
+"""
+struct MCGalileanWalk <: MCRoutine
+    n_refresh::Int
+    function MCGalileanWalk(; n_refresh::Int=8)
+        n_refresh > 0 || throw(ArgumentError("n_refresh must be positive"))
+        new(n_refresh)
+    end
+end
+
+"""
+    nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters,
+                          mc_routine::MCGalileanWalk; ns_iteration::Int=0)
+
+One canonical nested-sampling step decorrelated by the Galilean reflective walk:
+the shape of the serial random-walk step (plateau-aware tie eviction included,
+with refill walks running the reflective kernel below the plateau), with the
+replacement clone drawn from the survivors and decorrelated through
+`MC_galilean_walk!`. Returns the serial steps' five-value shape, so the driver
+records `log_compression` as usual.
+"""
+function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCGalileanWalk; ns_iteration::Int=0)
+    sort_by_energy!(liveset)
+    ats = liveset.walkers
+    pot = liveset.potential
+    iter::Union{Missing,Int} = missing
+    emax::Union{Missing,typeof(0.0u"eV")} = liveset.walkers[1].energy
+    log_t::Union{Missing,Float64} = missing
+    n_live = length(ats)
+    n_tied = _tie_block_length(ats)
+    if (n_tied >= 2 || ns_params.plateau_refill_target != 0) && n_tied < n_live
+        if ns_params.plateau_refill_target == 0
+            ns_params.plateau_refill_target = n_live
+        end
+        popfirst!(ats)
+        update_iter!(liveset)
+        iter = liveset.walkers[1].iter
+        log_t = log((n_live - 1) / n_live)
+        if n_tied == 1
+            refill_fails = 0
+            while length(ats) < ns_params.plateau_refill_target && refill_fails < ns_params.allowed_fail_count
+                accept_r, _, at_r = MC_galilean_walk!(ns_params.mc_steps, deepcopy(rand(ats)), pot, emax;
+                                                      step_size=ns_params.step_size,
+                                                      n_refresh=mc_routine.n_refresh)
+                if accept_r
+                    push!(ats, at_r)
+                else
+                    refill_fails += 1
+                end
+            end
+            length(ats) < ns_params.plateau_refill_target && @warn "Plateau refill left the live set at $(length(ats)) of $(ns_params.plateau_refill_target) walkers after $(refill_fails) failed decorrelation attempts; subsequent culls are charged with the actual live count."
+            ns_params.plateau_refill_target = 0
+        end
+        return iter, emax, liveset, ns_params, log_t
+    end
+    to_walk = deepcopy(rand(ats[2:end]))
+    accept, rate, at = MC_galilean_walk!(ns_params.mc_steps, to_walk, pot, emax;
+                                         step_size=ns_params.step_size,
+                                         n_refresh=mc_routine.n_refresh)
+    if accept
+        push!(ats, at)
+        popfirst!(ats)
+        update_iter!(liveset)
+        ns_params.fail_count = 0
+        iter = liveset.walkers[1].iter
+        log_t = log(n_live / (n_live + 1))
+    else
+        emax = missing
+        ns_params.fail_count += 1
+    end
+    adjust_step_size(ns_params, rate; range=ns_params.accept_range)
+    return iter, emax, liveset, ns_params, log_t
+end
+
+"""
     struct MCAtomGrandCanonicalMoves <: MCRoutine
 
 Move routine for atomistic ideal-gas-referenced grand-canonical nested sampling:
@@ -2039,9 +2126,15 @@ struct MCAtomGrandCanonicalMoves <: MCRoutine
     p_insert::Float64
     step_rate_source::Symbol
     mc_steps_per_particle::Float64
+    galilean_steps::Int
+    galilean_n_refresh::Int
+    galilean_step_size::Float64
     function MCAtomGrandCanonicalMoves(; p_move::Float64=0.5, p_insert::Float64=0.25,
                                        step_rate_source::Symbol=:mixed,
-                                       mc_steps_per_particle::Float64=0.0)
+                                       mc_steps_per_particle::Float64=0.0,
+                                       galilean_steps::Int=0,
+                                       galilean_n_refresh::Int=8,
+                                       galilean_step_size::Float64=0.5)
         if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
             throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
         end
@@ -2051,7 +2144,11 @@ struct MCAtomGrandCanonicalMoves <: MCRoutine
         if !(mc_steps_per_particle >= 0.0)
             throw(ArgumentError("mc_steps_per_particle must be non-negative"))
         end
-        new(p_move, p_insert, step_rate_source, mc_steps_per_particle)
+        if galilean_steps < 0 || galilean_n_refresh <= 0 || galilean_step_size <= 0.0
+            throw(ArgumentError("galilean_steps must be non-negative and galilean_n_refresh, galilean_step_size positive"))
+        end
+        new(p_move, p_insert, step_rate_source, mc_steps_per_particle,
+            galilean_steps, galilean_n_refresh, galilean_step_size)
     end
 end
 
@@ -2312,6 +2409,14 @@ function nested_sampling_step!(liveset::AtomWalkers,
                     z0V=z0V, species=params.species,
                     p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
                     step_size=params.step_size)
+                if accept_r && mc_routine.galilean_steps > 0 && at_r.list_num_par[1] > 0
+                    # Optional reflective decorrelation burst at the clone's
+                    # current particle count; measure-preserving at fixed N, so
+                    # the composition preserves the constrained reference
+                    MC_galilean_walk!(mc_routine.galilean_steps, at_r, pot, emax;
+                                      step_size=mc_routine.galilean_step_size,
+                                      n_refresh=mc_routine.galilean_n_refresh)
+                end
                 if accept_r
                     # Re-anchor the clone's energy from scratch: the kernel's
                     # incremental bookkeeping leaves dust that would fragment
@@ -2344,6 +2449,12 @@ function nested_sampling_step!(liveset::AtomWalkers,
         z0V=z0V, species=params.species,
         p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
         step_size=params.step_size)
+    if accept && mc_routine.galilean_steps > 0 && to_walk.list_num_par[1] > 0
+        # Optional reflective decorrelation burst (see the refill branch)
+        MC_galilean_walk!(mc_routine.galilean_steps, to_walk, pot, emax;
+                          step_size=mc_routine.galilean_step_size,
+                          n_refresh=mc_routine.galilean_n_refresh)
+    end
     if accept
         # Re-anchor the clone's energy from scratch (see the refill branch)
         to_walk.energy = interacting_energy(to_walk.configuration, pot,

@@ -1224,3 +1224,204 @@ FreeBird.AbstractPotentials.pair_energy(r::typeof(1.0u"Å"), hp::HarmonicPairPot
         @test w.energy == E_re
     end
 end
+
+@testset "continuous cavity-biased insertion channel" begin
+    using Random
+    # Calibration ledger (gates at >= 3x the max three-seed deviation, per stat,
+    # per corner):
+    # - Stationarity with the bias on (ideal gas, non-binding ceiling,
+    #   p_bias = 0.5, bias_radius = 2.3, bias_grid = 10; seeds 6100x):
+    #   z0V = 3 max devs mean 0.0378, var 0.0947 (gates 0.12, 0.29);
+    #   z0V = 8 max devs mean 0.0943, var 0.3382 (gates 0.29, 1.05).
+    # - Ensemble invariance at p_bias = 1 (1500 chains from exact
+    #   Poisson-uniform prior draws, 15 kernel steps; seeds 6200x): max devs
+    #   mean 0.0633, var 0.0458, p0 0.0035 (gates 0.19, 0.14, 0.011).
+    box_c = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]]u"Å"
+    pbc_c = (true, true, true)
+    seed_c = FastSystem(atomic_system([:Ar => [1.0, 1.0, 1.0]u"Å"], box_c, pbc_c))
+    mkempty_c() = FastSystem(cell_vectors(seed_c), periodicity(seed_c),
+                             empty(position(seed_c, :)), empty(species(seed_c, :)),
+                             empty(mass(seed_c, :)))
+    mkwalker_c() = (w = AtomWalker{1}(mkempty_c()); w.energy = 0.0u"eV"; w)
+    lj0_c = LJParameters(epsilon=0.0)
+    emax_inf_c = Inf * u"eV"
+    boxt = (10.0u"Å", 10.0u"Å", 10.0u"Å")
+    logfact_c(n) = n == 0 ? 0.0 : sum(log, 1:n)
+    poisson_pmf_c(l, n) = exp(n * log(l) - l - logfact_c(n))
+
+    # Naive full-scan oracle for the locator
+    function naive_cavity(config, grid, r_cav; skip=0)
+        L = 10.0
+        h = L / grid
+        pbc = periodicity(config)
+        out = Int[]
+        li = LinearIndices((grid, grid, grid))
+        for iz in 0:(grid - 1), iy in 0:(grid - 1), ix in 0:(grid - 1)
+            c = ((ix + 0.5) * h, (iy + 0.5) * h, (iz + 0.5) * h)
+            clear = true
+            for p in 1:length(config)
+                p == skip && continue
+                pos = ustrip.(u"Å", position(config, p))
+                d2 = 0.0
+                for (ck, pk, per) in zip(c, pos, pbc)
+                    δ = ck - pk
+                    per && (δ -= L * round(δ / L))
+                    d2 += δ^2
+                end
+                if d2 < r_cav^2
+                    clear = false
+                    break
+                end
+            end
+            clear && push!(out, li[ix + 1, iy + 1, iz + 1])
+        end
+        return out
+    end
+
+    @testset "locator units" begin
+        # empty box: every cell is a cavity cell
+        w = mkwalker_c()
+        @test continuous_cavity_cells(w.configuration, boxt, 6, 2.0) == collect(1:216)
+        # centered particle: locator equals the naive oracle
+        insert_particle!(w, SVector(5.0, 5.0, 5.0)u"Å", :Ar)
+        @test continuous_cavity_cells(w.configuration, boxt, 10, 2.3) ==
+              naive_cavity(w.configuration, 10, 2.3)
+        # corner particle: wrap marks cells across the periodic boundary
+        w2 = mkwalker_c()
+        insert_particle!(w2, SVector(0.1, 0.1, 0.1)u"Å", :Ar)
+        cav = continuous_cavity_cells(w2.configuration, boxt, 10, 2.3)
+        far_corner = LinearIndices((10, 10, 10))[10, 10, 10]   # center (9.5, 9.5, 9.5)
+        @test !(far_corner in cav)                              # min-image distance ~1.04
+        @test cav == naive_cavity(w2.configuration, 10, 2.3)
+        # skip semantics: excluding a particle equals removing it
+        w3 = mkwalker_c()
+        insert_particle!(w3, SVector(2.0, 2.0, 2.0)u"Å", :Ar)
+        insert_particle!(w3, SVector(7.0, 7.0, 7.0)u"Å", :Ar)
+        with_skip = continuous_cavity_cells(w3.configuration, boxt, 8, 2.0; skip=2)
+        remove_particle!(w3, 2)
+        @test with_skip == continuous_cavity_cells(w3.configuration, boxt, 8, 2.0)
+        # random configurations: mark-by-particle equals the naive oracle
+        Random.seed!(60001)
+        for _ in 1:10
+            wr = mkwalker_c()
+            for _ in 1:rand(1:6)
+                insert_particle!(wr, SVector(rand() * 10, rand() * 10, rand() * 10)u"Å", :Ar)
+            end
+            @test continuous_cavity_cells(wr.configuration, boxt, 7, 1.9) ==
+                  naive_cavity(wr.configuration, 7, 1.9)
+        end
+    end
+
+    @testset "argument validation" begin
+        w = mkwalker_c()
+        @test_throws ArgumentError MC_grand_canonical_walk!(1, w, lj0_c, emax_inf_c;
+            z0V=1.0, species=:Ar, p_bias=1.5, bias_radius=2.0, bias_grid=8)
+        @test_throws ArgumentError MC_grand_canonical_walk!(1, w, lj0_c, emax_inf_c;
+            z0V=1.0, species=:Ar, p_bias=0.5)
+        @test_logs (:warn, r"p_bias = 1") match_mode = :any begin
+            MC_grand_canonical_walk!(1, w, lj0_c, emax_inf_c;
+                z0V=1.0, species=:Ar, p_bias=1.0, bias_radius=2.0, bias_grid=8)
+        end
+    end
+
+    @testset "stationarity with the bias on (seeded, calibrated)" begin
+        for (z0V, tol_m, tol_v) in ((3.0, 0.12, 0.29), (8.0, 0.29, 1.05))
+            Random.seed!(61001)
+            w = mkwalker_c()
+            MC_grand_canonical_walk!(20_000, w, lj0_c, emax_inf_c; z0V=z0V, species=:Ar,
+                                     p_bias=0.5, bias_radius=2.3, bias_grid=10)
+            ns = Int[]
+            for _ in 1:20_000
+                _, _, _, stats = MC_grand_canonical_walk!(10, w, lj0_c, emax_inf_c;
+                    z0V=z0V, species=:Ar, p_bias=0.5, bias_radius=2.3, bias_grid=10)
+                push!(ns, w.list_num_par[1])
+            end
+            @test abs(mean(ns) - z0V) < tol_m
+            @test abs(var(ns) - z0V) < tol_v
+        end
+        # the biased sub-channel genuinely fires and its counters split cleanly
+        Random.seed!(61010)
+        w = mkwalker_c()
+        _, _, _, stats = MC_grand_canonical_walk!(5_000, w, lj0_c, emax_inf_c;
+            z0V=3.0, species=:Ar, p_bias=0.5, bias_radius=2.3, bias_grid=10)
+        @test stats.insert_biased_attempted > 0
+        @test stats.insert_biased_accepted <= stats.insert_biased_attempted
+        @test stats.insert_biased_attempted <= stats.insert_attempted
+    end
+
+    @testset "ensemble invariance at p_bias = 1 (seeded, calibrated)" begin
+        Random.seed!(62001)
+        z0V = 3.0
+        finals = Int[]
+        for _ in 1:1500
+            w = mkwalker_c()
+            u = rand()
+            c = poisson_pmf_c(z0V, 0)
+            k = 0
+            while u > c
+                k += 1
+                c += poisson_pmf_c(z0V, k)
+            end
+            for _ in 1:k
+                insert_particle!(w, SVector(rand() * 10, rand() * 10, rand() * 10)u"Å", :Ar)
+            end
+            MC_grand_canonical_walk!(15, w, lj0_c, emax_inf_c; z0V=z0V, species=:Ar,
+                p_bias=1.0, bias_radius=2.3, bias_grid=10, p_move=0.0, p_insert=0.5)
+            push!(finals, w.list_num_par[1])
+        end
+        @test abs(mean(finals) - z0V) < 0.19
+        @test abs(var(finals) - z0V) < 0.14
+        @test abs(count(iszero, finals) / 1500 - poisson_pmf_c(z0V, 0)) < 0.011
+    end
+
+    @testset "null proposal and zero reverse density (forced branches)" begin
+        # Empty cavity set: one particle whose exclusion sphere covers every
+        # cell center (max min-image distance sqrt(3)*5 < 9 A); a biased
+        # insertion is a null proposal, counted as attempted, no further draws
+        # (channel draw + sub-channel draw = 2)
+        Random.seed!(881)
+        probe = [rand() for _ in 1:8]
+        @test probe[2] < 0.9   # branch precondition: the sub-draw lands biased
+        Random.seed!(881)
+        w = mkwalker_c()
+        insert_particle!(w, SVector(5.0, 5.0, 5.0)u"Å", :Ar)
+        _, _, _, stats = MC_grand_canonical_walk!(1, w, lj0_c, emax_inf_c;
+            z0V=3.0, species=:Ar, p_move=0.0, p_insert=1.0,
+            p_bias=0.9, bias_radius=9.0, bias_grid=4)
+        @test w.list_num_par == [1]
+        @test (stats.insert_attempted, stats.insert_biased_attempted, stats.insert_accepted) == (1, 1, 0)
+        @test rand() == probe[3]
+
+        # Zero reverse density at p_bias = 1: the vacated position's cell sits
+        # inside the survivor's exclusion sphere, so the deletion rejects with
+        # NO Metropolis draw (channel draw + index draw = 2)
+        Random.seed!(882)
+        probe2 = [rand() for _ in 1:8]
+        Random.seed!(882)
+        w2 = mkwalker_c()
+        insert_particle!(w2, SVector(4.0, 5.0, 5.0)u"Å", :Ar)
+        insert_particle!(w2, SVector(6.0, 5.0, 5.0)u"Å", :Ar)
+        _, _, _, stats2 = MC_grand_canonical_walk!(1, w2, lj0_c, emax_inf_c;
+            z0V=3.0, species=:Ar, p_move=0.0, p_insert=0.0,
+            p_bias=1.0, bias_radius=3.0, bias_grid=5)
+        @test w2.list_num_par == [2]
+        @test (stats2.delete_attempted, stats2.delete_accepted) == (1, 0)
+        @test rand() == probe2[3]
+    end
+
+    @testset "stream neutrality at the defaults" begin
+        # bit-identical trajectories with and without the new kwargs at their
+        # defaults (the shipped digit pins run unmodified elsewhere in this file)
+        lj_n = LJParameters(epsilon=0.01, sigma=2.5, cutoff=2.5)
+        Random.seed!(63001)
+        w1 = mkwalker_c()
+        MC_grand_canonical_walk!(3_000, w1, lj_n, 1.0e5u"eV"; z0V=4.0, species=:Ar, step_size=1.0)
+        Random.seed!(63001)
+        w2 = mkwalker_c()
+        MC_grand_canonical_walk!(3_000, w2, lj_n, 1.0e5u"eV"; z0V=4.0, species=:Ar, step_size=1.0,
+                                 p_bias=0.0, bias_radius=0.0, bias_grid=0)
+        @test w1.list_num_par == w2.list_num_par
+        @test w1.energy == w2.energy
+        @test position(w1.configuration, :) == position(w2.configuration, :)
+    end
+end

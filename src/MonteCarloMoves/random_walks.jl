@@ -1300,3 +1300,146 @@ function MC_grand_canonical_walk!(n_steps::Int,
             insert_attempted=insert_attempted, insert_accepted=insert_accepted,
             delete_attempted=delete_attempted, delete_accepted=delete_accepted)
 end
+"""
+    MC_muVT_walk!(n_steps::Int, at::AtomWalker{1}, pot::SingleComponentPotential{Pairwise},
+                  temperature::Float64;
+                  zV::Float64, species, p_move::Float64=0.5, p_insert::Float64=0.25,
+                  step_size::Float64=0.5, kb::Float64=8.617333262e-5)
+
+Perform a fixed-temperature grand-canonical (μVT) Metropolis walk on a continuous-space
+`AtomWalker{1}`: single-atom displacements under the Boltzmann acceptance
+min(1, e^(-βΔU)), mixed with uniform-in-cell insertions and uniform-among-particles
+deletions under min(1, ratio × e^(-βΔU)), where the ratio is the volume-and-activity
+form of `gc_insert_acceptance_ratio`/`gc_delete_acceptance_ratio` (pre-move particle
+count in both) and ΔU is the post-minus-pre energy change of the proposed move in every
+channel. The fixed-temperature sibling of the nested-sampling kernel above, sharing its
+entry validation, guard-skip discipline, incremental `single_site_energy` path,
+insert-evaluate-revert bookkeeping, and `move_stats` schema; the athermal energy ceiling
+is replaced by the Boltzmann factor, and the dimensionless activity-volume
+`zV = e^(βμ) V / Λ(T)^3` is folded by the caller, mirroring the z0V convention (the
+kernel itself never sees μ or Λ).
+
+Draw discipline: one channel draw per step; the Metropolis uniform is drawn only when
+the combined acceptance factor is below one (for displacements, only when ΔU > 0).
+An insertion landing exactly on a particle (a NaN pair energy) rejects without
+drawing; a +Inf overlap energy underflows the Boltzmann factor to a combined
+factor of exactly zero and rejects through the ordinary draw.
+
+# Arguments
+- `n_steps::Int`: The number of Monte Carlo steps to perform.
+- `at::AtomWalker{1}`: The walker to evolve; a single unfrozen component.
+- `pot::SingleComponentPotential{Pairwise}`: The pairwise potential.
+- `temperature::Float64`: The temperature in Kelvin; must be positive.
+- `zV::Float64`: Dimensionless product of the target activity and the cell volume.
+- `species`: Chemical identity (a `Symbol` or `ChemicalSpecies`) of inserted particles.
+- `p_move::Float64=0.5`: Probability of a displacement move.
+- `p_insert::Float64=0.25`: Probability of an insertion move (deletion takes the remainder).
+- `step_size::Float64=0.5`: Maximum displacement per direction, in Angstrom.
+- `kb::Float64=8.617333262e-5`: The Boltzmann constant in eV/K.
+
+# Returns
+- `at::AtomWalker{1}`: The updated walker.
+- `accept_rate::Float64`: Fraction of accepted moves over `n_steps`.
+- `move_stats::NamedTuple`: Per-move-type attempt/accept counters
+  (`move_*`, `insert_*`, `delete_*`); attempts are counted at proposal, guard skips
+  excluded.
+"""
+function MC_muVT_walk!(n_steps::Int,
+                       at::AtomWalker{1},
+                       pot::SingleComponentPotential{Pairwise},
+                       temperature::Float64;
+                       zV::Float64,
+                       species::Union{Symbol, ChemicalSpecies},
+                       p_move::Float64=0.5,
+                       p_insert::Float64=0.25,
+                       step_size::Float64=0.5,
+                       kb::Float64=8.617333262e-5)
+    if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
+        throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
+    end
+    if zV <= 0.0
+        throw(ArgumentError("zV must be positive"))
+    end
+    if temperature <= 0.0
+        throw(ArgumentError("temperature must be positive"))
+    end
+    if any(at.frozen)
+        throw(ArgumentError("the muVT kernel requires an unfrozen single-component walker"))
+    end
+    config = at.configuration
+    cellv = cell_vectors(config)
+    for i in 1:3, j in 1:3
+        if i != j && !iszero(ustrip(cellv[i][j]))
+            throw(ArgumentError("the muVT kernel assumes an orthorhombic cell (consistent with pbc_dist); found a nonzero off-diagonal cell component"))
+        end
+    end
+    box = (cellv[1][1], cellv[2][2], cellv[3][3])
+
+    β = 1.0 / (kb * temperature)
+    n_accept = 0
+    p_delete = 1.0 - p_move - p_insert
+    move_attempted = 0
+    move_accepted = 0
+    insert_attempted = 0
+    insert_accepted = 0
+    delete_attempted = 0
+    delete_accepted = 0
+
+    for _ in 1:n_steps
+        r = rand()
+        n = at.list_num_par[1]
+        if r < p_move
+            # Displacement: Boltzmann acceptance; uniform drawn only for uphill moves
+            n == 0 && continue          # guard skip: nothing to move
+            move_attempted += 1
+            i_at = rand(1:n)
+            prewalk_energy = single_site_energy(i_at, config, pot, at.list_num_par)
+            orig_pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
+            pos = single_atom_random_walk!(orig_pos, step_size)
+            pos = periodic_boundary_wrap!(pos, config)
+            config.position[i_at] = pos
+            dU = ustrip(u"eV", single_site_energy(i_at, config, pot, at.list_num_par) - prewalk_energy)
+            if dU <= 0.0 || (isfinite(dU) && rand() < exp(-β * dU))
+                at.energy = at.energy + dU * u"eV"
+                n_accept += 1
+                move_accepted += 1
+            else
+                config.position[i_at] = orig_pos
+            end
+        elseif r < p_move + p_insert
+            # Insertion: uniform in the cell, insert-evaluate-revert
+            p_insert <= 0.0 && continue   # guard skip
+            insert_attempted += 1
+            pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
+            insert_particle!(at, pos, species)
+            e_site = ustrip(u"eV", single_site_energy(n + 1, config, pot, at.list_num_par))
+            combined = gc_insert_acceptance_ratio(zV, n, p_insert, p_delete) * exp(-β * e_site)
+            if combined >= 1.0 || (isfinite(combined) && rand() < combined)
+                at.energy = at.energy + e_site * u"eV"
+                n_accept += 1
+                insert_accepted += 1
+            else
+                remove_particle!(at, n + 1)
+            end
+        else
+            # Deletion: uniform among particles; nothing mutates until acceptance
+            (n == 0 || p_delete <= 0.0) && continue          # guard skip
+            delete_attempted += 1
+            i_at = rand(1:n)
+            e_site = ustrip(u"eV", single_site_energy(i_at, config, pot, at.list_num_par))
+            # ΔU = -e_site, so the Boltzmann factor is e^(+β e_site)
+            combined = gc_delete_acceptance_ratio(zV, n, p_insert, p_delete) * exp(β * e_site)
+            if combined >= 1.0 || (isfinite(combined) && rand() < combined)
+                remove_particle!(at, i_at)
+                at.energy = at.energy - e_site * u"eV"
+                n_accept += 1
+                delete_accepted += 1
+            end
+        end
+    end
+
+    return at, n_accept / max(n_steps, 1),
+           (move_attempted=move_attempted, move_accepted=move_accepted,
+            insert_attempted=insert_attempted, insert_accepted=insert_accepted,
+            delete_attempted=delete_attempted, delete_accepted=delete_accepted)
+end

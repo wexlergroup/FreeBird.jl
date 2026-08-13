@@ -7,6 +7,7 @@
     # test NVT Monte Carlo
     include("test-nvt_monte_carlo.jl")
 include("test-muvt-monte-carlo.jl")
+include("test-atomistic-gc-interacting-regressions.jl")
     # test Wang-Landau
     include("test-wang_landau.jl")
     # test grand-canonical nested sampling

@@ -12,7 +12,9 @@ Parameters for the Metropolis Monte Carlo algorithm.
 - `step_size_up::Float64`: The upper bound of the step size.
 - `accept_range::Tuple{Float64, Float64}`: The range of acceptance rates for adjusting the step size.
 e.g. (0.25, 0.75) means that the step size will decrease if the acceptance rate is below 0.25 and increase if it is above 0.75.
-- `random_seed::Int64`: The seed for the random number generator.
+- `random_seed::Int64`: The seed for the random number generator. The `monte_carlo_sampling`
+drivers seed the equilibration phase with `random_seed` and the production phase with
+`random_seed + 1`, so the two phases never share a random stream.
 """
 mutable struct MetropolisMCParameters <: SamplingParameters
     temperatures::Vector{Float64}
@@ -173,7 +175,8 @@ function nvt_monte_carlo(
 
     current_walker = deepcopy(walker)
     current_energy = interacting_energy(current_walker.configuration, pot, current_walker.list_num_par, current_walker.frozen) + current_walker.energy_frozen_part
-    
+    current_walker.energy = current_energy
+
     for i in 1:num_steps
         proposed_walker = deepcopy(current_walker)
         # move the atoms by 1% of the average cell size
@@ -186,10 +189,15 @@ function nvt_monte_carlo(
         if ΔE < 0*e_unit || rand() < exp(-ΔE.val / (kb * temperature))
             current_walker.configuration = proposed_walker.configuration
             current_energy = proposed_energy
+            # Keep the walker's energy field in sync with the tracked energy,
+            # so stored snapshots carry the energy of their own configuration
+            current_walker.energy = current_energy
             accepted_steps += 1
         end
         energies[i] = current_energy
-        configurations[i] = current_walker
+        # Store an independent snapshot: storing the mutated walker itself
+        # would alias every recorded step to the final configuration
+        configurations[i] = deepcopy(current_walker)
     end
 
     return energies, configurations, accepted_steps
@@ -222,7 +230,10 @@ function nvt_monte_carlo(
         freq = [mc_routine.walks_freq, mc_routine.swaps_freq]
         swap_prob = freq[2] / sum(freq)
         proposed_walker = deepcopy(current_walker)
-        # Propose a move
+        # Propose a move: one channel draw per step, so every step performs
+        # exactly one move type (two independent draws would leave a
+        # walks_freq*swaps_freq-weighted channel where neither branch fires and
+        # the unchanged configuration is accepted at ΔE = 0 as a null move)
         if rand() > swap_prob
             config = proposed_walker.configuration
             free_index = free_par_index(proposed_walker)
@@ -233,7 +244,7 @@ function nvt_monte_carlo(
             pos = single_atom_random_walk!(pos, step_size)
             pos = periodic_boundary_wrap!(pos, config)
             config.position[i_at] = pos
-        elseif rand() <= swap_prob
+        else
             #println("Performing a swap move")
             config = proposed_walker.configuration
             free_comp = free_component_index(proposed_walker)
@@ -255,7 +266,9 @@ function nvt_monte_carlo(
             accepted_steps += 1
         end
         energies[i] = current_energy
-        configurations[i] = current_walker
+        # Store an independent snapshot: consecutive rejections would otherwise
+        # alias repeated entries to one mutable walker
+        configurations[i] = deepcopy(current_walker)
         # println(configurations[i])
     end
 
@@ -325,14 +338,16 @@ function monte_carlo_sampling(
         @info "Temperature: $temp K, Equilibration energy: $equi_mean, Variance: $(round(equi_var; sigdigits=4)), Acceptance rate: $(round(equi_rate; sigdigits=4))"
 
 
-        # Sample the lattice
+        # Sample the lattice. The production seed is derived from the
+        # equilibration seed (random_seed + 1): passing the same seed replays
+        # the equilibration random stream, correlating the two phases
         sampling_energies, sampling_configurations, sampling_accepted_steps = nvt_monte_carlo(
             mc_routine,
             equilibration_configurations[end],
             h,
             temp,
             mc_params.sampling_steps,
-            mc_params.random_seed
+            mc_params.random_seed + 1
         )
 
         # Compute the heat capacity
@@ -419,7 +434,9 @@ function monte_carlo_sampling(
 
         @info "Temperature: $temp K, Equilibration energy: $equi_mean, Variance: $(round(equi_var.val; sigdigits=4)), Acceptance rate: $(round(equi_rate; sigdigits=4)), Step size: $(round(mc_params.step_size; sigdigits=4))"
 
-        # Sample the lattice
+        # Sample the walker. The production seed is derived from the
+        # equilibration seed (random_seed + 1): passing the same seed replays
+        # the equilibration random stream, correlating the two phases
         sampling_energies, sampling_configurations, sampling_accepted_steps = nvt_monte_carlo(
             mc_routine,
             equilibration_configurations[end],
@@ -427,7 +444,7 @@ function monte_carlo_sampling(
             temp,
             mc_params.sampling_steps,
             mc_params.step_size,
-            mc_params.random_seed
+            mc_params.random_seed + 1
         )
 
         # Compute the heat capacity

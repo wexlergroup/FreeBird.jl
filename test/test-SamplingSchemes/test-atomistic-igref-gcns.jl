@@ -384,3 +384,131 @@ end
         @test SamplingSchemes.AbstractPotentials._max_interaction_range(IdealGasParameters()) === missing
     end
 end
+
+@testset "Galilean routine and grand-canonical alternation" begin
+    using Random
+    # Calibration ledger (gates at >= 3x the max three-seed deviation, per stat):
+    # - Canonical cross-route log_Z_N (N = 3 LJ-fluid sector, 12 A box, K = 32,
+    #   500 steps, reduced at 200 K; RW seeds 7100x vs Galilean seeds 7110x):
+    #   diffs 0.0901, 0.0776, 0.0349; gate 0.28 nats.
+    # - Ideal-gas-referenced alternation on/off (dilute LJ, z0V = 6, K = 16,
+    #   150 steps, logXi at the 300 K anchor; seeds 7200x/7210x): diffs 0.0322,
+    #   0.0184, 0.1709; gate 0.55 nats.
+    gal_L = 12.0
+    gal_box = [[gal_L * u"Å", 0u"Å", 0u"Å"],
+               [0u"Å", gal_L * u"Å", 0u"Å"],
+               [0u"Å", 0u"Å", gal_L * u"Å"]]
+    gal_lj = LJParameters(epsilon=0.01, sigma=2.5, cutoff=3.0, shift=true)
+    function gal_uwalker(N)
+        while true
+            coor = [:Ar => [rand(), rand(), rand()] for _ in 1:N]
+            sys = FastSystem(periodic_system(coor, gal_box, fractional=true))
+            E = ustrip(u"eV", interacting_energy(sys, gal_lj))
+            (isfinite(E) && E < 100.0) && return AtomWalker(sys)
+        end
+    end
+    gal_save(tag) = SaveEveryN(df_filename="_$(tag).csv", wk_filename="_$(tag).w.extxyz",
+                               ls_filename="_$(tag).l.extxyz",
+                               n_traj=10^8, n_snap=10^8, n_info=10^8)
+    gal_rm(tag) = for f in ("_$(tag).csv", "_$(tag).w.extxyz", "_$(tag).l.extxyz")
+        rm(f, force=true)
+    end
+
+    @testset "routine and field validation" begin
+        @test MCGalileanWalk().n_refresh == 8
+        @test_throws ArgumentError MCGalileanWalk(n_refresh=0)
+        r = MCAtomGrandCanonicalMoves()
+        @test r.galilean_steps == 0 && r.galilean_n_refresh == 8 && r.galilean_step_size == 0.5
+        @test_throws ArgumentError MCAtomGrandCanonicalMoves(galilean_steps=-1)
+        @test_throws ArgumentError MCAtomGrandCanonicalMoves(galilean_step_size=0.0)
+    end
+
+    @testset "canonical cross-route agreement (seeded, calibrated)" begin
+        function run_route(routine, seed, tag)
+            Random.seed!(seed)
+            ls = LJAtomWalkers([gal_uwalker(3) for _ in 1:32], gal_lj)
+            p = NestedSamplingParameters(mc_steps=300, initial_step_size=0.3, step_size=0.3,
+                step_size_lo=0.01, step_size_up=2.0, accept_range=(0.25, 0.75),
+                allowed_fail_count=1000, energy_perturbation=1e-12)
+            df, fls, _ = nested_sampling(ls, p, 500, routine, gal_save(tag))
+            gal_rm(tag)
+            live = [ustrip(u"eV", w.energy) for w in fls.walkers]
+            out = gc_thermodynamic_stats_fixed_N(
+                [DataFrame(iter=Int[], emax=Float64[]), df], [0, 3],
+                (gal_L^3)u"Å^3", 39.948u"u", [-0.20u"eV"], [200.0]u"K";
+                n_walkers=32, live_emax=[Float64[], live])
+            return out.log_Z_N[2, 1], df
+        end
+        a, df_rw = run_route(MCRandomWalkClone(), 71001, "xrw")
+        b, df_gw = run_route(MCGalileanWalk(n_refresh=6), 71101, "xgw")
+        @test abs(a - b) < 0.28
+        # the Galilean route drives a genuine descent with the serial ledger schema
+        @test names(df_gw) == ["iter", "emax", "log_compression"]
+        @test nrow(df_gw) >= 400
+        @test issorted(df_gw.emax, rev=true) || maximum(diff(df_gw.emax)) <= 1e-12
+    end
+
+    @testset "step-method contract and plateau cooperation (tie fixture)" begin
+        # bit-exact duplicate dimers above two deeper dimers: the new step
+        # method's plateau branch must charge the deterministic Fowlie-Handley-Su
+        # schedule (exact logs of integer ratios) and refill through the
+        # reflective kernel
+        gal_pair(r) = AtomWalker(FastSystem(periodic_system(
+            [:Ar => [0.3, 0.5, 0.5], :Ar => [0.3 + r / gal_L, 0.5, 0.5]],
+            gal_box, fractional=true)))
+        Random.seed!(76543)
+        dup = gal_pair(2.90)
+        ls = LJAtomWalkers([deepcopy(dup), deepcopy(dup), deepcopy(dup),
+                            gal_pair(2.82), gal_pair(2.84)], gal_lj)
+        p = NestedSamplingParameters(mc_steps=5, initial_step_size=0.5, step_size=0.5,
+            step_size_lo=0.01, step_size_up=2.0, accept_range=(0.25, 0.75),
+            allowed_fail_count=1000, energy_perturbation=1e-12)
+        df, fls, _ = nested_sampling(ls, p, 4, MCGalileanWalk(n_refresh=4), gal_save("tie"))
+        gal_rm("tie")
+        @test df.log_compression[1:3] ≈ [log(4 / 5), log(3 / 4), log(2 / 3)] atol = 1e-14
+        @test length(fls.walkers) >= 2
+        # a direct step call returns the serial steps' five-value shape
+        Random.seed!(76544)
+        ls2 = LJAtomWalkers([gal_pair(2.80 + 0.02k) for k in 1:4], gal_lj)
+        p2 = NestedSamplingParameters(mc_steps=5, initial_step_size=0.5, step_size=0.5,
+            step_size_lo=0.01, step_size_up=2.0, accept_range=(0.25, 0.75),
+            allowed_fail_count=1000, energy_perturbation=1e-12)
+        out = FreeBird.SamplingSchemes.nested_sampling_step!(ls2, p2, MCGalileanWalk())
+        @test length(out) == 5
+        @test out[3] === ls2
+        @test out[5] isa Union{Missing,Float64}
+    end
+
+    @testset "grand-canonical alternation (seeded, calibrated)" begin
+        kb = 8.617333262e-5
+        lam300 = ustrip(u"Å", FreeBird.AnalysisTools._thermal_wavelength(39.948u"u", 300.0u"K"))
+        mu300 = (kb * 300 * (log(6.0 / gal_L^3) + 3 * log(lam300))) * u"eV"
+        function run_igref(routine, seed, tag)
+            Random.seed!(seed)
+            ls = LJAtomWalkers([gal_uwalker(1) for _ in 1:16], gal_lj)
+            params = AtomisticIGRefGCNSParameters(mc_steps=100,
+                reference_activity=(6.0 / gal_L^3)u"Å^-3", species=:Ar,
+                allowed_fail_count=100_000)
+            df, fls, _ = ideal_gas_referenced_nested_sampling(ls, params, 150, routine, gal_save(tag))
+            gal_rm(tag)
+            live_e = [ustrip(u"eV", w.energy) for w in fls.walkers]
+            live_n = [w.list_num_par[1] for w in fls.walkers]
+            out = gc_thermodynamic_stats_ideal_ref(df, (gal_L^3)u"Å^3", 39.948u"u",
+                (6.0 / gal_L^3)u"Å^-3", [mu300], [300.0]u"K";
+                live_emax=live_e, live_numbers=live_n)
+            return out.logXi[1, 1], df
+        end
+        off, df_off = run_igref(MCAtomGrandCanonicalMoves(), 72001, "aoff")
+        on, df_on = run_igref(MCAtomGrandCanonicalMoves(galilean_steps=3, galilean_step_size=1.0),
+                              72101, "aon")
+        @test abs(off - on) < 0.55
+        # the channel changes nothing structural: same schema and stall contract
+        @test names(df_on) == names(df_off)
+        # zero-default draw-count identity: an explicit galilean_steps = 0 run
+        # reproduces the default routine digit for digit
+        _, e1 = run_igref(MCAtomGrandCanonicalMoves(), 73001, "ab1")
+        _, e2 = run_igref(MCAtomGrandCanonicalMoves(galilean_steps=0), 73001, "ab2")
+        @test e1.emax == e2.emax
+        @test e1.num_particles == e2.num_particles
+    end
+end

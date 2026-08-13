@@ -52,6 +52,7 @@ export ideal_gas_referenced_nested_sampling
 
 export AtomisticIGRefGCNSParameters
 export MCAtomGrandCanonicalMoves
+export MCGalileanWalk
 
 # other sampling schemes
 export exact_enumeration

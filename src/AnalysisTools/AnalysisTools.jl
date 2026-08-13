@@ -467,6 +467,11 @@ size `(length(μs), length(Ts))`, indexed `[i_μ, i_T]`:
   follows as `C = k_B β² (var_U − μ · cov_UN)`, matching the Ω-sorted
   `gc_thermodynamic_stats` formula.
 - `cov_UN`: Energy–particle-number covariance ⟨EN⟩ − ⟨E⟩⟨N⟩.
+- `p_N`: `Array{Float64,3}` indexed `[i_μ, i_T, i_N]`, the particle-number
+  distribution P(N | μ, T) over `N_support`; a support member no sample visited
+  carries exactly 0.0 (a convergence diagnostic, not physics).
+- `N_support`: `UnitRange{Int}` `0:N_max` over the union of dead rows and the
+  live tail, indexing the third axis of `p_N`.
 - `observables`: `Dict{Symbol,Matrix{Float64}}` mapping each requested
   column to its reweighted average ⟨A⟩(μ, T); empty when no columns are
   requested.
@@ -585,6 +590,12 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
     E_shift = isempty(Es) ? 0.0 : minimum(Es)
     Es_c = Es .- E_shift
 
+    # Particle-number support for P(N | mu, T): a support member no sample
+    # visited keeps exactly 0.0 (a convergence diagnostic, not physics)
+    N_int_pn = Int.(Ns)
+    N_max_pn = isempty(N_int_pn) ? 0 : maximum(N_int_pn)
+    N_support = 0:N_max_pn
+
     log_prior_mass = n_sites * log1p(z0)
     log_z0 = log(z0)
 
@@ -599,6 +610,7 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
     cov_UN = Matrix{Float64}(undef, n_mu, n_T)
     obs_out = Dict{Symbol,Matrix{Float64}}(
         col => Matrix{Float64}(undef, n_mu, n_T) for col in observable_cols)
+    p_N = Array{Float64,3}(undef, n_mu, n_T, N_max_pn + 1)
 
     Threads.@threads for j in 1:n_T
         β = 1.0 / (kb * Ts[j])
@@ -620,11 +632,17 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
                 obs_out[col][i, j] = sum(ws .* As[col]) / sum_w
             end
             N_eff[i, j] = sum_w^2 / sum(abs2, ws)
+            acc_pn = zeros(Float64, N_max_pn + 1)
+            @inbounds for k_pn in eachindex(N_int_pn)
+                acc_pn[N_int_pn[k_pn] + 1] += ws[k_pn]
+            end
+            p_N[i, j, :] .= acc_pn ./ sum_w
         end
     end
 
     return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U, N_eff=N_eff,
-            var_U=var_U, cov_UN=cov_UN, observables=obs_out)
+            var_U=var_U, cov_UN=cov_UN, p_N=p_N, N_support=N_support,
+            observables=obs_out)
 end
 
 
@@ -697,8 +715,10 @@ follow-up item and out of scope here.
 # Returns
 A `NamedTuple` with the same shape as the lattice method: `logXi`, `mean_N`, `var_N`,
 `mean_U`, `N_eff`, `var_U`, `cov_UN` (each a `Matrix{Float64}` of size
-`(length(μ_grid), length(T_grid))`, indexed `[i_μ, i_T]`), and `observables`
-(`Dict{Symbol,Matrix{Float64}}`). The returned moments are configurational: beyond the
+`(length(μ_grid), length(T_grid))`, indexed `[i_μ, i_T]`), `p_N` (an
+`Array{Float64,3}` indexed `[i_μ, i_T, i_N]`, the particle-number distribution
+P(N | μ, T) over `N_support::UnitRange{Int}`, with exactly 0.0 on support
+members no sample visited), and `observables` (`Dict{Symbol,Matrix{Float64}}`). The returned moments are configurational: beyond the
 Λ(T)³ activity conversion this reduction carries no momentum integral, so
 temperature-derivative observables built from it (heat capacities) must add the Λ(T)
 term explicitly, exactly as for `gc_thermodynamic_stats_fixed_N`.
@@ -812,6 +832,12 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
     E_shift = isempty(Es) ? 0.0 : minimum(Es)
     Es_c = Es .- E_shift
 
+    # Particle-number support for P(N | mu, T): a support member no sample
+    # visited keeps exactly 0.0 (a convergence diagnostic, not physics)
+    N_int_pn = Int.(Ns)
+    N_max_pn = isempty(N_int_pn) ? 0 : maximum(N_int_pn)
+    N_support = 0:N_max_pn
+
     z0V = ustrip(Unitful.NoUnits, reference_activity * V)
     log_z0 = log(ustrip(u"Å^-3", reference_activity))
 
@@ -826,6 +852,7 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
     cov_UN = Matrix{Float64}(undef, n_mu, n_T)
     obs_out = Dict{Symbol,Matrix{Float64}}(
         col => Matrix{Float64}(undef, n_mu, n_T) for col in observable_cols)
+    p_N = Array{Float64,3}(undef, n_mu, n_T, N_max_pn + 1)
 
     Threads.@threads for j in 1:n_T
         T_K = ustrip(u"K", T_grid[j])
@@ -850,11 +877,17 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
                 obs_out[col][i, j] = sum(ws .* As[col]) / sum_w
             end
             N_eff[i, j] = sum_w^2 / sum(abs2, ws)
+            acc_pn = zeros(Float64, N_max_pn + 1)
+            @inbounds for k_pn in eachindex(N_int_pn)
+                acc_pn[N_int_pn[k_pn] + 1] += ws[k_pn]
+            end
+            p_N[i, j, :] .= acc_pn ./ sum_w
         end
     end
 
     return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U, N_eff=N_eff,
-            var_U=var_U, cov_UN=cov_UN, observables=obs_out)
+            var_U=var_U, cov_UN=cov_UN, p_N=p_N, N_support=N_support,
+            observables=obs_out)
 end
 
 
@@ -1107,8 +1140,8 @@ does not cancel.
 
 # Returns
 A `NamedTuple` `(Xi, mean_N, var_N, mean_U, logXi, var_U, cov_UN, log_Z_N,
-N_values, observables)`; the first four fields keep their historical leading
-positions. `Xi`, `mean_N`, `var_N`, `mean_U`, `logXi`, `var_U`, and `cov_UN`
+N_values, p_N, N_support, observables)`; the first four fields keep their
+historical leading positions. `Xi`, `mean_N`, `var_N`, `mean_U`, `logXi`, `var_U`, and `cov_UN`
 are `Matrix{Float64}` of size `(length(μ_grid), length(T_grid))` indexed
 `[i_μ, i_T]`. `Xi` is the absolute grand partition function in linear space —
 `Inf` once `ln Ξ` exceeds ≈ 709; `logXi`, its log-space companion, stays
@@ -1129,7 +1162,10 @@ functions `log Z_N(T) = log Z_NS^{(N)}(β) + N·log(V/Λ³) − log N!` — the
 μ-independent evidence the assembly is built from — and `N_values` echoes the
 particle counts (as `Vector{Int}`) indexing its rows; the particle-number
 distribution follows as `P(N | μ, T) ∝ exp.(log_Z_N[:, j] .+ β .* μ .* N_values)`,
-normalized over the supplied sectors. `observables` is a
+normalized over the supplied sectors, and is returned ready-made as `p_N`
+(`Array{Float64,3}` indexed `[i_μ, i_T, i_N]`) over `N_support::Vector{Int}`,
+the sorted sector list (a vector, not a range: the fixed-N routes accept
+non-contiguous sectors). `observables` is a
 `Dict{Symbol,Matrix{Float64}}` mapping each requested column to ⟨A⟩(μ, T);
 empty when no columns are requested. No Kish effective sample size is
 returned: the fixed-`N` route introduces no importance reweighting (`μ`
@@ -1293,6 +1329,10 @@ function gc_thermodynamic_stats_fixed_N(
     obs_out = Dict{Symbol,Matrix{Float64}}(
         col => Matrix{Float64}(undef, n_mu, n_T) for col in observable_cols)
 
+    perm_pn = sortperm(N_int)
+    N_support = N_int[perm_pn]
+    p_N = Array{Float64,3}(undef, n_mu, n_T, length(N_int))
+
     for (j, T) in enumerate(T_grid)
         β = 1.0 / (kb * ustrip(u"K", T))
         Λ_val = ustrip(u"Å", _thermal_wavelength(atomic_mass, T))
@@ -1326,12 +1366,14 @@ function gc_thermodynamic_stats_fixed_N(
             for col in observable_cols
                 obs_out[col][k, j] = sum(ws .* view(obs_N[col], :, j)) / sum_w
             end
+            p_N[k, j, :] .= (ws ./ sum_w)[perm_pn]
         end
     end
 
     return (Xi=Xi, mean_N=mean_N, var_N=var_N, mean_U=mean_U,
             logXi=logXi, var_U=var_U, cov_UN=cov_UN,
-            log_Z_N=log_Z_N, N_values=N_int, observables=obs_out)
+            log_Z_N=log_Z_N, N_values=N_int, p_N=p_N, N_support=N_support,
+            observables=obs_out)
 end
 
 """
@@ -1427,7 +1469,9 @@ in length or convergence.
 
 # Returns
 A `NamedTuple` `(logXi, mean_N, var_N, mean_U, log_Z_N, N_values, var_U,
-cov_UN, observables)`. The first
+cov_UN, p_N, N_support, observables)`; `p_N` (`Array{Float64,3}` indexed
+`[i_μ, i_T, i_N]`) is the particle-number distribution over
+`N_support::Vector{Int}`, the sorted sector list. The first
 four fields are `Matrix{Float64}` of size `(length(μ_grid), length(T_grid))`
 indexed `[i_μ, i_T]`. `logXi` is the natural log of the absolute grand
 partition function — returned in log space (the atomistic method returns
@@ -1594,6 +1638,10 @@ function gc_thermodynamic_stats_fixed_N(
     obs_out = Dict{Symbol,Matrix{Float64}}(
         col => Matrix{Float64}(undef, n_mu, n_T) for col in observable_cols)
 
+    perm_pn = sortperm(N_int)
+    N_support = N_int[perm_pn]
+    p_N = Array{Float64,3}(undef, n_mu, n_T, length(N_int))
+
     for (j, T) in enumerate(T_grid)
         β = 1.0 / (kb * ustrip(u"K", T))
         for (k, μ) in enumerate(μ_grid)
@@ -1620,12 +1668,14 @@ function gc_thermodynamic_stats_fixed_N(
             for col in observable_cols
                 obs_out[col][k, j] = sum(ws .* view(obs_N[col], :, j)) / sum_w
             end
+            p_N[k, j, :] .= (ws ./ sum_w)[perm_pn]
         end
     end
 
     return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U,
             log_Z_N=log_Z_NS .+ log_binom, N_values=N_int,
-            var_U=var_U, cov_UN=cov_UN, observables=obs_out)
+            var_U=var_U, cov_UN=cov_UN, p_N=p_N, N_support=N_support,
+            observables=obs_out)
 end
 
 

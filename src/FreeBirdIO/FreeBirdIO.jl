@@ -352,27 +352,140 @@ function extract_free_par(walker::AtomWalker)
 end
 
 """
-    generate_random_starting_config(volume_per_particle::Float64, num_particle::Int; particle_type::Symbol=:H)
+    generate_random_starting_config(volume_per_particle::Float64, num_particle::Int;
+                                    particle_type::Symbol=:H,
+                                    periodicity::NTuple{3,Bool}=(false, false, false),
+                                    min_separation::Float64=0.0,
+                                    max_attempts::Int=1000)
 
 Generate a random starting configuration for a system of particles.
+
+Intended for Metropolis and grand-canonical Metropolis starting states and
+reference-run inputs. Nested-sampling live sets must remain i.i.d. draws from the
+sampling prior: a minimum-separation draw is not the uniform prior, and a
+non-prior initial live set biases the nested-sampling evidence (see the
+initialization note in `test/test-SamplingSchemes/test-atomistic-gcns-fixed-n.jl`).
 
 # Arguments
 - `volume_per_particle::Float64`: The volume per particle.
 - `num_particle::Int`: The number of particles.
 - `particle_type::Symbol=:H`: The type of particle (default is hydrogen).
+- `periodicity::NTuple{3,Bool}=(false, false, false)`: Per-axis boundary
+  conditions of the generated system. The default keeps the historical
+  non-periodic behavior.
+- `min_separation::Float64=0.0`: Minimum pairwise separation in Å, enforced by
+  sequential insertion with per-particle retries. Distances are minimum-image on
+  periodic axes and plain Euclidean otherwise. The default performs no
+  separation screening and consumes exactly the historical random stream.
+- `max_attempts::Int=1000`: Retry budget per particle; exhaustion throws an
+  `ArgumentError` reporting the attempted packing fraction.
 
 # Returns
 - `FastSystem`: A FastSystem object representing the generated system.
 
 """
-function generate_random_starting_config(volume_per_particle::Float64, num_particle::Int; particle_type::Symbol=:H)
+function generate_random_starting_config(volume_per_particle::Float64, num_particle::Int;
+                                         particle_type::Symbol=:H,
+                                         periodicity::NTuple{3,Bool}=(false, false, false),
+                                         min_separation::Float64=0.0,
+                                         max_attempts::Int=1000)
     # generate random starting configuration
     total_volume = volume_per_particle * num_particle
     box_length = total_volume^(1/3)
     box = [[box_length, 0.0, 0.0], [0.0, box_length, 0.0], [0.0, 0.0, box_length]]u"Å"
-    boundary_conditions = (false, false, false)
-    list_of_atoms = [particle_type => [rand(), rand(), rand()] .* box_length * u"Å" for _ in 1:num_particle]
+    boundary_conditions = periodicity
+    placed = Vector{Vector{typeof(1.0u"Å")}}()
+    for _ in 1:num_particle
+        attempts = 0
+        while true
+            # Literal legacy draw: at min_separation = 0 the first candidate
+            # always passes, so the default path consumes exactly the
+            # historical stream and returns bit-identical configurations
+            candidate = [rand(), rand(), rand()] .* box_length * u"Å"
+            if min_separation <= 0.0 ||
+               _separation_ok(candidate, placed, box_length, periodicity, min_separation)
+                push!(placed, candidate)
+                break
+            end
+            attempts += 1
+            if attempts >= max_attempts
+                packing = (length(placed) + 1) * (π / 6) * min_separation^3 / total_volume
+                throw(ArgumentError(
+                    "sequential insertion failed after $max_attempts attempts at particle $(length(placed) + 1) of $num_particle " *
+                    "(attempted packing fraction $(round(packing; sigdigits=3)) at the $min_separation Å separation); " *
+                    "reduce min_separation or use generate_lattice_starting_config"))
+            end
+        end
+    end
+    list_of_atoms = [particle_type => placed[i] for i in 1:num_particle]
     system = atomic_system(list_of_atoms, box, boundary_conditions)
+    return FastSystem(system)
+end
+
+# Pairwise separation screen for sequential insertion: minimum-image on
+# periodic axes, plain Euclidean otherwise
+function _separation_ok(candidate, placed, box_length::Float64,
+                        periodicity::NTuple{3,Bool}, min_separation::Float64)
+    for p in placed
+        d2 = 0.0
+        for k in 1:3
+            δ = ustrip(u"Å", candidate[k] - p[k])
+            if periodicity[k]
+                δ -= box_length * round(δ / box_length)
+            end
+            d2 += δ^2
+        end
+        sqrt(d2) < min_separation && return false
+    end
+    return true
+end
+
+"""
+    generate_lattice_starting_config(box_length::Float64, num_particle::Int;
+                                     particle_type::Symbol=:H,
+                                     periodicity::NTuple{3,Bool}=(true, true, true),
+                                     jitter::Float64=0.0)
+
+Generate a starting configuration on a simple-cubic grid: the first
+`num_particle` cell-centered sites of the smallest grid containing them, with an
+optional uniform jitter of up to `jitter` Å per coordinate. Deterministic at
+`jitter = 0`. Covers densities beyond the sequential-insertion regime of
+`generate_random_starting_config` (dense-liquid and solid-like starts for
+Metropolis annealing); the pairwise separation is at least the grid spacing
+minus `2 √3 jitter`. The same nested-sampling scoping applies: this is not a
+prior draw and must not seed a nested-sampling live set.
+
+# Arguments
+- `box_length::Float64`: The cubic box edge in Å.
+- `num_particle::Int`: The number of particles.
+- `particle_type::Symbol=:H`: The type of particle.
+- `periodicity::NTuple{3,Bool}=(true, true, true)`: Per-axis boundary conditions.
+- `jitter::Float64=0.0`: Uniform per-coordinate displacement bound in Å.
+
+# Returns
+- `FastSystem`: A FastSystem object representing the generated system.
+
+"""
+function generate_lattice_starting_config(box_length::Float64, num_particle::Int;
+                                          particle_type::Symbol=:H,
+                                          periodicity::NTuple{3,Bool}=(true, true, true),
+                                          jitter::Float64=0.0)
+    num_particle > 0 || throw(ArgumentError("num_particle must be positive"))
+    box = [[box_length, 0.0, 0.0], [0.0, box_length, 0.0], [0.0, 0.0, box_length]]u"Å"
+    n_side = ceil(Int, cbrt(num_particle))
+    a = box_length / n_side
+    list_of_atoms = []
+    count = 0
+    for ix in 0:(n_side - 1), iy in 0:(n_side - 1), iz in 0:(n_side - 1)
+        count >= num_particle && break
+        pos = [(ix + 0.5) * a, (iy + 0.5) * a, (iz + 0.5) * a]
+        if jitter > 0.0
+            pos = pos .+ jitter .* (2 .* [rand(), rand(), rand()] .- 1)
+        end
+        push!(list_of_atoms, particle_type => pos .* u"Å")
+        count += 1
+    end
+    system = atomic_system(list_of_atoms, box, periodicity)
     return FastSystem(system)
 end
 

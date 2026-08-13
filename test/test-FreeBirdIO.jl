@@ -140,3 +140,84 @@
 
 
 end
+@testset "Overlap-aware periodic starting configurations" begin
+    # Minimum-image pairwise distance under the generated system's own metric
+    function _test_min_dist(sys)
+        L = ustrip(u"Å", cell_vectors(sys)[1][1])
+        pbc = periodicity(sys)
+        n = length(sys)
+        dmin = Inf
+        for i in 1:(n - 1), j in (i + 1):n
+            d2 = 0.0
+            for k in 1:3
+                δ = ustrip(u"Å", position(sys, i)[k] - position(sys, j)[k])
+                if pbc[k]
+                    δ -= L * round(δ / L)
+                end
+                d2 += δ^2
+            end
+            dmin = min(dmin, sqrt(d2))
+        end
+        return dmin
+    end
+
+    @testset "Default path is stream-neutral" begin
+        Random.seed!(31415)
+        sys_new = FreeBirdIO.generate_random_starting_config(100.0, 5)
+        Random.seed!(31415)
+        box_length = (100.0 * 5)^(1 / 3)
+        legacy_positions = [[rand(), rand(), rand()] .* box_length * u"Å" for _ in 1:5]
+        @test all(position(sys_new, i) == SVector{3}(legacy_positions[i]) for i in 1:5)
+        @test periodicity(sys_new) == (false, false, false)
+    end
+
+    @testset "Periodicity propagation" begin
+        sys = FreeBirdIO.generate_random_starting_config(100.0, 3; periodicity=(true, true, false))
+        @test periodicity(sys) == (true, true, false)
+        sys_p = FreeBirdIO.generate_random_starting_config(100.0, 3; periodicity=(true, true, true))
+        @test periodicity(sys_p) == (true, true, true)
+    end
+
+    @testset "Separation invariant at a dense point" begin
+        # 24 particles at 15.625 A^3 each (box 7.211 A): packing fraction 0.257
+        # at the 2.125 A separation, safely under the sequential-insertion regime
+        Random.seed!(2718)
+        sys = FreeBirdIO.generate_random_starting_config(15.625, 24;
+            periodicity=(true, true, true), min_separation=2.125, max_attempts=5000)
+        @test length(sys) == 24
+        @test _test_min_dist(sys) >= 2.125
+        Random.seed!(2718)
+        sys_m = FreeBirdIO.generate_random_starting_config(15.625, 24;
+            periodicity=(true, true, false), min_separation=2.125, max_attempts=5000)
+        @test _test_min_dist(sys_m) >= 2.125
+    end
+
+    @testset "Infeasible packing throws" begin
+        Random.seed!(1618)
+        @test_throws ArgumentError FreeBirdIO.generate_random_starting_config(15.625, 24;
+            periodicity=(true, true, true), min_separation=4.0, max_attempts=200)
+    end
+
+    @testset "Lattice starting configuration" begin
+        sys1 = FreeBirdIO.generate_lattice_starting_config(12.5, 100)
+        sys2 = FreeBirdIO.generate_lattice_starting_config(12.5, 100)
+        @test length(sys1) == 100
+        @test periodicity(sys1) == (true, true, true)
+        # deterministic at jitter = 0
+        @test all(position(sys1, i) == position(sys2, i) for i in 1:100)
+        # separation bound: at least the grid spacing (100 sites on a 5^3 grid)
+        @test _test_min_dist(sys1) >= 12.5 / 5 - 1e-9
+        # partial fill keeps the bound
+        sys3 = FreeBirdIO.generate_lattice_starting_config(12.5, 30)
+        @test length(sys3) == 30
+        @test _test_min_dist(sys3) >= 12.5 / ceil(Int, cbrt(30)) - 1e-9
+        # jitter: seeded reproducibility and the documented separation bound
+        Random.seed!(999)
+        sysj1 = FreeBirdIO.generate_lattice_starting_config(12.5, 100; jitter=0.2)
+        Random.seed!(999)
+        sysj2 = FreeBirdIO.generate_lattice_starting_config(12.5, 100; jitter=0.2)
+        @test all(position(sysj1, i) == position(sysj2, i) for i in 1:100)
+        @test _test_min_dist(sysj1) >= 12.5 / 5 - 2 * sqrt(3) * 0.2 - 1e-9
+        @test_throws ArgumentError FreeBirdIO.generate_lattice_starting_config(12.5, 0)
+    end
+end

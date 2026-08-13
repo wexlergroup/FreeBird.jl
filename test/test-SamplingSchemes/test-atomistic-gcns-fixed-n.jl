@@ -511,7 +511,7 @@ end
             n_walkers=K, ω0=ω0_test, live_emax=live_all)
         @test propertynames(out) == (:Xi, :mean_N, :var_N, :mean_U, :logXi,
                                      :var_U, :cov_UN, :log_Z_N, :N_values,
-                                     :observables)
+                                     :p_N, :N_support, :observables)
         @test out[1] === out.Xi && out[2] === out.mean_N &&
               out[3] === out.var_N && out[4] === out.mean_U
         @test isempty(out.observables)

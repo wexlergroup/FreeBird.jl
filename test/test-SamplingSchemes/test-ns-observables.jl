@@ -800,7 +800,7 @@
         stats3 = gc_thermodynamic_stats_ideal_ref(df, M, z0, μs, Ts, K)
         @test isempty(stats3.observables)
         @test keys(stats3) == (:logXi, :mean_N, :var_N, :mean_U, :N_eff,
-                               :var_U, :cov_UN, :observables)
+                               :var_U, :cov_UN, :p_N, :N_support, :observables)
         lX, mN, vN, mU, Ne = stats3
         @test lX == stats3.logXi && Ne == stats3.N_eff
 
@@ -917,7 +917,7 @@
             n_walkers=K, ω0=ω0, live_emax=live_E)
         @test keys(stats_nc) == (:logXi, :mean_N, :var_N, :mean_U,
                                  :log_Z_N, :N_values, :var_U, :cov_UN,
-                                 :observables)
+                                 :p_N, :N_support, :observables)
         @test isempty(stats_nc.observables)
         @test stats_nc.logXi ≈ stats.logXi rtol = 1e-14
 

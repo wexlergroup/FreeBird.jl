@@ -202,3 +202,131 @@
         end
     end
 end
+
+@testset "particle-number distributions from the reductions" begin
+    kb = 8.617333262e-5
+    Vq = 1000.0u"Å^3"
+    V = 1000.0
+    mass_ar = 39.948u"u"
+    lam(T) = ustrip(u"Å", FreeBird.AnalysisTools._thermal_wavelength(mass_ar, T * u"K"))
+    mu_for(zV, T) = (kb * T * (log(zV / V) + 3 * log(lam(T)))) * u"eV"
+    logfact(n) = n == 0 ? 0.0 : sum(log, 1:n)
+    poisson_pmf(lam0, n) = exp(n * log(lam0) - lam0 - logfact(n))
+    function poisson_ledger(z0V; nmax=60)
+        p = [poisson_pmf(z0V, n) for n in 0:nmax]
+        remainder = max(1.0 - sum(p), 1.0e-300)
+        masses = vcat(p, remainder)
+        X = reverse(cumsum(reverse(masses)))
+        lc = [log(X[j+1] / X[j]) for j in 1:nmax+1]
+        df = DataFrame(iter=collect(1:nmax+1), emax=zeros(nmax + 1),
+                       num_particles=collect(0:nmax), log_compression=lc)
+        return df, [0.0], [nmax + 1]
+    end
+
+    @testset "exact Poisson closure of p_N" begin
+        z0V = 3.0
+        z0 = (z0V / V)u"Å^-3"
+        df, live_e, live_n = poisson_ledger(z0V)
+        T = 300.0
+        stats = gc_thermodynamic_stats_ideal_ref(df, Vq, mass_ar, z0,
+            [mu_for(2.0, T), mu_for(5.0, T)], [T]u"K";
+            live_emax=live_e, live_numbers=live_n)
+        @test stats.N_support == 0:61
+        @test size(stats.p_N) == (2, 1, 62)
+        for (i, zV) in enumerate([2.0, 5.0])
+            for n in 0:15
+                @test abs(stats.p_N[i, 1, n + 1] - poisson_pmf(zV, n)) < 1e-11
+            end
+            @test abs(sum(stats.p_N[i, 1, :]) - 1.0) < 1e-12
+        end
+    end
+
+    @testset "moment identities per grid point" begin
+        z0V = 4.0
+        z0 = (z0V / V)u"Å^-3"
+        df, live_e, live_n = poisson_ledger(z0V; nmax=40)
+        Ts = [250.0, 350.0]
+        mus = [mu_for(1.5, 300.0), mu_for(4.0, 300.0)]
+        stats = gc_thermodynamic_stats_ideal_ref(df, Vq, mass_ar, z0, mus, Ts * u"K";
+            live_emax=live_e, live_numbers=live_n)
+        Ns = collect(stats.N_support)
+        for i in 1:2, j in 1:2
+            m1 = sum(stats.p_N[i, j, :] .* Ns)
+            m2 = sum(stats.p_N[i, j, :] .* Ns .^ 2)
+            @test isapprox(m1, stats.mean_N[i, j]; rtol=1e-12)
+            # The two routes reassociate m2 - m1^2 differently, so the identity
+            # carries an eps*m2 cancellation floor where the variance collapses
+            @test isapprox(m2 - m1^2, stats.var_N[i, j]; rtol=1e-11,
+                           atol=1e-11 * max(1.0, m2))
+        end
+    end
+
+    @testset "live-tail mixture weld, bit-for-bit" begin
+        z0V = 2.5
+        z0 = (z0V / V)u"Å^-3"
+        df, live_e, live_n = poisson_ledger(z0V; nmax=8)
+        T = 300.0
+        mu = mu_for(3.0, T)
+        stats = gc_thermodynamic_stats_ideal_ref(df, Vq, mass_ar, z0, [mu], [T]u"K";
+            live_emax=live_e, live_numbers=live_n)
+        # hand assembly replicating the source arithmetic exactly
+        lc = Vector{Float64}(df.log_compression)
+        cs = cumsum(lc)
+        log_w0 = vcat(0.0 .+ vcat(0.0, cs[1:end-1]) .+ log.(-expm1.(lc)),
+                      [cs[end] - log(1)])
+        Es = vcat(zeros(9), live_e)
+        Nsamp = vcat(Vector{Float64}(df.num_particles), Float64.(live_n))
+        β = 1.0 / (kb * T)
+        s = β * ustrip(u"eV", mu) - 3.0 * log(lam(T)) - log(ustrip(u"Å^-3", z0))
+        log_w = log_w0 .+ s .* Nsamp .- β .* Es
+        max_log = maximum(log_w)
+        ws = exp.(log_w .- max_log)
+        sum_w = sum(ws)
+        acc = zeros(Float64, maximum(Int.(Nsamp)) + 1)
+        for k in eachindex(ws)
+            acc[Int(Nsamp[k]) + 1] += ws[k]
+        end
+        @test stats.p_N[1, 1, :] == acc ./ sum_w
+    end
+
+    @testset "support holes stay exactly zero" begin
+        # masses on N in {0, 2} only, live tail at N = 4: N = 1 and N = 3 are
+        # in-support holes that must carry exactly 0.0
+        masses = [0.4, 0.35, 0.25]
+        X = reverse(cumsum(reverse(masses)))
+        lc = [log(X[j+1] / X[j]) for j in 1:2]
+        df = DataFrame(iter=[1, 2], emax=zeros(2), num_particles=[0, 2],
+                       log_compression=lc)
+        T = 300.0
+        stats = gc_thermodynamic_stats_ideal_ref(df, Vq, mass_ar, (2.0 / V)u"Å^-3",
+            [mu_for(2.0, T)], [T]u"K"; live_emax=[0.0], live_numbers=[4])
+        @test stats.N_support == 0:4
+        @test stats.p_N[1, 1, 2] == 0.0
+        @test stats.p_N[1, 1, 4] == 0.0
+        @test abs(sum(stats.p_N[1, 1, :]) - 1.0) < 1e-12
+    end
+
+    @testset "fixed-N parity with the documented recipe" begin
+        N_values = [0, 1, 2]
+        ns_outputs = [DataFrame(iter=Int[], emax=Float64[]),
+                      DataFrame(iter=collect(1:50), emax=zeros(50)),
+                      DataFrame(iter=collect(1:60),
+                                emax=collect(range(-0.010, -0.020, length=60)))]
+        live_all = [Float64[], zeros(8), fill(-0.0201, 8)]
+        T = 300.0
+        mus = [mu_for(1.0, T), mu_for(3.0, T)]
+        out = gc_thermodynamic_stats_fixed_N(ns_outputs, N_values, Vq, mass_ar,
+            mus, [T]u"K"; n_walkers=8, live_emax=live_all)
+        @test out.N_support == [0, 1, 2]
+        @test size(out.p_N) == (2, 1, 3)
+        β = 1.0 / (kb * T)
+        for (k, mu) in enumerate(mus)
+            w = out.log_Z_N[:, 1] .+ β * ustrip(u"eV", mu) .* N_values
+            w .-= maximum(w)
+            pw = exp.(w) ./ sum(exp.(w))
+            for n_idx in 1:3
+                @test isapprox(out.p_N[k, 1, n_idx], pw[n_idx]; rtol=1e-12, atol=1e-15)
+            end
+        end
+    end
+end

@@ -480,7 +480,9 @@ function update_iter!(liveset::AbstractLiveSet)
     end
 end
 
-const _RESERVED_LEDGER_COLUMNS = (:iter, :emax, :omega, :energy, :num_particles, :log_compression)
+const _RESERVED_LEDGER_COLUMNS = (:iter, :emax, :omega, :energy, :num_particles, :log_compression,
+                                  :move_attempted, :move_accepted, :insert_attempted,
+                                  :insert_accepted, :delete_attempted, :delete_accepted)
 
 """
     _validate_observables(observables, liveset::AbstractLiveSet)
@@ -2019,16 +2021,44 @@ are a known hazard class.
 # Fields
 - `p_move::Float64`: Probability of a displacement move.
 - `p_insert::Float64`: Probability of an insertion move (deletion takes the remainder).
+- `step_rate_source::Symbol`: Which acceptance rate drives the step-size
+  adjustment. `:mixed` (the default) keeps the historical behavior, adapting on
+  the kernel's combined rate over all three channels; `:move` adapts on the
+  displacement-only rate from the walk's per-channel counters, so a collapsing
+  insertion or deletion acceptance in a dense interacting system cannot drag the
+  displacement step size down against a healthy displacement channel (adjustment
+  is skipped when a walk attempted no displacement).
+- `mc_steps_per_particle::Float64`: Extra kernel steps per parent particle: a
+  decorrelation walk for a parent at particle count N runs
+  `mc_steps + round(Int, mc_steps_per_particle * N)` steps, restoring per-sweep
+  decorrelation as the count grows. The default 0.0 is draw-count identical to
+  the historical fixed-length walk.
 """
 struct MCAtomGrandCanonicalMoves <: MCRoutine
     p_move::Float64
     p_insert::Float64
-    function MCAtomGrandCanonicalMoves(; p_move::Float64=0.5, p_insert::Float64=0.25)
+    step_rate_source::Symbol
+    mc_steps_per_particle::Float64
+    function MCAtomGrandCanonicalMoves(; p_move::Float64=0.5, p_insert::Float64=0.25,
+                                       step_rate_source::Symbol=:mixed,
+                                       mc_steps_per_particle::Float64=0.0)
         if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
             throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
         end
-        new(p_move, p_insert)
+        if !(step_rate_source in (:mixed, :move))
+            throw(ArgumentError("step_rate_source must be :mixed or :move"))
+        end
+        if !(mc_steps_per_particle >= 0.0)
+            throw(ArgumentError("mc_steps_per_particle must be non-negative"))
+        end
+        new(p_move, p_insert, step_rate_source, mc_steps_per_particle)
     end
+end
+
+# Number of kernel steps for a decorrelation walk whose parent carries n_par
+# particles (see `MCAtomGrandCanonicalMoves.mc_steps_per_particle`)
+function _gc_walk_length(params::SamplingParameters, mc_routine::MCAtomGrandCanonicalMoves, n_par::Int)
+    return params.mc_steps + round(Int, mc_routine.mc_steps_per_particle * n_par)
 end
 
 """
@@ -2053,11 +2083,19 @@ enter a run; both enter only in the post-run reduction to Ξ(μ, T).
   step-size adjustment.
 - `fail_count::Int64`: Consecutive failed replacements.
 - `allowed_fail_count::Int64`: Maximum consecutive failures before the driver's stall
-  contract fires (see `ideal_gas_referenced_nested_sampling`).
+  contract fires (see `ideal_gas_referenced_nested_sampling`). The default (100,
+  matching the canonical atomistic loop) suits interacting descents, where a run of
+  failed replacements is an ordinary sampling hiccup rather than a terminal state.
 - `plateau_refill_target::Int64`: Live-set size to restore after a plateau eviction
   block (mutable runtime state; reset at driver entry).
+- `refill_fail_budget::Int64`: Failure budget for one plateau-refill loop. The default
+  0 keeps the historical behavior of charging refill failures against
+  `allowed_fail_count` cumulatively; a positive value gives each refill loop its own
+  budget, so recovering from one difficult plateau block cannot permanently shrink
+  the live set within the stall budget.
 - `move_stats::Dict{Symbol,Int}`: Run-total per-move-type attempt/accept counters
-  accumulated from every decorrelation walk (cleared once at run start).
+  accumulated from every ordinary-cull decorrelation walk (cleared once at run
+  start; plateau-refill walks are not accumulated).
 
 Three fields carried by sibling parameter structs are deliberately absent. No `n_max`:
 the reference measure has unbounded particle-number support, and a cap silently
@@ -2080,6 +2118,7 @@ mutable struct AtomisticIGRefGCNSParameters <: SamplingParameters
     fail_count::Int64
     allowed_fail_count::Int64
     plateau_refill_target::Int64
+    refill_fail_budget::Int64
     move_stats::Dict{Symbol,Int}
 end
 
@@ -2087,8 +2126,8 @@ end
     AtomisticIGRefGCNSParameters(;
         mc_steps=100, reference_activity=0.01u"Å^-3", species=:H,
         initial_step_size=0.5, step_size=0.5, step_size_lo=0.01, step_size_up=2.0,
-        accept_range=(0.25, 0.75), fail_count=0, allowed_fail_count=10,
-        plateau_refill_target=0, move_stats=Dict{Symbol,Int}())
+        accept_range=(0.25, 0.75), fail_count=0, allowed_fail_count=100,
+        plateau_refill_target=0, refill_fail_budget=0, move_stats=Dict{Symbol,Int}())
 
 Convenience constructor for `AtomisticIGRefGCNSParameters`. `reference_activity` (z0)
 must be positive; choose it so z0V sits near the particle-number range of interest, as
@@ -2105,18 +2144,50 @@ function AtomisticIGRefGCNSParameters(;
     step_size_up::Float64=2.0,
     accept_range::Tuple{Float64,Float64}=(0.25, 0.75),
     fail_count::Int64=0,
-    allowed_fail_count::Int64=10,
+    allowed_fail_count::Int64=100,
     plateau_refill_target::Int64=0,
+    refill_fail_budget::Int64=0,
     move_stats::Dict{Symbol,Int}=Dict{Symbol,Int}(),
 )
     if reference_activity <= 0.0u"Å^-3"
         throw(ArgumentError("reference_activity must be positive"))
     end
+    if refill_fail_budget < 0
+        throw(ArgumentError("refill_fail_budget must be non-negative (0 charges refill failures against allowed_fail_count)"))
+    end
     AtomisticIGRefGCNSParameters(
         mc_steps, reference_activity, species,
         initial_step_size, step_size, step_size_lo, step_size_up, accept_range,
-        fail_count, allowed_fail_count, plateau_refill_target, move_stats,
+        fail_count, allowed_fail_count, plateau_refill_target, refill_fail_budget, move_stats,
     )
+end
+
+# Per-iteration acceptance-ledger columns (order matters: it is the ledger
+# schema order when `record_move_rates=true`)
+const _MOVE_RATE_COLUMNS = (:move_attempted, :move_accepted, :insert_attempted,
+                            :insert_accepted, :delete_attempted, :delete_accepted)
+
+_move_stats_snapshot(params::SamplingParameters) =
+    Tuple(get(params.move_stats, k, 0) for k in _MOVE_RATE_COLUMNS)
+
+"""
+    _warn_min_image_cutoff(pot, config)
+
+Warn once when a potential's finite interaction range exceeds half the smallest
+cell edge of `config`: minimum-image truncation is anisotropic in that regime.
+An infinite range never warns (an untruncated minimum-image Hamiltonian is a
+deliberate model choice), and potentials of undeterminable range are skipped.
+"""
+function _warn_min_image_cutoff(pot, config)
+    rng = AbstractPotentials._max_interaction_range(pot)
+    rng === missing && return nothing
+    isfinite(ustrip(rng)) || return nothing
+    cellv = cell_vectors(config)
+    L_min = min(ustrip(u"Å", cellv[1][1]), ustrip(u"Å", cellv[2][2]), ustrip(u"Å", cellv[3][3]))
+    if ustrip(u"Å", rng) > L_min / 2
+        @warn "The potential's interaction range ($(round(ustrip(u"Å", rng); sigdigits=4)) Å) exceeds half the smallest cell edge ($(round(L_min / 2; sigdigits=4)) Å): minimum-image truncation is anisotropic in this regime."
+    end
+    return nothing
 end
 
 """
@@ -2233,9 +2304,11 @@ function nested_sampling_step!(liveset::AtomWalkers,
             # decorrelating strictly below the plateau energy with the
             # grand-canonical kernel (volume-neutral; no ledger row).
             refill_fails = 0
-            while length(ats) < params.plateau_refill_target && refill_fails < params.allowed_fail_count
+            refill_budget = params.refill_fail_budget > 0 ? params.refill_fail_budget : params.allowed_fail_count
+            while length(ats) < params.plateau_refill_target && refill_fails < refill_budget
+                at_r = deepcopy(rand(ats))
                 accept_r, _, at_r, _ = MC_grand_canonical_walk!(
-                    params.mc_steps, deepcopy(rand(ats)), pot, emax;
+                    _gc_walk_length(params, mc_routine, at_r.list_num_par[1]), at_r, pot, emax;
                     z0V=z0V, species=params.species,
                     p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
                     step_size=params.step_size)
@@ -2256,6 +2329,9 @@ function nested_sampling_step!(liveset::AtomWalkers,
             length(ats) < params.plateau_refill_target && @warn "Plateau refill left the live set at $(length(ats)) of $(params.plateau_refill_target) walkers after $(refill_fails) failed decorrelation attempts; subsequent culls are charged with the actual live count."
             params.plateau_refill_target = 0
         end
+        # Step-size adaptation and move-stats accumulation stay off inside
+        # plateau blocks by design: refill walks run under a fixed plateau
+        # ceiling, and their acceptance is not representative of ordinary culls
         return iter, emax, num_particles, liveset, params, log_t
     end
     # Ordinary cull: strictly-below-ceiling parent selection, mirroring the
@@ -2264,7 +2340,7 @@ function nested_sampling_step!(liveset::AtomWalkers,
     parent_idx = isempty(eligible) ? rand(2:n_live) : rand(eligible)
     to_walk = deepcopy(ats[parent_idx])
     accept, rate, to_walk, move_stats = MC_grand_canonical_walk!(
-        params.mc_steps, to_walk, pot, emax;
+        _gc_walk_length(params, mc_routine, to_walk.list_num_par[1]), to_walk, pot, emax;
         z0V=z0V, species=params.species,
         p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
         step_size=params.step_size)
@@ -2287,7 +2363,16 @@ function nested_sampling_step!(liveset::AtomWalkers,
         params.fail_count += 1
     end
     _accumulate_move_stats!(params, move_stats)
-    adjust_step_size(params, rate; range=params.accept_range)
+    if mc_routine.step_rate_source === :move
+        # Displacement-only adaptation: skip when the walk attempted no
+        # displacement (nothing to adapt on)
+        if move_stats.move_attempted > 0
+            adjust_step_size(params, move_stats.move_accepted / move_stats.move_attempted;
+                             range=params.accept_range)
+        end
+    else
+        adjust_step_size(params, rate; range=params.accept_range)
+    end
     return iter, emax, num_particles, liveset, params, log_t
 end
 
@@ -2316,14 +2401,28 @@ that cannot be accepted. A fully degenerate live set (every configuration at exa
 energy, the zero-interaction limit) is a legitimate terminal state whose entire prior
 mass sits in the live set; the subsequent ledger reduction is then exact. With
 `stop_on_stall=false` the driver keeps the warn-and-continue contract of the sibling
-loops (the failure counter is reset and the loop continues).
+loops (the failure counter is reset, the step size is reset to
+`params.initial_step_size` following the canonical loop's contract, and the loop
+continues).
+
+With `record_move_rates=true` the ledger gains the per-iteration acceptance columns
+`[:move_attempted, :move_accepted, :insert_attempted, :insert_accepted,
+:delete_attempted, :delete_accepted]`, recorded as the change in the run-total
+counters since the previous recorded row: the production diagnostic for how the
+per-channel acceptances evolve with descent depth. A recorded row therefore also
+carries the attempts of any failed replacements since the previous row;
+plateau-eviction rows run no decorrelation walk of their own, and refill-walk
+counters are deliberately not accumulated. The recorded columns sum exactly to
+the `move_stats` run totals accumulated through the last recorded row. The names are reserved ledger columns, rejected as
+observable names.
 
 Observable callbacks must handle empty configurations: under this construction a
 walker's particle count may be zero.
 
 # Returns
-- `df::DataFrame`: Columns `[:iter, :emax, :num_particles, :log_compression]`, plus one
-  column per requested observable. Zero-accept runs return the schema with no rows.
+- `df::DataFrame`: Columns `[:iter, :emax, :num_particles, :log_compression]`, plus the
+  acceptance columns when requested, plus one column per requested observable.
+  Zero-accept runs return the schema with no rows.
 - `liveset::AtomWalkers`: The final liveset (surviving walkers).
 - `params::AtomisticIGRefGCNSParameters`: Updated parameters.
 """
@@ -2334,8 +2433,10 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
                                               save_strategy::DataSavingStrategy;
                                               observables::Union{Nothing,AbstractVector{<:Pair{Symbol,<:Any}}}=nothing,
                                               dead_point_callback::Union{Nothing,Function}=nothing,
-                                              stop_on_stall::Bool=true)
+                                              stop_on_stall::Bool=true,
+                                              record_move_rates::Bool=false)
     z0V = _atomistic_igref_z0V(liveset, params)
+    _warn_min_image_cutoff(liveset.potential, liveset.walkers[1].configuration)
     _init_atomistic_igref_walkers!(liveset, params, z0V)
 
     # Parameter-reuse hazards: runtime state never leaks between runs
@@ -2344,6 +2445,11 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
     empty!(params.move_stats)
 
     df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[], log_compression=Float64[])
+    if record_move_rates
+        for name in _MOVE_RATE_COLUMNS
+            df[!, name] = Int[]
+        end
+    end
     if observables !== nothing
         _validate_observables(observables, liveset)
         for (name, _) in observables
@@ -2352,6 +2458,7 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
     end
     culled = nothing
     empty_frame_warned = false
+    rate_prev = record_move_rates ? _move_stats_snapshot(params) : nothing
 
     for i in 1:n_steps
         print_info = i % save_strategy.n_info == 0
@@ -2382,8 +2489,9 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
                 @warn "Atomistic IG-ref GC-NS: $(params.allowed_fail_count) consecutive failed replacements; returning the partial ledger and the intact live set (stop_on_stall=true)."
                 break
             else
-                @warn "Atomistic IG-ref GC-NS: Failed $(params.allowed_fail_count) times in a row."
+                @warn "Atomistic IG-ref GC-NS: Failed $(params.allowed_fail_count) times in a row. Reset step size!"
                 params.fail_count = 0
+                params.step_size = params.initial_step_size
             end
         end
 
@@ -2394,10 +2502,17 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
                     "pairing lost (step culled a walker with energy $emax, " *
                     "but the pre-sorted worst walker had $(culled.energy))")
             end
-            if observables === nothing
-                push!(df, (iter, emax.val, n_par, log_t))
+            if record_move_rates
+                snap = _move_stats_snapshot(params)
+                rate_row = snap .- rate_prev
+                rate_prev = snap
             else
-                push!(df, (iter, emax.val, n_par, log_t,
+                rate_row = ()
+            end
+            if observables === nothing
+                push!(df, (iter, emax.val, n_par, log_t, rate_row...))
+            else
+                push!(df, (iter, emax.val, n_par, log_t, rate_row...,
                            (Float64(f(culled.configuration)) for (_, f) in observables)...))
             end
             dead_point_callback === nothing || dead_point_callback(iter, culled)

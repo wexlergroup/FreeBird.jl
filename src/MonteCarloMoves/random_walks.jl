@@ -1443,3 +1443,137 @@ function MC_muVT_walk!(n_steps::Int,
             insert_attempted=insert_attempted, insert_accepted=insert_accepted,
             delete_attempted=delete_attempted, delete_accepted=delete_accepted)
 end
+
+# Householder reflection of the 3N-space velocity off the constraint boundary:
+# v' = v - 2 (v·ĝ) ĝ with ĝ the normalized energy gradient. Norm-preserving and
+# an involution; both properties are pinned in the tests.
+function _galilean_reflect(v::Vector{SVector{3,Float64}}, grad)
+    gn2 = 0.0
+    for gi in grad
+        gn2 += ustrip(u"eV/Å", gi[1])^2 + ustrip(u"eV/Å", gi[2])^2 + ustrip(u"eV/Å", gi[3])^2
+    end
+    gn2 <= 0.0 && return v, false
+    gn = sqrt(gn2)
+    vg = 0.0
+    for i in eachindex(v)
+        vg += v[i][1] * ustrip(u"eV/Å", grad[i][1]) +
+              v[i][2] * ustrip(u"eV/Å", grad[i][2]) +
+              v[i][3] * ustrip(u"eV/Å", grad[i][3])
+    end
+    vg /= gn
+    return [v[i] - (2 * vg / gn) * SVector(ustrip(u"eV/Å", grad[i][1]),
+                                           ustrip(u"eV/Å", grad[i][2]),
+                                           ustrip(u"eV/Å", grad[i][3])) for i in eachindex(v)], true
+end
+
+# One Galilean trajectory of n_refresh segments: straight-line motion, specular
+# reflection at the first rejected trial with continuation THROUGH it, velocity
+# reversal when the reflected trial also fails (continuing from the rejected
+# trial, never retrying from the segment start, is what makes the segment
+# retrace exactly under velocity reversal). Mutates the walker; returns the
+# final velocity and the number of segments that ended inside the constraint.
+function _galilean_trajectory!(at::AtomWalker{1},
+                               pot::SingleComponentPotential{Pairwise},
+                               emax::typeof(0.0u"eV"),
+                               v::Vector{SVector{3,Float64}},
+                               n_refresh::Int,
+                               step_size::Float64)
+    config = at.configuration
+    n = at.list_num_par[1]
+    n_inside = 0
+    current_E = at.energy
+    for _ in 1:n_refresh
+        saved = copy(config.position)
+        saved_E = current_E
+        for i in 1:n
+            pos = config.position[i] + (step_size * v[i]) * u"Å"
+            config.position[i] = periodic_boundary_wrap!(pos, config)
+        end
+        E1 = interacting_energy(config, pot, at.list_num_par, at.frozen) + at.energy_frozen_part
+        if E1 < emax
+            current_E = E1
+            n_inside += 1
+            continue
+        end
+        grad = interacting_gradient(config, pot, at.list_num_par, at.frozen)
+        v_r, ok = _galilean_reflect(v, grad)
+        if ok
+            for i in 1:n
+                pos = config.position[i] + (step_size * v_r[i]) * u"Å"
+                config.position[i] = periodic_boundary_wrap!(pos, config)
+            end
+            E2 = interacting_energy(config, pot, at.list_num_par, at.frozen) + at.energy_frozen_part
+            if E2 < emax
+                current_E = E2
+                n_inside += 1
+                v = v_r
+                continue
+            end
+        end
+        copyto!(config.position, saved)
+        current_E = saved_E
+        v = [-vi for vi in v]
+    end
+    at.energy = current_E
+    return v, n_inside
+end
+
+"""
+    MC_galilean_walk!(n_steps::Int, at::AtomWalker{1}, pot::SingleComponentPotential{Pairwise},
+                      emax::typeof(0.0u"eV"); step_size::Float64, n_refresh::Int=8)
+
+Perform a Galilean (reflective) Monte Carlo walk under a nested-sampling energy
+ceiling: `n_steps` trajectories, each drawing a fresh velocity uniformly on the
+3N-sphere and running `n_refresh` straight-line segments of 3N-space length
+`step_size` (per-atom displacement scales as `step_size`/sqrt(3N)), reflecting
+specularly off the constraint boundary through the energy gradient at the first
+rejected trial and continuing through it, with velocity reversal when the
+reflected trial also fails. All free particles move collectively; segment
+energies are full `interacting_energy` recomputes (a collective move has no
+incremental path), so the walker's energy never accumulates drift. The gradient
+enters only through the reflection direction, so an inaccurate force degrades
+mixing but cannot bias the stationary measure.
+
+Requirements: a single unfrozen component and a fully periodic orthorhombic cell
+(the position wrap mirrors coordinates at non-periodic walls without reversing
+the velocity, which would break reversibility); an empty walker returns unchanged.
+
+# Returns
+- `accept_this_walker::Bool`: Whether any segment ended inside the constraint.
+- `accept_rate::Float64`: Fraction of segments ending inside the constraint.
+- `at::AtomWalker{1}`: The updated walker.
+"""
+function MC_galilean_walk!(n_steps::Int,
+                           at::AtomWalker{1},
+                           pot::SingleComponentPotential{Pairwise},
+                           emax::typeof(0.0u"eV");
+                           step_size::Float64,
+                           n_refresh::Int=8)
+    if step_size <= 0.0 || n_refresh <= 0
+        throw(ArgumentError("step_size and n_refresh must be positive"))
+    end
+    if any(at.frozen)
+        throw(ArgumentError("the Galilean walk kernel requires an unfrozen single-component walker"))
+    end
+    if !all(periodicity(at.configuration))
+        throw(ArgumentError("the Galilean walk kernel requires fully periodic boundary conditions: the position wrap mirrors coordinates at non-periodic walls without reversing the velocity, which breaks the reflective walk's reversibility"))
+    end
+    cellv = cell_vectors(at.configuration)
+    for i in 1:3, j in 1:3
+        if i != j && !iszero(ustrip(cellv[i][j]))
+            throw(ArgumentError("the Galilean walk kernel assumes an orthorhombic cell (consistent with pbc_dist); found a nonzero off-diagonal cell component"))
+        end
+    end
+    n = at.list_num_par[1]
+    n == 0 && return false, 0.0, at
+
+    total_inside = 0
+    for _ in 1:n_steps
+        raw = [SVector(randn(), randn(), randn()) for _ in 1:n]
+        nrm = sqrt(sum(vi -> vi[1]^2 + vi[2]^2 + vi[3]^2, raw))
+        v = [vi / nrm for vi in raw]
+        _, n_inside = _galilean_trajectory!(at, pot, emax, v, n_refresh, step_size)
+        total_inside += n_inside
+    end
+    return total_inside > 0, total_inside / (n_steps * n_refresh), at
+end

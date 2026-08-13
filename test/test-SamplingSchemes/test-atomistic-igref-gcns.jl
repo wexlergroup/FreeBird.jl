@@ -222,3 +222,165 @@
         @test seen_ns == df.num_particles
     end
 end
+
+@testset "Interacting-regime controls" begin
+    using Random
+    # Fixtures calibrated in-session; see the assertions for the measured
+    # separations. Bound-dimer walkers at slightly different separations give a
+    # continuous energy ladder with collapsed insertion/deletion acceptance at
+    # tiny z0V (Metropolis ratio z0V/(N+1)), while displacements stay healthy.
+    hard_L = 12.0
+    hard_box = [[hard_L * u"Å", 0u"Å", 0u"Å"],
+                [0u"Å", hard_L * u"Å", 0u"Å"],
+                [0u"Å", 0u"Å", hard_L * u"Å"]]
+    hard_lj = LJParameters(epsilon=0.05, sigma=2.5, cutoff=2.0, shift=true)
+    hard_pair(r) = AtomWalker(FastSystem(periodic_system(
+        [:Ar => [0.3, 0.5, 0.5], :Ar => [0.3 + r / hard_L, 0.5, 0.5]],
+        hard_box, fractional=true)))
+
+    @testset "Routine and parameter validation" begin
+        r = MCAtomGrandCanonicalMoves()
+        @test r.step_rate_source == :mixed
+        @test r.mc_steps_per_particle == 0.0
+        @test_throws ArgumentError MCAtomGrandCanonicalMoves(step_rate_source=:invalid)
+        @test_throws ArgumentError MCAtomGrandCanonicalMoves(mc_steps_per_particle=-1.0)
+        p = AtomisticIGRefGCNSParameters()
+        @test p.allowed_fail_count == 100
+        @test p.refill_fail_budget == 0
+        @test_throws ArgumentError AtomisticIGRefGCNSParameters(refill_fail_budget=-1)
+    end
+
+    @testset "Walk-length arithmetic" begin
+        p = AtomisticIGRefGCNSParameters(mc_steps=100)
+        @test FreeBird.SamplingSchemes._gc_walk_length(p, MCAtomGrandCanonicalMoves(), 50) == 100
+        @test FreeBird.SamplingSchemes._gc_walk_length(p, MCAtomGrandCanonicalMoves(mc_steps_per_particle=2.0), 50) == 200
+        @test FreeBird.SamplingSchemes._gc_walk_length(p, MCAtomGrandCanonicalMoves(mc_steps_per_particle=1.5), 2) == 103
+    end
+
+    @testset "Step-rate source A/B" begin
+        # Calibrated at seed 3000: the mixed rate ~ 0.3*A_move + 0.35*A_ins +
+        # 0.35*A_del sits below the 0.2 band edge (measured A_ins ~ A_del ~ 0.010,
+        # A_move 0.56-0.64),
+        # so :mixed shrinks the step (measured 0.028) while :move holds it
+        # inside the wide band (measured 0.104)
+        results = Dict{Symbol,Float64}()
+        stats = Dict{Symbol,Dict{Symbol,Int}}()
+        for src in (:mixed, :move)
+            Random.seed!(3000)
+            ls = LJAtomWalkers([hard_pair(2.80 + 0.02k) for k in 1:6], hard_lj)
+            params = AtomisticIGRefGCNSParameters(mc_steps=100,
+                reference_activity=(0.05 / hard_L^3)u"Å^-3", species=:Ar,
+                step_size=0.1, accept_range=(0.2, 0.9), allowed_fail_count=100_000)
+            routine = MCAtomGrandCanonicalMoves(p_move=0.3, p_insert=0.35, step_rate_source=src)
+            z0V = FreeBird.SamplingSchemes._atomistic_igref_z0V(ls, params)
+            for i in 1:30
+                FreeBird.SamplingSchemes.nested_sampling_step!(ls, params, routine; ns_iteration=i, z0V=z0V)
+            end
+            results[src] = params.step_size
+            stats[src] = copy(params.move_stats)
+        end
+        for src in (:mixed, :move)
+            ms = stats[src]
+            @test ms[:move_accepted] / ms[:move_attempted] > 0.5
+            @test ms[:insert_accepted] / ms[:insert_attempted] < 0.05
+        end
+        @test results[:mixed] < 0.05
+        @test results[:move] > 0.09
+    end
+
+    @testset "Refill failure budget" begin
+        # Bit-exact duplicate dimers form a tie block above three slightly
+        # deeper dimers; five-step walks at step 1.5 rarely land below the tie
+        # energy, so the cumulative budget (allowed_fail_count = 2) abandons
+        # the refill where a dedicated budget completes it. Calibrated at
+        # seeds 4000/4001: n_live 3 vs 6 at both.
+        for (budget, expected) in ((0, 3), (300, 6))
+            Random.seed!(4000)
+            dup = hard_pair(2.90)
+            ls = LJAtomWalkers([deepcopy(dup), deepcopy(dup), deepcopy(dup),
+                                hard_pair(2.82), hard_pair(2.83), hard_pair(2.84)], hard_lj)
+            params = AtomisticIGRefGCNSParameters(mc_steps=5,
+                reference_activity=(0.05 / hard_L^3)u"Å^-3", species=:Ar,
+                step_size=1.5, allowed_fail_count=2, refill_fail_budget=budget)
+            routine = MCAtomGrandCanonicalMoves(p_move=0.6, p_insert=0.2)
+            z0V = FreeBird.SamplingSchemes._atomistic_igref_z0V(ls, params)
+            for i in 1:6
+                FreeBird.SamplingSchemes.nested_sampling_step!(ls, params, routine; ns_iteration=i, z0V=z0V)
+            end
+            @test length(ls.walkers) == expected
+        end
+    end
+
+    @testset "Stall-continue resets the step size" begin
+        # Zero-interaction degenerate live set: every replacement fails, and on
+        # the stop_on_stall=false branch the step size returns to initial
+        Random.seed!(5000)
+        seeds = [AtomWalker(FastSystem(periodic_system(
+            [:Ar => [0.5, 0.5, 0.5]], hard_box, fractional=true))) for _ in 1:4]
+        ls = GenericAtomWalkers(seeds, IdealGasParameters())
+        params = AtomisticIGRefGCNSParameters(mc_steps=10,
+            reference_activity=(2.0 / hard_L^3)u"Å^-3", species=:Ar,
+            initial_step_size=0.5, step_size=1.7, allowed_fail_count=3)
+        save = SaveEveryN(df_filename="_t_stall.csv", wk_filename="_t_stall.traj.extxyz",
+                          ls_filename="_t_stall.ls.extxyz",
+                          n_traj=10^7, n_snap=10^7, n_info=10^7)
+        df, ls, params = ideal_gas_referenced_nested_sampling(
+            ls, params, 3, MCAtomGrandCanonicalMoves(), save; stop_on_stall=false)
+        for f in ("_t_stall.csv", "_t_stall.traj.extxyz", "_t_stall.ls.extxyz")
+            rm(f, force=true)
+        end
+        @test params.step_size == params.initial_step_size
+        @test nrow(df) == 0
+    end
+
+    @testset "Per-iteration acceptance ledger" begin
+        Random.seed!(6000)
+        ls = LJAtomWalkers([hard_pair(2.80 + 0.02k) for k in 1:6], hard_lj)
+        params = AtomisticIGRefGCNSParameters(mc_steps=60,
+            reference_activity=(6.0 / hard_L^3)u"Å^-3", species=:Ar,
+            allowed_fail_count=100_000)
+        save = SaveEveryN(df_filename="_t_rates.csv", wk_filename="_t_rates.traj.extxyz",
+                          ls_filename="_t_rates.ls.extxyz",
+                          n_traj=10^7, n_snap=10^7, n_info=10^7)
+        df, ls, params = ideal_gas_referenced_nested_sampling(
+            ls, params, 40, MCAtomGrandCanonicalMoves(), save; record_move_rates=true)
+        rate_names = ["move_attempted", "move_accepted", "insert_attempted",
+                      "insert_accepted", "delete_attempted", "delete_accepted"]
+        @test names(df) == vcat(["iter", "emax", "num_particles", "log_compression"], rate_names)
+        # Closure: recorded per-iteration deltas sum to the run totals
+        for name in rate_names
+            @test sum(df[!, name]) == get(params.move_stats, Symbol(name), 0)
+        end
+        # The default keeps the shipped four-column schema
+        Random.seed!(6000)
+        ls2 = LJAtomWalkers([hard_pair(2.80 + 0.02k) for k in 1:6], hard_lj)
+        params2 = AtomisticIGRefGCNSParameters(mc_steps=60,
+            reference_activity=(6.0 / hard_L^3)u"Å^-3", species=:Ar,
+            allowed_fail_count=100_000)
+        save2 = SaveEveryN(df_filename="_t_rates.csv", wk_filename="_t_rates.traj.extxyz",
+                           ls_filename="_t_rates.ls.extxyz",
+                           n_traj=10^7, n_snap=10^7, n_info=10^7)
+        df2, _, _ = ideal_gas_referenced_nested_sampling(
+            ls2, params2, 40, MCAtomGrandCanonicalMoves(), save2)
+        @test names(df2) == ["iter", "emax", "num_particles", "log_compression"]
+        # Same seed, recording on or off: identical sampling trajectory
+        @test df2.emax == df.emax
+        for f in ("_t_rates.csv", "_t_rates.traj.extxyz", "_t_rates.ls.extxyz")
+            rm(f, force=true)
+        end
+        # The rate columns are reserved: observables cannot collide with them
+        @test_throws ArgumentError FreeBird.SamplingSchemes._validate_observables(
+            [:insert_accepted => cfg -> 0.0], ls)
+    end
+
+    @testset "Minimum-image cutoff guard" begin
+        cfg = hard_pair(2.9).configuration
+        over = LJParameters(epsilon=0.05, sigma=2.5, cutoff=2.5, shift=true)   # 6.25 > 6.0
+        under = LJParameters(epsilon=0.05, sigma=2.5, cutoff=2.0, shift=true)  # 5.0 <= 6.0
+        untr = LJParameters(epsilon=0.05, sigma=2.5)                           # Inf: never warns
+        @test_logs (:warn, r"minimum-image") FreeBird.SamplingSchemes._warn_min_image_cutoff(over, cfg)
+        @test_logs FreeBird.SamplingSchemes._warn_min_image_cutoff(under, cfg)
+        @test_logs FreeBird.SamplingSchemes._warn_min_image_cutoff(untr, cfg)
+        @test SamplingSchemes.AbstractPotentials._max_interaction_range(IdealGasParameters()) === missing
+    end
+end

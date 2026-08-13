@@ -13,9 +13,10 @@ using ..AbstractPotentials
 using ..AbstractHamiltonians
 using AtomsCalculators
 
-export pbc_dist
+export pbc_dist, pbc_displacement
 export interacting_energy, frozen_energy
 export single_site_energy
+export pair_force, interacting_gradient
 
 # definitions of frozen_energy and interacting_energy
 include("atomistic_energies.jl")
@@ -28,6 +29,9 @@ include("atomistic_pairwise.jl")
 
 # definitions of single_site_energy for computing a site energy using a pairwise potential
 include("atomistic_single_site.jl")
+
+# definitions of pairwise forces and gradients
+include("atomistic_forces.jl")
 
 # definitions of interacting_energy for many-body potentials
 include("atomistic_many_body.jl")

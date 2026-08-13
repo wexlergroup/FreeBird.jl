@@ -25,6 +25,8 @@ include("test-AnalysisTools.jl")
 
 include("test-EnergyEval.jl")
 
+include("test-EnergyEval-forces.jl")
+
 include("test-EnergyEval-clusters.jl")
 
 include("test-MonteCarloMoves.jl")

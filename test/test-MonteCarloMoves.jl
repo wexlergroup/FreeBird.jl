@@ -798,7 +798,8 @@
             _, _, _, stats = MC_grand_canonical_walk!(1, w, lj0, emax_inf; z0V=8.0, species=:Ar, p_move=0.0, p_insert=0.25)
             @test w.list_num_par == [0]
             @test stats == (move_attempted=0, move_accepted=0, insert_attempted=0,
-                            insert_accepted=0, delete_attempted=0, delete_accepted=0)
+                            insert_accepted=0, insert_biased_attempted=0,
+                            insert_biased_accepted=0, delete_attempted=0, delete_accepted=0)
             @test rand() == probe[2]
             Random.seed!(779)
             probe779 = [rand() for _ in 1:4]

@@ -1192,12 +1192,24 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                   p_move::Float64=0.5,
                                   p_insert::Float64=0.25,
                                   step_size::Float64=0.5,
-                                  n_max::Int=typemax(Int))
+                                  n_max::Int=typemax(Int),
+                                  p_bias::Float64=0.0,
+                                  bias_radius::Float64=0.0,
+                                  bias_grid::Int=0)
     if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
         throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
     end
     if z0V <= 0.0
         throw(ArgumentError("z0V must be positive"))
+    end
+    if p_bias < 0.0 || p_bias > 1.0
+        throw(ArgumentError("p_bias must lie in [0, 1]"))
+    end
+    if p_bias > 0.0 && (bias_radius <= 0.0 || bias_grid < 1)
+        throw(ArgumentError("a biased insertion channel (p_bias > 0) requires bias_radius > 0 and bias_grid >= 1"))
+    end
+    if p_bias == 1.0
+        @warn "p_bias = 1: any deletion whose vacated cell is not a post-deletion cavity cell auto-rejects, which can freeze dense states; a mixed channel (p_bias < 1) keeps the chain irreducible." maxlog=1
     end
     if any(at.frozen)
         throw(ArgumentError("the continuous grand-canonical kernel requires an unfrozen single-component walker"))
@@ -1218,6 +1230,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
     move_accepted = 0
     insert_attempted = 0
     insert_accepted = 0
+    insert_biased_attempted = 0
+    insert_biased_accepted = 0
     delete_attempted = 0
     delete_accepted = 0
 
@@ -1245,10 +1259,30 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 accept_this_walker = true
             end
         elseif r < p_move + p_insert
-            # Insertion: uniform in the cell, insert-evaluate-revert
+            # Insertion: uniform in the cell (optionally cavity-biased),
+            # insert-evaluate-revert. The p_bias = 0 path keeps the shipped
+            # expressions literally and draws behind p_bias > 0 guards only.
             (n + 1 > n_max || p_insert <= 0.0) && continue   # guard skip
             insert_attempted += 1
-            pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
+            biased_draw = false
+            q_fwd = 1.0
+            if p_bias > 0.0
+                cav = continuous_cavity_cells(config, box, bias_grid, bias_radius)
+                biased_draw = rand() < p_bias
+                if biased_draw
+                    insert_biased_attempted += 1
+                    if isempty(cav)
+                        # Null proposal: counted as attempted, no further draws
+                        continue
+                    end
+                    pos = _cavity_cell_draw(cav[rand(1:length(cav))], box, bias_grid)
+                else
+                    pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
+                end
+                q_fwd = _composite_cavity_density(pos, cav, box, bias_grid, p_bias)
+            else
+                pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
+            end
             insert_particle!(at, pos, species)
             e_site = single_site_energy(n + 1, config, pot, at.list_num_par)
             proposed_energy = at.energy + e_site
@@ -1256,7 +1290,11 @@ function MC_grand_canonical_walk!(n_steps::Int,
             if proposed_energy >= emax
                 accept = false
             else
-                ratio = gc_insert_acceptance_ratio(z0V, n, p_insert, p_delete)
+                if p_bias > 0.0
+                    ratio = gc_insert_acceptance_ratio(z0V, n, p_insert, p_delete) / q_fwd
+                else
+                    ratio = gc_insert_acceptance_ratio(z0V, n, p_insert, p_delete)
+                end
                 if ratio < 1.0 && rand() >= ratio
                     accept = false
                 end
@@ -1265,6 +1303,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 at.energy = proposed_energy
                 n_accept += 1
                 insert_accepted += 1
+                biased_draw && (insert_biased_accepted += 1)
                 accept_this_walker = true
             else
                 remove_particle!(at, n + 1)
@@ -1280,9 +1319,25 @@ function MC_grand_canonical_walk!(n_steps::Int,
             if proposed_energy >= emax
                 accept = false
             else
-                ratio = gc_delete_acceptance_ratio(z0V, n, p_insert, p_delete)
-                if ratio < 1.0 && rand() >= ratio
-                    accept = false
+                if p_bias > 0.0
+                    # Reverse density on the post-deletion configuration; a zero
+                    # reverse density rejects without a Metropolis draw
+                    cav_post = continuous_cavity_cells(config, box, bias_grid, bias_radius; skip=i_at)
+                    q_rev = _composite_cavity_density(position(config, i_at), cav_post,
+                                                      box, bias_grid, p_bias)
+                    if q_rev == 0.0
+                        accept = false
+                    else
+                        ratio = gc_delete_acceptance_ratio(z0V, n, p_insert, p_delete) * q_rev
+                        if ratio < 1.0 && rand() >= ratio
+                            accept = false
+                        end
+                    end
+                else
+                    ratio = gc_delete_acceptance_ratio(z0V, n, p_insert, p_delete)
+                    if ratio < 1.0 && rand() >= ratio
+                        accept = false
+                    end
                 end
             end
             if accept
@@ -1298,6 +1353,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
     return accept_this_walker, n_accept / max(n_steps, 1), at,
            (move_attempted=move_attempted, move_accepted=move_accepted,
             insert_attempted=insert_attempted, insert_accepted=insert_accepted,
+            insert_biased_attempted=insert_biased_attempted,
+            insert_biased_accepted=insert_biased_accepted,
             delete_attempted=delete_attempted, delete_accepted=delete_accepted)
 end
 """
@@ -1576,4 +1633,97 @@ function MC_galilean_walk!(n_steps::Int,
         total_inside += n_inside
     end
     return total_inside > 0, total_inside / (n_steps * n_refresh), at
+end
+
+"""
+    continuous_cavity_cells(config::AbstractSystem, box, grid::Int, r_cavity::Float64;
+                            skip::Int=0)
+
+The cavity cells of a continuous configuration: the sorted linear indices (of
+the `grid`³ overlay, column-major) of cells whose centers clear the
+minimum-image distance test r ≥ `r_cavity` against every particle. `skip`
+excludes one particle index, evaluating the post-deletion cavity set without
+mutating (the deletion channel's mutate-nothing-until-accepted convention).
+The indicator is a deterministic function of the configuration, evaluated
+identically in the biased draw, the forward proposal density, and the reverse
+density; a stochastic cavity-volume estimate has no Metropolis-Hastings
+exactness result and is deliberately not offered. Marks cells by particle,
+O(grid³ + N (r_cavity/h)³) with h the cell edge.
+"""
+function continuous_cavity_cells(config::AbstractSystem, box, grid::Int, r_cavity::Float64;
+                                 skip::Int=0)
+    n = length(config)
+    occupied = falses(grid, grid, grid)
+    L = (ustrip(u"Å", box[1]), ustrip(u"Å", box[2]), ustrip(u"Å", box[3]))
+    h = (L[1] / grid, L[2] / grid, L[3] / grid)
+    pbc = periodicity(config)
+    li = LinearIndices((grid, grid, grid))
+    for p_idx in 1:n
+        p_idx == skip && continue
+        pos = (ustrip(u"Å", position(config, p_idx)[1]),
+               ustrip(u"Å", position(config, p_idx)[2]),
+               ustrip(u"Å", position(config, p_idx)[3]))
+        base = (floor(Int, pos[1] / h[1]), floor(Int, pos[2] / h[2]), floor(Int, pos[3] / h[3]))
+        reach = (ceil(Int, r_cavity / h[1]) + 1, ceil(Int, r_cavity / h[2]) + 1,
+                 ceil(Int, r_cavity / h[3]) + 1)
+        for dx in -reach[1]:reach[1], dy in -reach[2]:reach[2], dz in -reach[3]:reach[3]
+            ix, iy, iz = base[1] + dx, base[2] + dy, base[3] + dz
+            if pbc[1]
+                ix = mod(ix, grid)
+            elseif ix < 0 || ix >= grid
+                continue
+            end
+            if pbc[2]
+                iy = mod(iy, grid)
+            elseif iy < 0 || iy >= grid
+                continue
+            end
+            if pbc[3]
+                iz = mod(iz, grid)
+            elseif iz < 0 || iz >= grid
+                continue
+            end
+            occupied[ix + 1, iy + 1, iz + 1] && continue
+            cx, cy, cz = (ix + 0.5) * h[1], (iy + 0.5) * h[2], (iz + 0.5) * h[3]
+            δx = cx - pos[1]
+            pbc[1] && (δx -= L[1] * round(δx / L[1]))
+            δy = cy - pos[2]
+            pbc[2] && (δy -= L[2] * round(δy / L[2]))
+            δz = cz - pos[3]
+            pbc[3] && (δz -= L[3] * round(δz / L[3]))
+            if δx^2 + δy^2 + δz^2 < r_cavity^2
+                occupied[ix + 1, iy + 1, iz + 1] = true
+            end
+        end
+    end
+    return findall(!, vec(occupied))
+end
+
+# Column-major linear cell index of a position under the grid overlay, matching
+# `continuous_cavity_cells` (cells located by floor on wrapped coordinates)
+function _cavity_cell_index(pos, box, grid::Int)
+    ix = min(floor(Int, ustrip(u"Å", pos[1]) / (ustrip(u"Å", box[1]) / grid)), grid - 1)
+    iy = min(floor(Int, ustrip(u"Å", pos[2]) / (ustrip(u"Å", box[2]) / grid)), grid - 1)
+    iz = min(floor(Int, ustrip(u"Å", pos[3]) / (ustrip(u"Å", box[3]) / grid)), grid - 1)
+    return LinearIndices((grid, grid, grid))[max(ix, 0) + 1, max(iy, 0) + 1, max(iz, 0) + 1]
+end
+
+# Composite proposal density at a point, in units of the uniform density:
+# p_bias (grid³/n_cav) 1{cell ∈ cavity} + (1 − p_bias). Membership is evaluated
+# at the CELL level in both directions (a point-level test disagrees with the
+# cell-level draw on boundary cells and breaks the density bookkeeping).
+function _composite_cavity_density(pos, cav::Vector{Int}, box, grid::Int, p_bias::Float64)
+    isempty(cav) && return 1.0 - p_bias
+    in_cav = insorted(_cavity_cell_index(pos, box, grid), cav)
+    return p_bias * (grid^3 / length(cav)) * (in_cav ? 1.0 : 0.0) + (1.0 - p_bias)
+end
+
+# Uniform draw within one cavity cell: the cell origin plus per-axis jitter
+function _cavity_cell_draw(cell::Int, box, grid::Int)
+    ci = CartesianIndices((grid, grid, grid))[cell]
+    h1 = box[1] / grid
+    h2 = box[2] / grid
+    h3 = box[3] / grid
+    return SVector((ci[1] - 1 + rand()) * h1, (ci[2] - 1 + rand()) * h2,
+                   (ci[3] - 1 + rand()) * h3)
 end

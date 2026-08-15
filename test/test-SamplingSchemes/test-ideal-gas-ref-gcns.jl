@@ -872,4 +872,100 @@
             energy_perturb=1e-9, incremental=true)
         @test alloc_bytes < 2_000_000
     end
+
+    @testset "driver controls (ideal-gas-referenced route)" begin
+        dc_lat() = MLattice{1,SquareLattice}(lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)], supercell_dimensions=(4, 4, 1),
+            periodicity=(true, true, false), cutoff_radii=[1.1],
+            components=[[false for _ in 1:16]], adsorptions=:full)
+        dc_ham = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
+        dc_save = SaveEveryN("t_dc_ig.csv", "t_dc_ig.traj", "t_dc_ig.ls",
+                             1000000, 1000000, 1000000)
+        dc_cleanup() = rm.(["t_dc_ig.csv", "t_dc_ig.traj", "t_dc_ig.ls"],
+                           force=true)
+
+        # Parameter-crafted stall: a near-zero reference fugacity
+        # initializes every walker empty and a deletion-only move mix is
+        # permanently guard-skipped
+        function dc_stall(; kwargs...)
+            Random.seed!(99003)
+            ws = [LatticeWalker(deepcopy(dc_lat()), energy=0.0u"eV", iter=0)
+                  for _ in 1:8]
+            ls = LatticeGasWalkers(ws, dc_ham; assign_energy=false)
+            p = IdealGasReferencedGCNSParameters(mc_steps=10,
+                reference_fugacity=1e-8, energy_perturbation=1e-9,
+                allowed_fail_count=3)
+            d, lsx, _ = ideal_gas_referenced_nested_sampling(ls, p,
+                Int64(40), MCGrandCanonicalMoves(p_move=0.0, p_insert=0.0),
+                dc_save; kwargs...)
+            dc_cleanup()
+            return d, lsx
+        end
+        d_stop, ls_stop = @test_logs (:warn, r"IG-ref GC-NS: Failed") match_mode=:any dc_stall(
+            stop_on_stall=true)
+        @test nrow(d_stop) == 0
+        @test length(ls_stop.walkers) == 8
+        d_def, _ = dc_stall()
+        @test nrow(d_def) == 0
+
+        # Tie-breaker scale warning: hand-computed bound on the 4x4
+        # one-shell fixture is 0.04*16 + 0.01*64/2 = 0.96 in eV units; the
+        # site-field wrapper adds its magnitude sum, the cluster wrapper
+        # its coupling-times-embeddings sum, and an unknown Hamiltonian
+        # type opts out (no warning)
+        b0 = SamplingSchemes._perturbation_energy_bound(dc_ham, dc_lat())
+        @test isapprox(b0, 0.96; rtol=1e-12)
+        fld = collect(0.01 .* (1:16)) .* u"eV"
+        bsf = SamplingSchemes._perturbation_energy_bound(
+            SiteFieldLatticeHamiltonian(dc_ham, fld), dc_lat())
+        @test isapprox(bsf, 0.96 + sum(0.01 .* (1:16)); rtol=1e-12)
+        bcl = SamplingSchemes._perturbation_energy_bound(
+            ClusterLatticeHamiltonian(dc_ham,
+                [ClusterInteraction(0.1u"eV", [(1, 2, 5)])]), dc_lat())
+        @test isapprox(bcl, 0.96 + 0.1; rtol=1e-12)
+        @test SamplingSchemes._perturbation_energy_bound(:not_a_hamiltonian,
+            dc_lat()) === nothing
+        # Image-multiplicity cell (2x2, wrap-around bonds counted per image,
+        # self-image entries included by the entries/2 form): each site
+        # carries 4 ordered entries (two images per axis), 16 total, so
+        # b = 0.04*4 + 0.01*16/2 = 0.24
+        im_lat = MLattice{1,SquareLattice}(lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)], supercell_dimensions=(2, 2, 1),
+            periodicity=(true, true, false), cutoff_radii=[1.1],
+            components=[[false for _ in 1:4]], adsorptions=:full,
+            image_multiplicity=true)
+        @test isapprox(SamplingSchemes._perturbation_energy_bound(dc_ham,
+            im_lat), 0.24; rtol=1e-12)
+        # Multi-component Hamiltonian delegates to [1, 1], matching the
+        # energy and delta paths
+        @test isapprox(SamplingSchemes._perturbation_energy_bound(
+            MLatticeHamiltonian(1, [dc_ham]), dc_lat()), 0.96; rtol=1e-12)
+
+        # Below-floor perturbation warns at driver entry; an in-range one
+        # never does
+        function dc_short(delta)
+            Random.seed!(99004)
+            ws = [LatticeWalker(deepcopy(dc_lat()), energy=0.0u"eV", iter=0)
+                  for _ in 1:10]
+            ls = LatticeGasWalkers(ws, dc_ham; assign_energy=false)
+            p = IdealGasReferencedGCNSParameters(mc_steps=5,
+                reference_fugacity=1.0, energy_perturbation=delta)
+            d, _, _ = ideal_gas_referenced_nested_sampling(ls, p, Int64(3),
+                MCGrandCanonicalMoves(), dc_save)
+            dc_cleanup()
+            return d
+        end
+        logs_lo, _ = Test.collect_test_logs() do
+            dc_short(1e-15)
+        end
+        floor_warns = [l for l in logs_lo
+                       if occursin("resolution floor", string(l.message))]
+        @test length(floor_warns) == 1
+        @test occursin("Recommended minimum", string(floor_warns[1].message))
+        logs_hi, _ = Test.collect_test_logs() do
+            dc_short(1e-9)
+        end
+        @test !any(occursin("resolution floor", string(l.message))
+                   for l in logs_hi)
+    end
 end

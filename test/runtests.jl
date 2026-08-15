@@ -29,6 +29,8 @@ include("test-EnergyEval-forces.jl")
 
 include("test-EnergyEval-clusters.jl")
 
+include("test-lattice-site-deltas.jl")
+
 include("test-MonteCarloMoves.jl")
 
 include("test-SamplingSchemes/test-SamplingSchemes.jl")

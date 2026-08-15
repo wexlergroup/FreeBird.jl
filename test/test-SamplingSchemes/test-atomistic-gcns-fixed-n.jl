@@ -1830,3 +1830,124 @@ end
         end
     end
 end
+
+@testset "Canonical per-iteration ledger" begin
+    using Random
+    cl_box = [[12.0, 0.0, 0.0], [0.0, 12.0, 0.0], [0.0, 0.0, 12.0]]u"Å"
+    cl_pbc = (true, true, true)
+    cl_lj = LJParameters(epsilon=0.05, sigma=2.5, cutoff=2.0, shift=true)
+    cl_pair(d) = AtomWalker(FastSystem(atomic_system(
+        [:Ar => [5.0, 6.0, 6.0]u"Å", :Ar => [5.0 + d, 6.0, 6.0]u"Å"],
+        cl_box, cl_pbc)))
+    function cl_liveset()
+        ws = [cl_pair(2.80 + 0.02k) for k in 1:6]
+        for w in ws
+            w.energy = interacting_energy(w.configuration, cl_lj,
+                                          w.list_num_par, w.frozen)
+        end
+        return LJAtomWalkers(ws, cl_lj)
+    end
+    cl_params() = NestedSamplingParameters(mc_steps=64, initial_step_size=0.3,
+        step_size=0.3, allowed_fail_count=100_000)
+    cl_save() = SaveEveryN(df_filename="_t_cl.csv",
+                           wk_filename="_t_cl.traj.extxyz",
+                           ls_filename="_t_cl.ls.extxyz",
+                           n_traj=10^7, n_snap=10^7, n_info=10^7)
+    cl_cleanup() = for f in ("_t_cl.csv", "_t_cl.traj.extxyz",
+                             "_t_cl.ls.extxyz")
+        rm(f, force=true)
+    end
+    gal5 = ["galilean_attempted", "galilean_accepted",
+            "galilean_reflect_attempted", "galilean_reflect_evals",
+            "galilean_reflect_accepted"]
+
+    @testset "restriction matrix" begin
+        # The liveset half of the gate is load-bearing: a lattice liveset
+        # with an allowed routine dispatches to the lattice step methods
+        lat = MLattice{1,SquareLattice}(lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)], supercell_dimensions=(4, 4, 1),
+            periodicity=(true, true, false), cutoff_radii=[1.1],
+            components=[[false for _ in 1:16]], adsorptions=:full)
+        lham = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
+        lls = LatticeGasWalkers([LatticeWalker(deepcopy(lat), energy=0.0u"eV",
+                                               iter=0) for _ in 1:4], lham;
+                                assign_energy=false)
+        @test_throws ArgumentError nested_sampling(lls, cl_params(), Int64(5),
+            MCRandomWalkClone(), cl_save(); record_move_rates=true)
+        # Parallel/multi-cull routines are rejected too
+        @test_throws ArgumentError nested_sampling(cl_liveset(), cl_params(),
+            Int64(5), MCRandomWalkCloneParallel(), cl_save();
+            record_move_rates=true)
+    end
+
+    @testset "random-walk ledger and synthesis exactness" begin
+        Random.seed!(7100)
+        df, _, pout = nested_sampling(cl_liveset(), cl_params(), Int64(40),
+            MCRandomWalkClone(), cl_save(); record_move_rates=true)
+        cl_cleanup()
+        @test names(df) == ["iter", "emax", "log_compression",
+                            "move_attempted", "move_accepted", "step_size"]
+        for name in ("move_attempted", "move_accepted")
+            @test sum(df[!, name]) == get(pout.move_stats, Symbol(name), 0)
+        end
+        # Walked rows carry positive integer multiples of mc_steps (failed
+        # iterations fold forward); plateau-eviction rows carry zeros
+        @test all(r -> r == 0 || (r > 0 && r % 64 == 0), df.move_attempted)
+        @test all(df.move_accepted .<= df.move_attempted)
+        @test df.step_size[end] == pout.step_size
+        # Round-trip synthesis on a direct kernel call: with a power-of-two
+        # step count the returned rate is exactly representable and the
+        # rounding inverts it bit-exactly
+        Random.seed!(7101)
+        wk = cl_pair(2.9)
+        wk.energy = interacting_energy(wk.configuration, cl_lj,
+                                       wk.list_num_par, wk.frozen)
+        _, r, _ = MC_random_walk!(64, wk, cl_lj, 0.3, wk.energy + 0.05u"eV")
+        @test isinteger(r * 64)
+        @test 0 <= round(Int, r * 64) <= 64
+
+        # Default-off keeps the shipped schema and trajectory
+        Random.seed!(7102)
+        dfa, _, _ = nested_sampling(cl_liveset(), cl_params(), Int64(30),
+            MCRandomWalkClone(), cl_save(); record_move_rates=true)
+        cl_cleanup()
+        Random.seed!(7102)
+        dfb, _, _ = nested_sampling(cl_liveset(), cl_params(), Int64(30),
+            MCRandomWalkClone(), cl_save())
+        cl_cleanup()
+        @test names(dfb) == ["iter", "emax", "log_compression"]
+        @test dfa.iter == dfb.iter
+        @test dfa.emax == dfb.emax
+        @test dfa.log_compression == dfb.log_compression
+    end
+
+    @testset "Galilean ledger" begin
+        Random.seed!(7103)
+        gp = NestedSamplingParameters(mc_steps=4, initial_step_size=0.5,
+            step_size=0.5, allowed_fail_count=100_000)
+        df, _, pout = nested_sampling(cl_liveset(), gp, Int64(30),
+            MCGalileanWalk(n_refresh=4), cl_save(); record_move_rates=true)
+        cl_cleanup()
+        @test names(df) == vcat(["iter", "emax", "log_compression"], gal5,
+                                ["step_size"])
+        for name in gal5
+            @test sum(df[!, name]) == get(pout.move_stats, Symbol(name), 0)
+        end
+        @test get(pout.move_stats, :galilean_attempted, 0) > 0
+        @test df.step_size[end] == pout.step_size
+    end
+
+    @testset "parameters carry and reset the counter dictionary" begin
+        p = NestedSamplingParameters()
+        @test p.move_stats isa Dict{Symbol,Int}
+        @test isempty(p.move_stats)
+        p.move_stats[:move_attempted] = 7
+        Random.seed!(7104)
+        nested_sampling(cl_liveset(), p, Int64(5), MCRandomWalkClone(),
+                        cl_save())
+        cl_cleanup()
+        # The driver clears stale counters at entry, then accumulates fresh
+        # (5 steps at the constructor's default mc_steps = 200)
+        @test get(p.move_stats, :move_attempted, 0) == 5 * 200
+    end
+end

@@ -714,4 +714,162 @@
         @test dfA.emax == dfB.emax
         @test dfA.num_particles == dfB.num_particles
     end
+
+    @testset "opt-in incremental walk" begin
+        # Calibration ledger (gates at >= 3x the max three-seed deviation,
+        # per statistic): incremental = true full-descent ladders on the
+        # 4x4 two-shell fixture (K = 64, mc_steps = 40, 820 steps, z0 = 1,
+        # reduced at mu = 0, T = 600 K), seeds 96001/96002/96003 measured
+        # |d logXi| = 0.153 / 0.282 / 0.156 (sigma class sqrt(16 ln2 / 64)
+        # ~ 0.42, matching the shipped substitution-closure calibration) and
+        # |d mean_N| = 0.057 / 0.088 / 0.076: gates 0.85 and 0.27.
+        inc_lat() = MLattice{1,SquareLattice}(lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)], supercell_dimensions=(4, 4, 1),
+            periodicity=(true, true, false), cutoff_radii=[1.1, 1.5],
+            components=[[false for _ in 1:16]], adsorptions=:full)
+        inc_ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+        inc_save = SaveEveryN("t_inc.csv", "t_inc.traj", "t_inc.ls",
+                              1000000, 1000000, 1000000)
+        inc_cleanup() = rm.(["t_inc.csv", "t_inc.traj", "t_inc.ls"],
+                            force=true)
+        inc_T = 600.0
+        inc_mu = 0.0
+        inc_beta = 1 / (kb * inc_T)
+
+        # Exact grand sum by per-sector enumeration, computed before any
+        # seeding because exact_enumeration consumes the global RNG
+        inc_lnZs = Float64[]
+        for N in 0:16
+            occ = vcat(fill(true, N), fill(false, 16 - N))
+            latN = inc_lat()
+            latN.components[1] .= occ
+            dfe, _ = exact_enumeration(latN, inc_ham)
+            Es = [ustrip(u"eV", e) for e in dfe.energy]
+            Emin = minimum(Es)
+            push!(inc_lnZs, inc_beta * inc_mu * N - inc_beta * Emin +
+                            log(sum(exp.(-inc_beta .* (Es .- Emin)))))
+        end
+        inc_m = maximum(inc_lnZs)
+        inc_lnXi = inc_m + log(sum(exp.(inc_lnZs .- inc_m)))
+        inc_meanN = sum((0:16) .* exp.(inc_lnZs .- inc_m)) /
+                    sum(exp.(inc_lnZs .- inc_m))
+
+        # Same-seed A/B stream identity: a routine that never mentions the
+        # field against incremental = false, on the driver
+        function inc_ab(seed, routine)
+            Random.seed!(seed)
+            ws = [LatticeWalker(deepcopy(inc_lat()), energy=0.0u"eV", iter=0)
+                  for _ in 1:16]
+            ls = LatticeGasWalkers(ws, inc_ham; assign_energy=false)
+            p = IdealGasReferencedGCNSParameters(mc_steps=20,
+                reference_fugacity=1.0, energy_perturbation=1e-9)
+            d, lsx, _ = ideal_gas_referenced_nested_sampling(ls, p,
+                Int64(100), routine, inc_save)
+            inc_cleanup()
+            return d, lsx
+        end
+        dA, lsA = inc_ab(97001, MCGrandCanonicalMoves())
+        dB, lsB = inc_ab(97001, MCGrandCanonicalMoves(incremental=false))
+        @test dA.iter == dB.iter
+        @test dA.emax == dB.emax
+        @test dA.num_particles == dB.num_particles
+        @test [w.energy.val for w in lsA.walkers] ==
+              [w.energy.val for w in lsB.walkers]
+
+        # Statistical gate against the exact grand sum, three seeds
+        for seed in (96001, 96002, 96003)
+            Random.seed!(seed)
+            ws = [LatticeWalker(deepcopy(inc_lat()), energy=0.0u"eV", iter=0)
+                  for _ in 1:64]
+            ls = LatticeGasWalkers(ws, inc_ham; assign_energy=false)
+            p = IdealGasReferencedGCNSParameters(mc_steps=40,
+                reference_fugacity=1.0, energy_perturbation=1e-9)
+            d, lsx, _ = ideal_gas_referenced_nested_sampling(ls, p,
+                Int64(820), MCGrandCanonicalMoves(incremental=true), inc_save)
+            inc_cleanup()
+            live_E = [w.energy.val for w in lsx.walkers]
+            live_N = [Int(sum(w.configuration.components[1]))
+                      for w in lsx.walkers]
+            s = gc_thermodynamic_stats_ideal_ref(d, 16, 1.0, [inc_mu],
+                [inc_T], 64; ω0=65 / 64, live_emax=live_E,
+                live_numbers=live_N)
+            @test abs(s.logXi[1, 1] - inc_lnXi) < 0.85
+            @test abs(s.mean_N[1, 1] - inc_meanN) < 0.27
+        end
+
+        # Anchor-drift weld: with a zero perturbation the stored walker
+        # energy IS the raw accumulator, so a long incremental walk must
+        # agree with a from-scratch recompute in the 1e-12 eV class
+        weld_lat = MLattice{1,SquareLattice}(lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)], supercell_dimensions=(6, 6, 1),
+            periodicity=(true, true, false), cutoff_radii=[1.1, 1.5],
+            components=[[false for _ in 1:36]], adsorptions=:full)
+        Random.seed!(97002)
+        for i in 1:36
+            weld_lat.components[1][i] = rand() < 0.5
+        end
+        weld_wk = LatticeWalker(weld_lat,
+            energy=interacting_energy(weld_lat, inc_ham), iter=0)
+        MC_grand_canonical_walk!(5000, weld_wk, inc_ham, 1.0e3, 0.0;
+            p_move=0.4, p_insert=0.3, z0=1.0, energy_perturb=0.0,
+            clusters_freq=2, swaps_freq=2, cluster_p=0.3, incremental=true)
+        @test abs(ustrip(u"eV", weld_wk.energy -
+                  interacting_energy(weld_wk.configuration, inc_ham))) <= 1e-12
+
+        # Null-pair fixture at extreme coverage: a swap-only walk on a
+        # nearly full lattice is dominated by equal-occupancy pairs, which
+        # must contribute exactly zero delta (the weld exposes a corrupted
+        # accumulator)
+        null_lat = inc_lat()
+        null_lat.components[1] .= true
+        null_lat.components[1][3] = false
+        Random.seed!(97003)
+        null_wk = LatticeWalker(null_lat,
+            energy=interacting_energy(null_lat, inc_ham), iter=0)
+        MC_grand_canonical_walk!(2000, null_wk, inc_ham, 1.0e3, 0.0;
+            p_move=1.0, p_insert=0.0, z0=1.0, energy_perturb=0.0,
+            incremental=true)
+        @test abs(ustrip(u"eV", null_wk.energy -
+                  interacting_energy(null_wk.configuration, inc_ham))) <= 1e-12
+
+        # Trait fallback: an unsupported Hamiltonian under incremental =
+        # true recomputes fully each step and stays digit-identical to the
+        # same-seed default
+        cl_ham = ClusterLatticeHamiltonian(inc_ham,
+            [ClusterInteraction(0.1u"eV", [(1, 2, 5)])])
+        function inc_cl(inc)
+            Random.seed!(97004)
+            l = inc_lat()
+            for i in 1:16
+                l.components[1][i] = rand() < 0.5
+            end
+            w = LatticeWalker(l, energy=interacting_energy(l, cl_ham), iter=0)
+            _, r, _, _, _, _ = MC_grand_canonical_walk!(500, w, cl_ham,
+                1.0e3, 0.0; p_move=0.4, p_insert=0.3, z0=1.0,
+                energy_perturb=1e-9, incremental=inc)
+            return w.energy.val, sum(w.configuration.components[1]), r
+        end
+        eT, nT, rT = inc_cl(true)
+        eF, nF, rF = inc_cl(false)
+        @test eT == eF
+        @test nT == nF
+        @test rT == rF
+
+        # Allocation ceiling on a compile-warmed incremental walk (generous
+        # fixed byte bound, never time-based)
+        alloc_lat = inc_lat()
+        Random.seed!(97005)
+        for i in 1:16
+            alloc_lat.components[1][i] = rand() < 0.5
+        end
+        alloc_wk = LatticeWalker(alloc_lat,
+            energy=interacting_energy(alloc_lat, inc_ham), iter=0)
+        MC_grand_canonical_walk!(100, alloc_wk, inc_ham, 1.0e3, 0.0;
+            p_move=0.4, p_insert=0.3, z0=1.0, energy_perturb=1e-9,
+            incremental=true)
+        alloc_bytes = @allocated MC_grand_canonical_walk!(100, alloc_wk,
+            inc_ham, 1.0e3, 0.0; p_move=0.4, p_insert=0.3, z0=1.0,
+            energy_perturb=1e-9, incremental=true)
+        @test alloc_bytes < 2_000_000
+    end
 end

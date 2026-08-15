@@ -18,6 +18,11 @@ The parameter `p` controls the average cluster size: `p ≈ 0` gives single-site
 # Arguments
 - `lattice::MLattice{C,SquareLattice}`: The lattice to perform the cluster move on.
 - `p::Float64`: Growth probability for BFS cluster construction (0 < p < 1).
+- `record::Union{Nothing,Vector{Tuple{Int,Int}}}=nothing`: When a vector is
+  supplied, every applied (site, reflected_site) pair is appended to it;
+  re-applying the recorded pairs (each pair swap is an involution) reverts
+  the move exactly. The `nothing` default changes no behavior and no
+  random-number draw.
 
 # Returns
 - `lattice::MLattice{C,SquareLattice}`: The mutated lattice after the cluster swap.
@@ -35,7 +40,8 @@ The parameter `p` controls the average cluster size: `p ≈ 0` gives single-site
 - Heringa & Blöte, Phys. Rev. E 57, 4976 (1998) — geometric cluster MC framework.
 - Adaptation uses fixed growth probability (configuration-independent) for symmetric proposals.
 """
-function geometric_cluster_swap!(lattice::MLattice{C,SquareLattice}, p::Float64) where C
+function geometric_cluster_swap!(lattice::MLattice{C,SquareLattice}, p::Float64;
+                                 record::Union{Nothing,Vector{Tuple{Int,Int}}}=nothing) where C
     if length(lattice.basis) != 1
         throw(ArgumentError("geometric_cluster_swap! on a square lattice " *
             "requires the single-site basis, got " *
@@ -57,13 +63,12 @@ function geometric_cluster_swap!(lattice::MLattice{C,SquareLattice}, p::Float64)
     reflect = s -> _reflect_site(s, pivot_gx, pivot_gy, Lx, Ly, Lz)
     cluster = _build_geometric_cluster(lattice, seed, reflect, p)
 
-    # Swap occupation states for each (site, reflected_site) pair
-    for (a, b) in cluster
-        if a != b
-            for comp in 1:C
-                lattice.components[comp][a], lattice.components[comp][b] =
-                    lattice.components[comp][b], lattice.components[comp][a]
-            end
+    # Swap occupation states for each applied (site, reflected_site) pair;
+    # the recorded pairs revert the move when re-applied (involution)
+    _apply_cluster_pairs!(lattice, cluster)
+    if record !== nothing
+        for pr in cluster
+            pr[1] != pr[2] && push!(record, pr)
         end
     end
 
@@ -71,6 +76,27 @@ function geometric_cluster_swap!(lattice::MLattice{C,SquareLattice}, p::Float64)
 end
 
 # --- Internal helpers (not exported) ---
+
+"""
+    _apply_cluster_pairs!(lattice::MLattice{C,G}, pairs::Vector{Tuple{Int,Int}}) where {C,G}
+
+Apply the occupancy exchange for each (site, reflected_site) pair with distinct
+indices, across all components. Each pair swap is an involution, so re-applying
+the same pair list reverts a cluster move exactly; the copy-free kernels use it
+as the revert path for rejected cluster proposals.
+"""
+function _apply_cluster_pairs!(lattice::MLattice{C,G},
+                               pairs::Vector{Tuple{Int,Int}}) where {C,G}
+    for (a, b) in pairs
+        if a != b
+            for comp in 1:C
+                lattice.components[comp][a], lattice.components[comp][b] =
+                    lattice.components[comp][b], lattice.components[comp][a]
+            end
+        end
+    end
+    return lattice
+end
 
 """
     _site_to_grid(site::Int, Lx::Int, Ly::Int) -> Tuple{Int,Int,Int}
@@ -226,7 +252,8 @@ energy-ceiling accept test (Heringa & Blöte, Phys. Rev. E 57, 4976
 Requires the two-site basis and a strictly two-dimensional supercell
 (`supercell_dimensions[3] == 1`); violations throw an `ArgumentError`.
 """
-function geometric_cluster_swap!(lattice::MLattice{C,TriangularLattice}, p::Float64) where C
+function geometric_cluster_swap!(lattice::MLattice{C,TriangularLattice}, p::Float64;
+                                 record::Union{Nothing,Vector{Tuple{Int,Int}}}=nothing) where C
     if length(lattice.basis) != 2
         throw(ArgumentError("geometric_cluster_swap! on a triangular lattice " *
             "requires the two-site centered-rectangular basis, got " *
@@ -254,13 +281,12 @@ function geometric_cluster_swap!(lattice::MLattice{C,TriangularLattice}, p::Floa
     reflect = s -> _tri_reflect_site(s, hpx, hpy, nx, ny)
     cluster = _build_geometric_cluster(lattice, seed, reflect, p)
 
-    # Swap occupation states for each (site, reflected_site) pair
-    for (a, b) in cluster
-        if a != b
-            for comp in 1:C
-                lattice.components[comp][a], lattice.components[comp][b] =
-                    lattice.components[comp][b], lattice.components[comp][a]
-            end
+    # Swap occupation states for each applied (site, reflected_site) pair;
+    # the recorded pairs revert the move when re-applied (involution)
+    _apply_cluster_pairs!(lattice, cluster)
+    if record !== nothing
+        for pr in cluster
+            pr[1] != pr[2] && push!(record, pr)
         end
     end
 
@@ -276,7 +302,8 @@ geometries, whose reflection maps are integer grid involutions on the site indic
 `ArgumentError` before drawing any randomness. Use swap-only decorrelation
 (`clusters_freq = 0`) for generic geometries.
 """
-function geometric_cluster_swap!(lattice::MLattice{C,GenericLattice}, p::Float64) where C
+function geometric_cluster_swap!(lattice::MLattice{C,GenericLattice}, p::Float64;
+                                 record::Union{Nothing,Vector{Tuple{Int,Int}}}=nothing) where C
     throw(ArgumentError("geometric_cluster_swap! supports square and triangular " *
         "lattices only, got a GenericLattice configuration; use swap-only " *
         "decorrelation (clusters_freq = 0) for generic geometries"))

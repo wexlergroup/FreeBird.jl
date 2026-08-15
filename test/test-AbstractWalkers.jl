@@ -1358,4 +1358,106 @@
         end
     end
 
+    @testset "shared-geometry walkers and clones" begin
+        using Random
+        using Unitful
+        using DataFrames
+
+        sg_lat() = MLattice{1,SquareLattice}(lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)], supercell_dimensions=(4, 4, 1),
+            periodicity=(true, true, false), cutoff_radii=[1.1],
+            components=[[false for _ in 1:16]], adsorptions=:full)
+        sg_ham = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
+
+        @testset "share_geometry constructor" begin
+            src = sg_lat()
+            Random.seed!(98001)
+            for i in 1:16
+                src.components[1][i] = rand() < 0.5
+            end
+            occ = [copy(v) for v in src.components]
+            cp = MLattice{1,SquareLattice}(Val(:share_geometry), src, occ)
+            @test cp.lattice_vectors === src.lattice_vectors
+            @test cp.positions === src.positions
+            @test cp.basis === src.basis
+            @test cp.supercell_dimensions === src.supercell_dimensions
+            @test cp.periodicity === src.periodicity
+            @test cp.cutoff_radii === src.cutoff_radii
+            @test cp.neighbors === src.neighbors
+            @test cp.adsorptions === src.adsorptions
+            @test cp.components !== src.components
+            @test cp.components[1] !== src.components[1]
+            @test interacting_energy(cp, sg_ham) ==
+                  interacting_energy(src, sg_ham)
+            @test_throws ArgumentError MLattice{1,SquareLattice}(
+                Val(:share_geometry), src, Vector{Bool}[])
+        end
+
+        @testset "replicate_walkers" begin
+            tmpl = sg_lat()
+            ws = replicate_walkers(tmpl, 5)
+            @test length(ws) == 5
+            @test all(w.configuration.neighbors === tmpl.neighbors
+                      for w in ws)
+            @test all(w.configuration.positions === tmpl.positions
+                      for w in ws)
+            @test length(unique(objectid(w.configuration.components[1])
+                                for w in ws)) == 5
+            @test all(w.energy == 0.0u"eV" && w.iter == 0 for w in ws)
+            # independent occupancies: mutating one walker leaves the rest
+            ws[1].configuration.components[1][1] = true
+            @test !ws[2].configuration.components[1][1]
+        end
+
+        @testset "same-seed driver equivalence and aliasing safety" begin
+            # A replicate_walkers live set matches the deepcopy idiom
+            # digit-for-digit: both drivers re-initialize occupancies on
+            # entry, so the random streams coincide
+            sg_save = SaveEveryN("t_sg.csv", "t_sg.traj", "t_sg.ls",
+                                 1000000, 1000000, 1000000)
+            sg_cleanup() = rm.(["t_sg.csv", "t_sg.traj", "t_sg.ls"],
+                               force=true)
+            function sg_run(build)
+                Random.seed!(98002)
+                tmpl = sg_lat()
+                ws = build(tmpl)
+                ls = LatticeGasWalkers(ws, sg_ham; assign_energy=false)
+                p = IdealGasReferencedGCNSParameters(mc_steps=20,
+                    reference_fugacity=1.0, energy_perturbation=1e-9)
+                d, lsx, _ = ideal_gas_referenced_nested_sampling(ls, p,
+                    Int64(50), MCGrandCanonicalMoves(), sg_save)
+                sg_cleanup()
+                return d, lsx
+            end
+            dS, lsS = sg_run(t -> replicate_walkers(t, 10))
+            dD, lsD = sg_run(t -> [LatticeWalker(deepcopy(t),
+                                                 energy=0.0u"eV", iter=0)
+                                   for _ in 1:10])
+            @test dS.iter == dD.iter
+            @test dS.emax == dD.emax
+            @test dS.num_particles == dD.num_particles
+            @test [w.energy.val for w in lsS.walkers] ==
+                  [w.energy.val for w in lsD.walkers]
+            # aliasing safety: after the run every live walker still shares
+            # the one geometry (nothing rebinds or copies it back)
+            nb1 = lsS.walkers[1].configuration.neighbors
+            @test all(w.configuration.neighbors === nb1
+                      for w in lsS.walkers)
+        end
+
+        @testset "clone allocation guard" begin
+            # Compile-warmed shared clone at M = 4096 under a generous fixed
+            # byte ceiling (never time-based): the payload is one occupancy
+            # vector plus constant-size shells
+            big = MLattice{1,SquareLattice}(lattice_constant=1.0,
+                basis=[(0.0, 0.0, 0.0)], supercell_dimensions=(64, 64, 1),
+                periodicity=(true, true, false), cutoff_radii=[1.1],
+                components=[[false for _ in 1:4096]], adsorptions=:full)
+            wk = LatticeWalker(big, energy=0.0u"eV", iter=0)
+            FreeBird.SamplingSchemes._clone_walker_shared_geometry(wk)
+            bytes = @allocated FreeBird.SamplingSchemes._clone_walker_shared_geometry(wk)
+            @test bytes < 50_000
+        end
+    end
+
 end

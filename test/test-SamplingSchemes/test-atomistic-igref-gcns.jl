@@ -137,6 +137,38 @@
         @test all(length(w.configuration) == w.list_num_par[1] for w in ls.walkers)
     end
 
+    @testset "refill bursts stay unledgered (galilean_steps > 0)" begin
+        # The same plateau-block construction with the reflective burst
+        # armed: the plateau rows run no walk, the terminal refill's
+        # decorrelation walks accept nonempty clones (so refill bursts
+        # execute on the accept_r && N > 0 path), and none of it may reach
+        # the Galilean run totals. An accidental accumulation at the refill
+        # site fails the zero pin below.
+        lj_rb = LJParameters(epsilon=0.05, sigma=2.5, cutoff=2.5)
+        rmin_rb = 2.0^(1 / 6) * 2.5
+        wrb = AtomWalker{1}[]
+        push!(wrb, mkat([[1.0, 1.0, 1.0]]))
+        push!(wrb, mkat([[1.0, 6.0, 1.0]]))
+        push!(wrb, mkat([[6.0, 1.0, 1.0]]))
+        push!(wrb, mkat([[6.0, 6.0, 6.0]]))
+        push!(wrb, mkat([[3.0, 3.0, 3.0], [3.0 + rmin_rb, 3.0, 3.0]]))
+        push!(wrb, mkat([[9.0, 9.0, 9.0], [9.0 - rmin_rb, 9.0, 9.0]]))
+        ls_rb = GenericAtomWalkers(wrb, lj_rb)
+        Random.seed!(52531)
+        params_rb = AtomisticIGRefGCNSParameters(mc_steps=100,
+            reference_activity=(2.0 / V)u"Å^-3", species=:Ar,
+            allowed_fail_count=200, step_size=0.5)
+        routine_rb = MCAtomGrandCanonicalMoves(galilean_steps=2,
+            galilean_n_refresh=4, galilean_step_size=0.5)
+        for _ in 1:4
+            FreeBird.SamplingSchemes.nested_sampling_step!(ls_rb, params_rb,
+                                                           routine_rb)
+        end
+        @test length(ls_rb.walkers) == 6
+        @test get(params_rb.move_stats, :galilean_attempted, 0) == 0
+        @test get(params_rb.move_stats, :galilean_reflect_attempted, 0) == 0
+    end
+
     @testset "dilute interacting end-to-end with same-seed determinism" begin
         function run_e2e(seed)
             Random.seed!(seed)
@@ -374,6 +406,107 @@ end
         # The rate columns are reserved: observables cannot collide with them
         @test_throws ArgumentError FreeBird.SamplingSchemes._validate_observables(
             [:insert_accepted => cfg -> 0.0], ls)
+    end
+
+    @testset "Conditional ledger channels and step size" begin
+        ch_save() = SaveEveryN(df_filename="_t_ch.csv",
+                               wk_filename="_t_ch.traj.extxyz",
+                               ls_filename="_t_ch.ls.extxyz",
+                               n_traj=10^7, n_snap=10^7, n_info=10^7)
+        ch_cleanup() = for f in ("_t_ch.csv", "_t_ch.traj.extxyz",
+                                 "_t_ch.ls.extxyz")
+            rm(f, force=true)
+        end
+        base_names = ["iter", "emax", "num_particles", "log_compression"]
+        rate6 = ["move_attempted", "move_accepted", "insert_attempted",
+                 "insert_accepted", "delete_attempted", "delete_accepted"]
+        cav2 = ["insert_biased_attempted", "insert_biased_accepted"]
+        gal5 = ["galilean_attempted", "galilean_accepted",
+                "galilean_reflect_attempted", "galilean_reflect_evals",
+                "galilean_reflect_accepted"]
+
+        # Both optional channels active: full 13-column rate block plus the
+        # trailing step-size column, each rate column closing against its
+        # run total
+        Random.seed!(6100)
+        ls = LJAtomWalkers([hard_pair(2.80 + 0.02k) for k in 1:6], hard_lj)
+        params = AtomisticIGRefGCNSParameters(mc_steps=60,
+            reference_activity=(6.0 / hard_L^3)u"Å^-3", species=:Ar,
+            allowed_fail_count=100_000)
+        mc = MCAtomGrandCanonicalMoves(galilean_steps=2, galilean_n_refresh=4,
+            galilean_step_size=0.5, p_bias=0.3, bias_radius=2.0, bias_grid=6)
+        df, ls, params = ideal_gas_referenced_nested_sampling(
+            ls, params, 40, mc, ch_save(); record_move_rates=true)
+        ch_cleanup()
+        @test names(df) == vcat(base_names, rate6, cav2, gal5, ["step_size"])
+        for name in vcat(rate6, cav2, gal5)
+            @test sum(df[!, name]) == get(params.move_stats, Symbol(name), 0)
+        end
+        # Subset and chain identities on the recorded totals
+        @test sum(df.insert_biased_attempted) <= sum(df.insert_attempted)
+        @test sum(df.galilean_reflect_accepted) <=
+              sum(df.galilean_reflect_evals) <=
+              sum(df.galilean_reflect_attempted) <=
+              sum(df.galilean_attempted)
+        # Bursts fired on this seeded descent and their cost is now ledgered
+        @test get(params.move_stats, :galilean_attempted, 0) > 0
+        # Bursts fire whole or not at all, and failed iterations fold whole
+        # bursts forward: every recorded row is a multiple of the segment
+        # count galilean_steps * galilean_n_refresh
+        @test all(v -> v % (2 * 4) == 0, df.galilean_attempted)
+        # step_size records the adapted value at each row push; the last
+        # recorded row carries the final adapted value
+        @test df.step_size[end] == params.step_size
+        @test all(params.step_size_lo .<= df.step_size .<= params.step_size_up)
+
+        # Galilean-only routine: the cavity pair stays absent, the schema is
+        # conditional on the active channels
+        Random.seed!(6101)
+        ls2 = LJAtomWalkers([hard_pair(2.80 + 0.02k) for k in 1:6], hard_lj)
+        params2 = AtomisticIGRefGCNSParameters(mc_steps=60,
+            reference_activity=(6.0 / hard_L^3)u"Å^-3", species=:Ar,
+            allowed_fail_count=100_000)
+        df2, _, params2 = ideal_gas_referenced_nested_sampling(
+            ls2, params2, 40, MCAtomGrandCanonicalMoves(galilean_steps=2),
+            ch_save(); record_move_rates=true)
+        ch_cleanup()
+        @test names(df2) == vcat(base_names, rate6, gal5, ["step_size"])
+        for name in gal5
+            @test sum(df2[!, name]) == get(params2.move_stats, Symbol(name), 0)
+        end
+
+        # Recording on or off never touches the trajectory, with the burst
+        # channel active
+        Random.seed!(6102)
+        ls3 = LJAtomWalkers([hard_pair(2.80 + 0.02k) for k in 1:6], hard_lj)
+        params3 = AtomisticIGRefGCNSParameters(mc_steps=60,
+            reference_activity=(6.0 / hard_L^3)u"Å^-3", species=:Ar,
+            allowed_fail_count=100_000)
+        df3, _, _ = ideal_gas_referenced_nested_sampling(
+            ls3, params3, 40,
+            MCAtomGrandCanonicalMoves(galilean_steps=2, p_bias=0.3,
+                                      bias_radius=2.0, bias_grid=6),
+            ch_save(); record_move_rates=true)
+        ch_cleanup()
+        Random.seed!(6102)
+        ls4 = LJAtomWalkers([hard_pair(2.80 + 0.02k) for k in 1:6], hard_lj)
+        params4 = AtomisticIGRefGCNSParameters(mc_steps=60,
+            reference_activity=(6.0 / hard_L^3)u"Å^-3", species=:Ar,
+            allowed_fail_count=100_000)
+        df4, _, _ = ideal_gas_referenced_nested_sampling(
+            ls4, params4, 40,
+            MCAtomGrandCanonicalMoves(galilean_steps=2, p_bias=0.3,
+                                      bias_radius=2.0, bias_grid=6),
+            ch_save())
+        ch_cleanup()
+        @test df3.emax == df4.emax
+        @test df3.num_particles == df4.num_particles
+
+        # The new names are reserved against observable collisions
+        @test_throws ArgumentError FreeBird.SamplingSchemes._validate_observables(
+            [:galilean_attempted => cfg -> 0.0], ls)
+        @test_throws ArgumentError FreeBird.SamplingSchemes._validate_observables(
+            [:step_size => cfg -> 0.0], ls)
     end
 
     @testset "Minimum-image cutoff guard" begin

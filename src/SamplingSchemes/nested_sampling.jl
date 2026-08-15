@@ -513,7 +513,11 @@ const _RESERVED_LEDGER_COLUMNS = (:iter, :emax, :omega, :energy, :num_particles,
                                   :insert_biased_attempted, :insert_biased_accepted,
                                   :galilean_attempted, :galilean_accepted,
                                   :galilean_reflect_attempted, :galilean_reflect_evals,
-                                  :galilean_reflect_accepted, :step_size)
+                                  :galilean_reflect_accepted, :step_size,
+                                  :swap_attempted, :swap_accepted,
+                                  :swap_null_attempted, :swap_null_accepted,
+                                  :cluster_attempted, :cluster_accepted,
+                                  :insert_uniform_attempted, :insert_uniform_accepted)
 
 """
     _validate_observables(observables, liveset::AbstractLiveSet)
@@ -1750,6 +1754,11 @@ highest-Ω walker, record (Ω, E, N), replace with a decorrelated clone.
   `allowed_fail_count`, warn once and return the partial ledger and the
   intact live set (`fail_count` stays at threshold); the default keeps the
   shipped warn-and-continue behavior byte-identically.
+- `record_move_rates::Bool=false`: When true the ledger gains the twelve
+  per-iteration lattice acceptance columns (kernel key order,
+  `_LATTICE_MOVE_RATE_COLUMNS`), snapshot-differenced from the run totals;
+  failed iterations fold into the next recorded row. The default keeps the
+  shipped schema.
 
 # Returns
 - `df::DataFrame`: Columns `[:iter, :omega, :energy, :num_particles]`,
@@ -1764,7 +1773,8 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
                                          save_strategy::DataSavingStrategy;
                                          observables::Union{Nothing,AbstractVector{<:Pair{Symbol,<:Any}}}=nothing,
                                          dead_point_callback::Union{Nothing,Function}=nothing,
-                                         stop_on_stall::Bool=false)
+                                         stop_on_stall::Bool=false,
+                                         record_move_rates::Bool=false)
     # Initialize walkers with random microstates
     _init_gc_walkers!(liveset, gc_params)
     _warn_perturbation_scale(liveset, gc_params.energy_perturbation)
@@ -1783,6 +1793,11 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
     empty!(gc_params.move_stats)
 
     df = DataFrame(iter=Int[], omega=Float64[], energy=Float64[], num_particles=Int[])
+    if record_move_rates
+        for name in _LATTICE_MOVE_RATE_COLUMNS
+            df[!, name] = Int[]
+        end
+    end
     if observables !== nothing
         _validate_observables(observables, liveset)
         for (name, _) in observables
@@ -1790,6 +1805,8 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
         end
     end
     culled = nothing
+    lat_rate_prev = record_move_rates ?
+        _move_stats_snapshot(gc_params, _LATTICE_MOVE_RATE_COLUMNS) : nothing
 
     for i in 1:n_steps
         print_info = i % save_strategy.n_info == 0
@@ -1831,10 +1848,22 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
                     "the pre-sorted worst walker had Ω = " *
                     "$(_grand_potential(culled, gc_params.chemical_potential)))")
             end
-            if observables === nothing
-                push!(df, (iter, omega.val, energy.val, n_par))
+            if record_move_rates
+                # Snapshot-differenced per-iteration deltas: failed
+                # iterations fold into the next recorded row, so each column
+                # sums to the run totals accumulated through the last
+                # recorded row (the atomistic convention; trailing failed
+                # iterations after the last recorded row are unledgered)
+                snap = _move_stats_snapshot(gc_params, _LATTICE_MOVE_RATE_COLUMNS)
+                lat_rate_row = snap .- lat_rate_prev
+                lat_rate_prev = snap
             else
-                push!(df, (iter, omega.val, energy.val, n_par,
+                lat_rate_row = ()
+            end
+            if observables === nothing
+                push!(df, (iter, omega.val, energy.val, n_par, lat_rate_row...))
+            else
+                push!(df, (iter, omega.val, energy.val, n_par, lat_rate_row...,
                            (Float64(f(culled.configuration)) for (_, f) in observables)...))
             end
             dead_point_callback === nothing || dead_point_callback(iter, culled)
@@ -2132,6 +2161,11 @@ extract them from the returned liveset.
   `allowed_fail_count`, warn once and return the partial ledger and the
   intact live set (`fail_count` stays at threshold); the default keeps the
   shipped warn-and-continue behavior byte-identically.
+- `record_move_rates::Bool=false`: When true the ledger gains the twelve
+  per-iteration lattice acceptance columns (kernel key order,
+  `_LATTICE_MOVE_RATE_COLUMNS`), snapshot-differenced from the run totals;
+  failed iterations fold into the next recorded row. The default keeps the
+  shipped schema.
 
 # Returns
 - `df::DataFrame`: Columns `[:iter, :emax, :num_particles]`,
@@ -2146,7 +2180,8 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
                                               save_strategy::DataSavingStrategy;
                                               observables::Union{Nothing,AbstractVector{<:Pair{Symbol,<:Any}}}=nothing,
                                               dead_point_callback::Union{Nothing,Function}=nothing,
-                                              stop_on_stall::Bool=false)
+                                              stop_on_stall::Bool=false,
+                                              record_move_rates::Bool=false)
     # Initialize walkers as i.i.d. draws from the Bernoulli(z0/(1+z0)) prior
     _init_ideal_gas_ref_walkers!(liveset, params)
     _warn_perturbation_scale(liveset, params.energy_perturbation)
@@ -2165,6 +2200,11 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
     empty!(params.move_stats)
 
     df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[])
+    if record_move_rates
+        for name in _LATTICE_MOVE_RATE_COLUMNS
+            df[!, name] = Int[]
+        end
+    end
     if observables !== nothing
         _validate_observables(observables, liveset)
         for (name, _) in observables
@@ -2172,6 +2212,8 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
         end
     end
     culled = nothing
+    lat_rate_prev = record_move_rates ?
+        _move_stats_snapshot(params, _LATTICE_MOVE_RATE_COLUMNS) : nothing
 
     for i in 1:n_steps
         print_info = i % save_strategy.n_info == 0
@@ -2204,10 +2246,19 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
                     "pairing lost (step culled a walker with energy $emax, " *
                     "but the pre-sorted worst walker had $(culled.energy))")
             end
-            if observables === nothing
-                push!(df, (iter, emax.val, n_par))
+            if record_move_rates
+                # Snapshot-differenced per-iteration deltas (see the
+                # Omega-sorted driver)
+                snap = _move_stats_snapshot(params, _LATTICE_MOVE_RATE_COLUMNS)
+                lat_rate_row = snap .- lat_rate_prev
+                lat_rate_prev = snap
             else
-                push!(df, (iter, emax.val, n_par,
+                lat_rate_row = ()
+            end
+            if observables === nothing
+                push!(df, (iter, emax.val, n_par, lat_rate_row...))
+            else
+                push!(df, (iter, emax.val, n_par, lat_rate_row...,
                            (Float64(f(culled.configuration)) for (_, f) in observables)...))
             end
             dead_point_callback === nothing || dead_point_callback(iter, culled)
@@ -2532,6 +2583,20 @@ _move_rate_columns(mc_routine::MCAtomGrandCanonicalMoves) =
 _move_rate_columns(::Union{MCRandomWalkMaxE,MCRandomWalkClone}) =
     (:move_attempted, :move_accepted)
 _move_rate_columns(::MCGalileanWalk) = _GALILEAN_RATE_COLUMNS
+
+# The lattice grand-canonical kernel's stats NamedTuple keys, in kernel
+# order (the ledger schema and the kernel contract stay one fact). A
+# separate constant from the atomistic set: the two kernels share the
+# deletion and biased-insertion names but differ in the displacement family
+# and every lattice-only channel.
+const _LATTICE_MOVE_RATE_COLUMNS = (:swap_attempted, :swap_accepted,
+                                    :swap_null_attempted, :swap_null_accepted,
+                                    :cluster_attempted, :cluster_accepted,
+                                    :insert_uniform_attempted,
+                                    :insert_uniform_accepted,
+                                    :insert_biased_attempted,
+                                    :insert_biased_accepted,
+                                    :delete_attempted, :delete_accepted)
 
 """
     _warn_min_image_cutoff(pot, config)

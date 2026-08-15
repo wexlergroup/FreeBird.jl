@@ -904,6 +904,13 @@ Cluster moves are symmetric (no Metropolis correction), accepted if Ω < Ω_max.
   is an immediate reject. `0.0` reproduces the legacy sampler bit-for-bit.
 - `bias_predicate::Symbol=:contact`: Biased-set predicate, `:contact` or `:cavity`.
 - `bias_shells::Int=1`: Neighbor shells scanned by the predicate.
+- `incremental::Bool=false`: Opt-in incremental energy evaluation: non-cluster
+  proposals under a Hamiltonian with `supports_site_deltas` advance a per-walk
+  raw-energy anchor by exact O(z) `site_flip_delta` sums; cluster proposals
+  and unsupported Hamiltonians fall back to the full recompute, which also
+  re-anchors the accumulator. The default is draw-count and digit identical
+  to the shipped arithmetic; the delta path accumulates in a different
+  floating-point order, so same-seed trajectories differ from the default.
 
 # Returns
 - `accept_this_walker::Bool`: Whether at least one move was accepted.
@@ -932,7 +939,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                   z0::Float64=1.0,
                                   p_bias::Float64=0.0,
                                   bias_predicate::Symbol=:contact,
-                                  bias_shells::Int=1)
+                                  bias_shells::Int=1,
+                                  incremental::Bool=false)
     if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
         throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
     end
@@ -996,6 +1004,18 @@ function MC_grand_canonical_walk!(n_steps::Int,
     hop_to = 0
     cluster_pairs = Tuple{Int,Int}[]
 
+    # Opt-in incremental energy path: anchor the unperturbed energy once per
+    # walk (bounding floating-point drift to about n_steps ulps, reset by the
+    # next walk's anchor) and advance it by exact O(z) site_flip_delta sums.
+    # Cluster proposals and Hamiltonians without supports_site_deltas fall
+    # back to the shipped full recompute, which also re-anchors the
+    # accumulator exactly. The default path computes the identical arithmetic
+    # in the identical order and draws the identical random stream.
+    use_deltas = incremental && supports_site_deltas(h)
+    zero_e = 0.0 * unit(lattice.energy)
+    raw = use_deltas ? interacting_energy(lattice.configuration, h) : zero_e
+    step_delta = zero_e
+
     for _ in 1:n_steps
         r = rand()
         config = lattice.configuration
@@ -1011,7 +1031,25 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 cluster_total_count += 1
             else
                 # Local swap
-                hop_from, hop_to = _lattice_walk_draw!(config)
+                if use_deltas
+                    # Inlined draws in lockstep with _lattice_walk_draw!
+                    # (identical order). A non-null pair composes two flips
+                    # with the second delta evaluated on the intermediate
+                    # state; an equal-occupancy pair performs no flips and
+                    # contributes exactly zero.
+                    hop_from = rand(eachindex(config.components[1]))
+                    hop_to = rand(eachindex(config.components[1]))
+                    if config.components[1][hop_from] != config.components[1][hop_to]
+                        step_delta = site_flip_delta(config, h, hop_from)
+                        config.components[1][hop_from] = !config.components[1][hop_from]
+                        step_delta += site_flip_delta(config, h, hop_to)
+                        config.components[1][hop_to] = !config.components[1][hop_to]
+                    else
+                        step_delta = zero_e
+                    end
+                else
+                    hop_from, hop_to = _lattice_walk_draw!(config)
+                end
                 move_type = :move
                 swap_attempted += 1
             end
@@ -1054,6 +1092,11 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 insert_uniform_attempted += 1
                 insert_from_biased = false
             end
+            if use_deltas
+                # Post-flip delta by exact sign symmetry: the back-flip delta
+                # is the exact floating-point negation of the applied one
+                step_delta = -site_flip_delta(config, h, insert_site)
+            end
             move_type = :insert
         else
             # Deletion: site selection is uniform over occupied sites in both
@@ -1074,12 +1117,22 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     continue
                 end
             end
+            if use_deltas
+                # Post-flip delta by exact sign symmetry (see the insertion
+                # branch)
+                step_delta = -site_flip_delta(config, h, deleted_site)
+            end
             delete_attempted += 1
             move_type = :delete
         end
 
         perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
-        proposed_energy = interacting_energy(config, h) + perturbation_energy
+        if use_deltas && move_type != :cluster
+            proposed_raw = raw + step_delta
+        else
+            proposed_raw = interacting_energy(config, h)
+        end
+        proposed_energy = proposed_raw + perturbation_energy
         n_new = sum(config.components[1])
         proposed_omega = proposed_energy - mu * n_new * unit(lattice.energy)
 
@@ -1139,6 +1192,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
         if accept
             # The live configuration already carries the proposal; keep it
             # (the walker's configuration field is never rebound to a copy)
+            raw = proposed_raw
             lattice.energy = proposed_energy
             n_accept += 1
             accept_this_walker = true

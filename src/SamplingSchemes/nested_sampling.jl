@@ -289,6 +289,16 @@ particle insertion and deletion.
 - `bias_predicate::Symbol`: Biased-set predicate, `:contact` or `:cavity`
   (default `:contact`).
 - `bias_shells::Int`: Neighbor shells scanned by the predicate (default 1).
+- `incremental::Bool`: Opt-in incremental energy evaluation in the walk kernel
+  (default `false` = the shipped full-recompute arithmetic, draw-count and
+  digit identical). When `true`, non-cluster proposals under a Hamiltonian
+  with `supports_site_deltas` advance a per-walk raw-energy anchor by exact
+  O(z) `site_flip_delta` sums; cluster proposals and unsupported Hamiltonians
+  fall back to the full recompute, which also re-anchors the accumulator.
+  The delta path accumulates energy in a different floating-point order, so
+  same-seed trajectories are not digit-identical to the default; flipping
+  the default is deliberately out of scope (a published-run reproducibility
+  contract).
 
 When `clusters_freq == 0` (the default), the fixed-N branch uses only local swaps
 (`lattice_random_walk!`), preserving backward compatibility with existing scripts.
@@ -315,6 +325,7 @@ struct MCGrandCanonicalMoves <: MCRoutine
     p_bias::Float64
     bias_predicate::Symbol
     bias_shells::Int
+    incremental::Bool
     function MCGrandCanonicalMoves(;
             p_move::Float64=0.5,
             p_insert::Float64=0.25,
@@ -327,7 +338,8 @@ struct MCGrandCanonicalMoves <: MCRoutine
             cluster_p_ceiling::Float64=1.0,
             p_bias::Float64=0.0,
             bias_predicate::Symbol=:contact,
-            bias_shells::Int=1)
+            bias_shells::Int=1,
+            incremental::Bool=false)
         if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
             throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
         end
@@ -349,7 +361,7 @@ struct MCGrandCanonicalMoves <: MCRoutine
         new(p_move, p_insert, clusters_freq, swaps_freq,
             initial_cluster_p, target_cluster_accept, cluster_adjust_interval,
             cluster_p_floor, cluster_p_ceiling,
-            p_bias, bias_predicate, bias_shells)
+            p_bias, bias_predicate, bias_shells, incremental)
     end
 end
 
@@ -1510,7 +1522,8 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         cluster_p=gc_params.cluster_p,
         p_bias=mc_routine.p_bias,
         bias_predicate=mc_routine.bias_predicate,
-        bias_shells=mc_routine.bias_shells)
+        bias_shells=mc_routine.bias_shells,
+        incremental=mc_routine.incremental)
 
     if accept
         push!(ats, to_walk)
@@ -1860,7 +1873,8 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         cluster_p=params.cluster_p,
         p_bias=mc_routine.p_bias,
         bias_predicate=mc_routine.bias_predicate,
-        bias_shells=mc_routine.bias_shells)
+        bias_shells=mc_routine.bias_shells,
+        incremental=mc_routine.incremental)
 
     if accept
         push!(ats, to_walk)

@@ -512,4 +512,178 @@
         end
 
     end
+
+    @testset "copy-free proposal and revert" begin
+        using Random
+        using Unitful
+
+        cf_lattice() = MLattice{1,SquareLattice}(lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)], supercell_dimensions=(4, 4, 1),
+            periodicity=(true, true, false), cutoff_radii=[1.1],
+            components=[[false for _ in 1:16]], adsorptions=:full)
+        cf_ham() = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
+        cf_tri() = SLattice{TriangularLattice}(
+            supercell_dimensions=(6, 4, 1),
+            cutoff_radii=[1.1],
+            components=[[1, 5, 10, 20, 30, 40]],
+            adsorptions=:full)
+
+        @testset "configuration identity through every kernel" begin
+            Random.seed!(91001)
+            lat = cf_lattice()
+            for i in 1:16
+                lat.components[1][i] = rand() < 0.5
+            end
+            wk = LatticeWalker(lat, energy=interacting_energy(lat, cf_ham()),
+                               iter=0)
+            cfg0 = wk.configuration
+            MC_random_walk!(50, wk, cf_ham(), 1.0e3; energy_perturb=1e-9)
+            @test wk.configuration === cfg0
+            MC_cluster_walk!(20, wk, cf_ham(), 1.0e3, 0.3; energy_perturb=1e-9)
+            @test wk.configuration === cfg0
+            MC_grand_canonical_walk!(100, wk, cf_ham(), 1.0e3, 0.0;
+                p_move=0.4, p_insert=0.3, z0=1.0, energy_perturb=1e-9,
+                clusters_freq=2, swaps_freq=2, cluster_p=0.3)
+            @test wk.configuration === cfg0
+        end
+
+        @testset "forced-reject revert exactness" begin
+            # A ceiling below every reachable energy rejects every proposal;
+            # occupancy and the stored energy must be exactly unchanged.
+            Random.seed!(91002)
+            lat = cf_lattice()
+            for i in 1:16
+                lat.components[1][i] = rand() < 0.5
+            end
+            e0 = interacting_energy(lat, cf_ham())
+            wk = LatticeWalker(lat, energy=e0, iter=0)
+            occ0 = copy(lat.components[1])
+            low = -1.0e3
+
+            a1, r1, _ = MC_random_walk!(60, wk, cf_ham(), low;
+                                        energy_perturb=1e-9)
+            @test a1 == false && r1 == 0.0
+            @test wk.configuration.components[1] == occ0
+            @test wk.energy == e0
+
+            a2, r2, _ = MC_cluster_walk!(30, wk, cf_ham(), low, 0.3;
+                                         energy_perturb=1e-9)
+            @test a2 == false && r2 == 0.0
+            @test wk.configuration.components[1] == occ0
+            @test wk.energy == e0
+
+            a3, r3, _, _, _, ms = MC_grand_canonical_walk!(200, wk, cf_ham(),
+                low, 0.0;
+                p_move=0.4, p_insert=0.3, z0=1.0, energy_perturb=1e-9,
+                clusters_freq=2, swaps_freq=2, cluster_p=0.3)
+            @test a3 == false && r3 == 0.0
+            @test wk.configuration.components[1] == occ0
+            @test wk.energy == e0
+            # every default channel proposed under the forced-reject ceiling
+            @test ms.swap_attempted > 0
+            @test ms.cluster_attempted > 0
+            @test ms.insert_uniform_attempted > 0
+            @test ms.delete_attempted > 0
+
+            # composite channel: biased insertion and the inlined deletion
+            # revert through the same path
+            a4, _, _, _, _, ms4 = MC_grand_canonical_walk!(200, wk, cf_ham(),
+                low, 0.0;
+                p_move=0.4, p_insert=0.3, z0=1.0, energy_perturb=1e-9,
+                swaps_freq=1, p_bias=0.4)
+            @test a4 == false
+            @test wk.configuration.components[1] == occ0
+            @test wk.energy == e0
+            @test ms4.insert_biased_attempted > 0
+
+            # triangular cluster revert exercises the recorded-pair replay
+            # on the second geometry
+            Random.seed!(91003)
+            tri = cf_tri()
+            et = interacting_energy(tri, cf_ham())
+            wt = LatticeWalker(tri, energy=et, iter=0)
+            occt = copy(tri.components[1])
+            at, rt, _ = MC_cluster_walk!(30, wt, cf_ham(), low, 0.3;
+                                         energy_perturb=1e-9)
+            @test at == false && rt == 0.0
+            @test wt.configuration.components[1] == occt
+            @test wt.energy == et
+        end
+
+        @testset "multi-component forced-reject revert" begin
+            # The C > 1 revert path replays through the empty/occupied and
+            # cross-component exchanges (both involutions): a forced-reject
+            # walk leaves every component vector exactly unchanged and the
+            # configuration object identity intact
+            Random.seed!(91008)
+            ml = MLattice{2,SquareLattice}(components=[[1, 3, 6], [2, 4, 7]])
+            mlham = MLatticeHamiltonian(2,
+                [cf_ham(), GenericLatticeHamiltonian(-0.02, [-0.005], u"eV"),
+                 cf_ham()])
+            wm = LatticeWalker(ml, energy=interacting_energy(ml, mlham),
+                               iter=0)
+            comps0 = [copy(v) for v in ml.components]
+            e0m = wm.energy
+            cfg0m = wm.configuration
+            am, rm, _ = MC_random_walk!(80, wm, mlham, -1.0e3;
+                                        energy_perturb=1e-9)
+            @test am == false && rm == 0.0
+            @test wm.configuration === cfg0m
+            @test wm.configuration.components[1] == comps0[1]
+            @test wm.configuration.components[2] == comps0[2]
+            @test wm.energy == e0m
+        end
+
+        @testset "cluster record keyword" begin
+            # Recorded pairs re-applied restore the original configuration
+            Random.seed!(91004)
+            lat = cf_lattice()
+            for i in 1:16
+                lat.components[1][i] = rand() < 0.5
+            end
+            ref = deepcopy(lat.components[1])
+            pairs = Tuple{Int,Int}[]
+            geometric_cluster_swap!(lat, 0.4; record=pairs)
+            MonteCarloMoves._apply_cluster_pairs!(lat, pairs)
+            @test lat.components[1] == ref
+
+            Random.seed!(91007)
+            tri = cf_tri()
+            reft = deepcopy(tri.components[1])
+            pt = Tuple{Int,Int}[]
+            geometric_cluster_swap!(tri, 0.4; record=pt)
+            MonteCarloMoves._apply_cluster_pairs!(tri, pt)
+            @test tri.components[1] == reft
+
+            # The nothing default changes neither the configuration nor the
+            # random stream: same-seed A/B with and without a record vector
+            Random.seed!(91005)
+            latA = cf_lattice()
+            for i in 1:16
+                latA.components[1][i] = rand() < 0.5
+            end
+            latB = deepcopy(latA)
+            Random.seed!(91006)
+            geometric_cluster_swap!(latA, 0.4)
+            nextA = rand()
+            Random.seed!(91006)
+            geometric_cluster_swap!(latB, 0.4; record=Tuple{Int,Int}[])
+            nextB = rand()
+            @test latA.components[1] == latB.components[1]
+            @test nextA == nextB
+
+            # The generic-geometry guard keeps its descriptive error with the
+            # keyword passed through
+            gen = MLattice{1,GenericLattice}(
+                [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0],
+                [(0.0, 0.0, 0.0)],
+                (3, 1, 1),
+                (false, false, false),
+                [1.1],
+                [[true, false, false]],
+                fill(false, 3))
+            @test_throws ArgumentError geometric_cluster_swap!(gen, 0.3;
+                record=Tuple{Int,Int}[])
+        end
+    end
 end

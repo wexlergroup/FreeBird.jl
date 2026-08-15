@@ -195,6 +195,75 @@ function interacting_energy(lattice::SLattice, h::SiteFieldLatticeHamiltonian{H,
 end
 
 """
+    site_flip_delta(lattice::SLattice, h::GenericLatticeHamiltonian{N,U}, site::Int) where {N,U}
+
+Exact energy change from flipping the occupancy of `site`:
+`E(after) − E(before)`, computed as a local O(z) sum over the flipped site's
+neighbor entries (z the per-site neighbor entry count), the lattice
+counterpart of the audited `single_site_energy` path on the continuous side.
+
+The formula respects both conventions of the full sweep
+([`lattice_interaction_energy`](@ref)): each ordered neighbor entry carries
+half a coupling, so an ordinary neighbor `j != site` (appearing once in the
+flipped site's list and once in `j`'s) contributes `occ[j]` times the full
+coupling to the delta, while a self-image entry (`j == site`, present under
+`image_multiplicity = true`) appears only in the flipped site's own row and
+contributes exactly half the coupling per image. The adsorption term mirrors
+the on-site channel of the full evaluation.
+
+Availability for a Hamiltonian type is declared by the
+`supports_site_deltas` trait; consumers fall back to full recomputation when
+it is `false`. Throws the same shell-count `ArgumentError` as the full sweep
+when the Hamiltonian couples more shells than the lattice provides.
+"""
+function site_flip_delta(lattice::SLattice, h::GenericLatticeHamiltonian{N,U},
+                         site::Int) where {N,U}
+    _check_shell_counts(lattice.neighbors, N)
+    occ = lattice.components[1]
+    sgn = occ[site] ? -1 : 1
+    acc::U = lattice.adsorptions[site] ? h.on_site_interaction :
+             zero(h.on_site_interaction)
+    nbrs = lattice.neighbors[site]
+    for n in 1:N
+        Jn = h.nth_neighbor_interactions[n]
+        for j in nbrs[n]
+            if j == site
+                acc += Jn / 2
+            elseif occ[j]
+                acc += Jn
+            end
+        end
+    end
+    return sgn * acc
+end
+
+"""
+    site_flip_delta(lattice::SLattice, h::MLatticeHamiltonian{C,N,U}, site::Int) where {C,N,U}
+
+Single-component delta under a multi-component Hamiltonian: delegates to
+`h.Hamiltonians[1, 1]`, matching the corresponding `interacting_energy`
+method for `SLattice`.
+"""
+function site_flip_delta(lattice::SLattice, h::MLatticeHamiltonian{C,N,U},
+                         site::Int) where {C,N,U}
+    return site_flip_delta(lattice, h.Hamiltonians[1, 1], site)
+end
+
+"""
+    site_flip_delta(lattice::SLattice, h::SiteFieldLatticeHamiltonian{H,U}, site::Int) where {H,U}
+
+Delta under the site-field wrapper: the base Hamiltonian's delta plus the
+signed field entry of the flipped site, mirroring the wrapper's
+`interacting_energy` method.
+"""
+function site_flip_delta(lattice::SLattice, h::SiteFieldLatticeHamiltonian{H,U},
+                         site::Int) where {H,U}
+    base_delta = site_flip_delta(lattice, h.base, site)
+    sgn = lattice.components[1][site] ? -1 : 1
+    return base_delta + sgn * h.field[site]
+end
+
+"""
     interacting_energy(lattice::MLattice{C,G}, h::MLatticeHamiltonian{C,N,U})
 
 Compute the interaction energy of a multi-component lattice configuration using the Hamiltonian parameters.

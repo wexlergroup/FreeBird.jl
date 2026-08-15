@@ -1440,6 +1440,25 @@ function _grand_potential(walker::LatticeWalker{1}, mu::Float64)
 end
 
 """
+    _clone_walker_shared_geometry(w::LatticeWalker)
+
+Clone a lattice walker for a replacement walk, copying only its occupancy
+vectors, energy, and iteration counter while sharing the run-invariant
+geometry by reference (the `Val(:share_geometry)` constructor). The
+geometry fields are never mutated after construction and the lattice
+drivers are serial loops, so the clone is behaviorally identical to a
+`deepcopy`: it draws no randomness and changes no floating-point value.
+"""
+_clone_walker_shared_geometry(w::LatticeWalker) =
+    _shared_geometry_walker(w, w.configuration)
+
+function _shared_geometry_walker(w::LatticeWalker, cfg::MLattice{C,G}) where {C,G}
+    shared = MLattice{C,G}(Val(:share_geometry), cfg,
+                           [copy(v) for v in cfg.components])
+    return LatticeWalker(shared, energy=w.energy, iter=w.iter)
+end
+
+"""
     _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonicalNestedSamplingParameters)
 
 Initialize walkers with random microstates for grand-canonical NS.
@@ -1509,7 +1528,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     else
         parent_idx = rand(2:n_walkers)
     end
-    to_walk = deepcopy(ats[parent_idx])
+    to_walk = _clone_walker_shared_geometry(ats[parent_idx])
 
     # Decorrelate via GC MCMC
     accept, rate, to_walk, cl_accepted, cl_total, move_stats = MC_grand_canonical_walk!(
@@ -1858,7 +1877,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     else
         parent_idx = rand(2:n_walkers)
     end
-    to_walk = deepcopy(ats[parent_idx])
+    to_walk = _clone_walker_shared_geometry(ats[parent_idx])
 
     # Decorrelate via GC MCMC: with mu = 0 the Ω ceiling reduces to an energy
     # ceiling, and z0 weights the insert/delete acceptance to preserve the

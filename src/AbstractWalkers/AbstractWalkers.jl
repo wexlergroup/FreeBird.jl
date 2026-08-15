@@ -24,6 +24,7 @@ export insert_particle!, remove_particle!
 export LatticeWalker
 export LatticeGeometry, SquareLattice, TriangularLattice, GenericLattice
 export MLattice, SLattice, GLattice
+export replicate_walkers
 export update_walker!
 export num_sites, occupied_site_count
 export order_parameter_c2x2

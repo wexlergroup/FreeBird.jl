@@ -413,6 +413,24 @@ mutable struct MLattice{C,G} <: AbstractLattice
         
         return new{C,G}(lattice_vectors, positions, basis, supercell_dimensions, periodicity, cutoff_radii, components, neighbors, adsorptions)
     end
+
+    # Shared-geometry constructor: alias the eight run-invariant fields of
+    # `source` (they are written only during construction; the Monte Carlo
+    # kernels mutate occupancies exclusively) and install the fresh
+    # `components`. Skips lattice_positions and the all-pairs
+    # compute_neighbors entirely; see `replicate_walkers` for the exported
+    # entry point.
+    function MLattice{C,G}(::Val{:share_geometry},
+                           source::MLattice{C,G},
+                           components::Vector{Vector{Bool}}) where {C,G}
+        if length(components) != C
+            throw(ArgumentError("For a $C-component system, got $(length(components)) components!"))
+        end
+        return new{C,G}(source.lattice_vectors, source.positions,
+                        source.basis, source.supercell_dimensions,
+                        source.periodicity, source.cutoff_radii,
+                        components, source.neighbors, source.adsorptions)
+    end
 end
 
 """
@@ -1493,4 +1511,26 @@ function Base.show(io::IO, walker::Vector{LatticeWalker})
     for (ind, w) in enumerate(walker)
         println(io, "[", ind, "] ", w)
     end
+end
+
+"""
+    replicate_walkers(template::MLattice{C,G}, K::Int) -> Vector{LatticeWalker}
+
+Build `K` walkers whose configurations share the template's run-invariant
+geometry (lattice vectors, positions, basis, supercell dimensions,
+periodicity, cutoff radii, neighbor lists, and adsorption mask) by
+reference, each with its own independent occupancy vectors copied from the
+template. The geometry fields are written only during construction and the
+Monte Carlo kernels mutate occupancies exclusively, so sharing is safe on
+the serial lattice drivers; relative to the `deepcopy(template)` idiom the
+saving is one whole neighbor nest per walker. Walkers start at
+`energy = 0.0u"eV"`, `iter = 0`, matching the deepcopy idiom's usual
+construction.
+"""
+function replicate_walkers(template::MLattice{C,G}, K::Int) where {C,G}
+    return [LatticeWalker(
+                MLattice{C,G}(Val(:share_geometry), template,
+                              [copy(v) for v in template.components]),
+                energy=0.0u"eV", iter=0)
+            for _ in 1:K]
 end

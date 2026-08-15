@@ -933,4 +933,107 @@
                 ns_ham, 1.0e3, 0.0; swap_mode=:diagonal)
         end
     end
+
+    @testset "lattice per-iteration acceptance ledger" begin
+        using Random
+
+        ll_lat() = MLattice{1,SquareLattice}(lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)], supercell_dimensions=(4, 4, 1),
+            periodicity=(true, true, false), cutoff_radii=[1.1],
+            components=[[false for _ in 1:16]], adsorptions=:full)
+        ll_ham = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
+        ll_save = SaveEveryN("t_ll.csv", "t_ll.traj", "t_ll.ls",
+                             1000000, 1000000, 1000000)
+        ll_cleanup() = rm.(["t_ll.csv", "t_ll.traj", "t_ll.ls"], force=true)
+        rate12 = ["swap_attempted", "swap_accepted",
+                  "swap_null_attempted", "swap_null_accepted",
+                  "cluster_attempted", "cluster_accepted",
+                  "insert_uniform_attempted", "insert_uniform_accepted",
+                  "insert_biased_attempted", "insert_biased_accepted",
+                  "delete_attempted", "delete_accepted"]
+
+        function ll_igref(seed, n; record=false)
+            Random.seed!(seed)
+            ws = [LatticeWalker(deepcopy(ll_lat()), energy=0.0u"eV", iter=0)
+                  for _ in 1:16]
+            ls = LatticeGasWalkers(ws, ll_ham; assign_energy=false)
+            p = IdealGasReferencedGCNSParameters(mc_steps=30,
+                reference_fugacity=1.0, energy_perturbation=1e-9)
+            d, _, pout = ideal_gas_referenced_nested_sampling(ls, p,
+                Int64(n), MCGrandCanonicalMoves(clusters_freq=1, swaps_freq=2),
+                ll_save; record_move_rates=record)
+            ll_cleanup()
+            return d, pout
+        end
+        function ll_omega(seed, n; record=false)
+            Random.seed!(seed)
+            ws = [LatticeWalker(deepcopy(ll_lat()), energy=0.0u"eV", iter=0)
+                  for _ in 1:16]
+            ls = LatticeGasWalkers(ws, ll_ham; assign_energy=false)
+            gc = GrandCanonicalNestedSamplingParameters(mc_steps=30,
+                chemical_potential=-0.05, energy_perturbation=1e-9)
+            d, _, pout = grand_canonical_nested_sampling(ls, gc, Int64(n),
+                MCGrandCanonicalMoves(clusters_freq=1, swaps_freq=2), ll_save;
+                record_move_rates=record)
+            ll_cleanup()
+            return d, pout
+        end
+
+        # Schema pins and per-column closure welds, both drivers
+        d_ig, p_ig = ll_igref(99210, 60; record=true)
+        @test names(d_ig) == vcat(["iter", "emax", "num_particles"], rate12)
+        for name in rate12
+            @test sum(d_ig[!, name]) == get(p_ig.move_stats, Symbol(name), 0)
+        end
+        d_om, p_om = ll_omega(99211, 60; record=true)
+        @test names(d_om) == vcat(["iter", "omega", "energy",
+                                   "num_particles"], rate12)
+        for name in rate12
+            @test sum(d_om[!, name]) == get(p_om.move_stats, Symbol(name), 0)
+        end
+
+        # Recording on or off never touches the trajectory, either driver
+        d_on, _ = ll_igref(99212, 40; record=true)
+        d_off, _ = ll_igref(99212, 40)
+        @test names(d_off) == ["iter", "emax", "num_particles"]
+        @test d_on.emax == d_off.emax
+        @test d_on.num_particles == d_off.num_particles
+        o_on, _ = ll_omega(99213, 40; record=true)
+        o_off, _ = ll_omega(99213, 40)
+        @test o_on.omega == o_off.omega
+        @test o_on.energy == o_off.energy
+
+        # The lattice rate names are reserved against observable collisions
+        ws_v = [LatticeWalker(deepcopy(ll_lat()), energy=0.0u"eV", iter=0)
+                for _ in 1:4]
+        ls_v = LatticeGasWalkers(ws_v, ll_ham; assign_energy=false)
+        @test_throws ArgumentError SamplingSchemes._validate_observables(
+            [:swap_attempted => cfg -> 0.0], ls_v)
+
+        # Swap-acceptance decay diagnostic, post-accounting-fix semantics:
+        # the effective (null-excluded) swap acceptance in the final descent
+        # quartile sits well below its first-quartile value. Calibration
+        # (seeds 99201/99202/99203, this fixture at 200 steps): eff_first
+        # 0.909/0.909/0.930, eff_last 0.000/0.259/0.087, last/first ratios
+        # 0.000/0.285/0.093; gate at 3x the maximum ratio.
+        Random.seed!(99214)
+        ws_d = [LatticeWalker(deepcopy(ll_lat()), energy=0.0u"eV", iter=0)
+                for _ in 1:16]
+        ls_d = LatticeGasWalkers(ws_d, ll_ham; assign_energy=false)
+        p_d = IdealGasReferencedGCNSParameters(mc_steps=30,
+            reference_fugacity=1.0, energy_perturbation=1e-9)
+        d_d, _, _ = ideal_gas_referenced_nested_sampling(ls_d, p_d,
+            Int64(200), MCGrandCanonicalMoves(), ll_save;
+            record_move_rates=true)
+        ll_cleanup()
+        nq = nrow(d_d) ÷ 4
+        ll_eff(rows) = (sum(rows.swap_accepted) -
+                        sum(rows.swap_null_accepted)) /
+                       max(sum(rows.swap_attempted) -
+                           sum(rows.swap_null_attempted), 1)
+        e1 = ll_eff(d_d[1:nq, :])
+        e4 = ll_eff(d_d[(nrow(d_d) - nq + 1):nrow(d_d), :])
+        @test e1 > 0.5
+        @test e4 < 0.86 * e1
+    end
 end

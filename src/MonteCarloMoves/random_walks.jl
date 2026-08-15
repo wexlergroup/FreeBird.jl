@@ -340,20 +340,21 @@ function MC_random_walk!(n_steps::Int,
     emax = emax * unit(lattice.energy)
 
     for i_mc_step in 1:n_steps
-        current_lattice = lattice.configuration
+        config = lattice.configuration
 
-        proposed_lattice = deepcopy(current_lattice)
+        # In-place proposal: the hop-pair walk mutates the live configuration
+        # and returns the drawn pair; a rejected proposal is reverted by
+        # replaying the pair (involution). No random draw changes.
+        hop_from, hop_to = _lattice_walk_draw!(config)
 
-        lattice_random_walk!(proposed_lattice)
-        
         perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
-        proposed_energy = interacting_energy(proposed_lattice, h) + perturbation_energy
+        proposed_energy = interacting_energy(config, h) + perturbation_energy
 
         @debug "proposed_energy = $proposed_energy, perturbed_energy = $(perturbation_energy), emax = $(emax)), accept = $(proposed_energy < emax)"
         if proposed_energy >= emax
+            _lattice_walk_apply!(config, hop_from, hop_to)
             continue
         else
-            lattice.configuration = proposed_lattice
             lattice.energy = proposed_energy
             n_accept += 1
             accept_this_walker = true
@@ -525,16 +526,68 @@ Perform a Monte Carlo random walk on the single-component lattice system.
 - `lattice::SLattice`: The proposed lattice after the random walk.
 """
 function lattice_random_walk!(lattice::SLattice)
+    _lattice_walk_draw!(lattice)
+    return lattice
+end
+
+"""
+    _lattice_walk_draw!(lattice) -> (hop_from, hop_to)
+
+Internal: perform one hop-pair walk step with exactly the draws of
+`lattice_random_walk!`, in the same order, returning the drawn pair so the
+copy-free kernels can revert a rejected proposal. The conditional exchange
+applied for a drawn pair is an involution, so replaying the pair through
+`_lattice_walk_apply!` reverts the step exactly.
+"""
+function _lattice_walk_draw!(lattice::SLattice)
     # pick a random site to hop from
     hop_from = rand(eachindex(lattice.components[1]))
     # pick a random site to hop to (can be the same as hop_from)
     hop_to = rand(eachindex(lattice.components[1]))
+    _lattice_walk_apply!(lattice, hop_from, hop_to)
+    return hop_from, hop_to
+end
+
+function _lattice_walk_draw!(lattice::MLattice{C,G}) where {C,G}
+    # pick a random component to hop in (draw kept for stream identity;
+    # all component vectors share the same site index range)
+    picked_comp::Int = rand(1:C)
+    # pick a random site to hop from
+    hop_from::Int = rand(eachindex(lattice.components[picked_comp]))
+    # pick a random site to hop to (can be the same as hop_from)
+    hop_to::Int = rand(eachindex(lattice.components[picked_comp]))
+    _lattice_walk_apply!(lattice, hop_from, hop_to)
+    return hop_from, hop_to
+end
+
+"""
+    _lattice_walk_apply!(lattice, hop_from, hop_to)
+
+Internal: apply the conditional occupancy exchange of the hop-pair walk for an
+already-drawn pair, with no random draws. Self-inverse for every case (the
+empty/occupied exchange, the cross-component exchange, and the no-op), so a
+second call with the same pair reverts the first.
+"""
+function _lattice_walk_apply!(lattice::SLattice, hop_from::Int, hop_to::Int)
     # propose a swap in occupation state (only if it maintains constant N)
-    # proposed_lattice = deepcopy(lattice)
     if lattice.components[1][hop_from] != lattice.components[1][hop_to]
-        lattice.components[1][hop_from], lattice.components[1][hop_to] = 
+        lattice.components[1][hop_from], lattice.components[1][hop_to] =
         lattice.components[1][hop_to], lattice.components[1][hop_from]
     end
+    return lattice
+end
+
+function _lattice_walk_apply!(lattice::MLattice{C,G}, hop_from::Int, hop_to::Int) where {C,G}
+    # case 1: occupied/unoccupied swap
+    is_occupied_from::Bool = any([lattice.components[comp][hop_from] for comp in 1:C])
+    is_occupied_to::Bool = any([lattice.components[comp][hop_to] for comp in 1:C])
+    if is_occupied_from != is_occupied_to # only swap if the occupation state changes
+        return swap_empty_occupied_sites!(lattice, hop_from, hop_to)
+    # case 2: both sites occupied, swap components
+    elseif is_occupied_from && is_occupied_to
+        return swap_occupied_sites_across_components!(lattice, hop_from, hop_to)
+    end
+    # case 3: both sites unoccupied, do nothing
     return lattice
 end
 
@@ -549,27 +602,7 @@ Perform a Monte Carlo random walk on the multi-component lattice system.
 - `lattice::MLattice{C,G}`: The proposed lattice after the random walk.
 """
 function lattice_random_walk!(lattice::MLattice{C,G}) where {C,G}
-    # pick a random component to hop in
-    picked_comp::Int = rand(1:C)
-    # pick a random site to hop from
-    hop_from::Int = rand(eachindex(lattice.components[picked_comp]))
-    # pick a random site to hop to (can be the same as hop_from)
-    hop_to::Int = rand(eachindex(lattice.components[picked_comp]))
-
-    # println("hop from: $hop_from, hop to: $hop_to, comp: $comp") # debug
-    
-    # case 1: occupied/unoccupied swap
-    is_occupied_from::Bool = any([lattice.components[comp][hop_from] for comp in 1:C])
-    is_occupied_to::Bool = any([lattice.components[comp][hop_to] for comp in 1:C])
-    # println("is_occupied_from: $is_occupied_from, is_occupied_to: $is_occupied_to") # debug
-    if is_occupied_from != is_occupied_to # only swap if the occupation state changes
-        # swap the occupation state of the sites
-        return swap_empty_occupied_sites!(lattice, hop_from, hop_to)
-    # case 2: both sites occupied, swap components
-    elseif is_occupied_from && is_occupied_to
-        return swap_occupied_sites_across_components!(lattice, hop_from, hop_to)
-    end
-    # case 3: both sites unoccupied, do nothing
+    _lattice_walk_draw!(lattice)
     return lattice
 end
 
@@ -652,18 +685,23 @@ function MC_cluster_walk!(n_steps::Int,
     accept_this_walker = false
     emax_u = emax * unit(lattice.energy)
 
+    cluster_pairs = Tuple{Int,Int}[]
     for _ in 1:n_steps
-        proposed_lattice = deepcopy(lattice.configuration)
-        geometric_cluster_swap!(proposed_lattice, cluster_p)
+        config = lattice.configuration
+        # In-place proposal: record the applied pairs so a rejected cluster
+        # move reverts by re-applying them (involution). No random draw changes.
+        empty!(cluster_pairs)
+        geometric_cluster_swap!(config, cluster_p; record=cluster_pairs)
 
         perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
-        proposed_energy = interacting_energy(proposed_lattice, h) + perturbation_energy
+        proposed_energy = interacting_energy(config, h) + perturbation_energy
 
         if proposed_energy < emax_u
-            lattice.configuration = proposed_lattice
             lattice.energy = proposed_energy
             n_accept += 1
             accept_this_walker = true
+        else
+            _apply_cluster_pairs!(config, cluster_pairs)
         end
     end
     return accept_this_walker, n_accept / max(n_steps, 1), lattice
@@ -706,18 +744,20 @@ Insert a particle at a random empty site. Returns `true` if successful,
 # Returns
 - `success::Bool`: Whether a particle was inserted.
 - `lattice::SLattice`: The mutated lattice.
+- `site::Int`: The inserted site index (0 when unsuccessful). A trailing
+  addition: two-name destructures of the previous return keep working.
 """
 function lattice_insert_particle!(lattice::SLattice)
     n_sites = num_sites(lattice)
     n_occ = sum(lattice.components[1])
     if n_occ >= n_sites
-        return false, lattice
+        return false, lattice, 0
     end
     # Collect empty site indices
     empty_sites = findall(.!lattice.components[1])
     site = rand(empty_sites)
     lattice.components[1][site] = true
-    return true, lattice
+    return true, lattice, site
 end
 
 """
@@ -732,16 +772,18 @@ Delete a particle from a random occupied site. Returns `true` if successful,
 # Returns
 - `success::Bool`: Whether a particle was deleted.
 - `lattice::SLattice`: The mutated lattice.
+- `site::Int`: The vacated site index (0 when unsuccessful). A trailing
+  addition: two-name destructures of the previous return keep working.
 """
 function lattice_delete_particle!(lattice::SLattice)
     n_occ = sum(lattice.components[1])
     if n_occ == 0
-        return false, lattice
+        return false, lattice, 0
     end
     occupied_sites = findall(lattice.components[1])
     site = rand(occupied_sites)
     lattice.components[1][site] = false
-    return true, lattice
+    return true, lattice, site
 end
 
 """
@@ -945,22 +987,31 @@ function MC_grand_canonical_walk!(n_steps::Int,
     insert_site = 0
     insert_from_biased = false
     deleted_site = 0
+    # In-place proposal state: proposals mutate the live configuration and a
+    # rejected proposal is reverted from this per-move record (hop pair,
+    # cluster pair list, or flipped site). Every revert is an involution
+    # replay or a single flip, so the reverted state is bit-identical, and
+    # no random draw is added or removed anywhere on this path.
+    hop_from = 0
+    hop_to = 0
+    cluster_pairs = Tuple{Int,Int}[]
 
     for _ in 1:n_steps
         r = rand()
-        proposed_lattice = deepcopy(lattice.configuration)
-        n = sum(proposed_lattice.components[1])
+        config = lattice.configuration
+        n = sum(config.components[1])
 
         if r < p_move
             # Fixed-N branch: choose cluster or local swap
             if p_cluster_in_move > 0.0 && rand() < p_cluster_in_move
                 # Geometric cluster move
-                geometric_cluster_swap!(proposed_lattice, cluster_p)
+                empty!(cluster_pairs)
+                geometric_cluster_swap!(config, cluster_p; record=cluster_pairs)
                 move_type = :cluster
                 cluster_total_count += 1
             else
                 # Local swap
-                lattice_random_walk!(proposed_lattice)
+                hop_from, hop_to = _lattice_walk_draw!(config)
                 move_type = :move
                 swap_attempted += 1
             end
@@ -973,7 +1024,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 # Composite channel. S(x) is computed ONCE per attempt and
                 # reused for both the biased draw and the composite proposal
                 # density in the acceptance below.
-                biased_set = lattice_biased_sites(proposed_lattice;
+                biased_set = lattice_biased_sites(config;
                                                   predicate=bias_predicate,
                                                   shells=bias_shells)
                 if rand() < p_bias
@@ -988,15 +1039,15 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     # as lattice_insert_particle!, inlined to capture the site
                     # for the composite density (keep in lockstep with it)
                     insert_uniform_attempted += 1
-                    empty_sites = findall(.!proposed_lattice.components[1])
+                    empty_sites = findall(.!config.components[1])
                     insert_site = rand(empty_sites)
                     insert_from_biased = false
                 end
-                proposed_lattice.components[1][insert_site] = true
+                config.components[1][insert_site] = true
             else
                 # p_bias == 0: legacy path, bit-identical RNG stream (no
                 # channel draw; lattice_insert_particle! draws exactly once)
-                success, proposed_lattice = lattice_insert_particle!(proposed_lattice)
+                success, _, insert_site = lattice_insert_particle!(config)
                 if !success
                     continue
                 end
@@ -1014,11 +1065,11 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 # Inlined uniform deletion (the same single rand(::Vector)
                 # draw as lattice_delete_particle!) to capture the vacated
                 # site for the reverse composite density (keep in lockstep)
-                occupied_sites = findall(proposed_lattice.components[1])
+                occupied_sites = findall(config.components[1])
                 deleted_site = rand(occupied_sites)
-                proposed_lattice.components[1][deleted_site] = false
+                config.components[1][deleted_site] = false
             else
-                success, proposed_lattice = lattice_delete_particle!(proposed_lattice)
+                success, _, deleted_site = lattice_delete_particle!(config)
                 if !success
                     continue
                 end
@@ -1028,11 +1079,13 @@ function MC_grand_canonical_walk!(n_steps::Int,
         end
 
         perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
-        proposed_energy = interacting_energy(proposed_lattice, h) + perturbation_energy
-        n_new = sum(proposed_lattice.components[1])
+        proposed_energy = interacting_energy(config, h) + perturbation_energy
+        n_new = sum(config.components[1])
         proposed_omega = proposed_energy - mu * n_new * unit(lattice.energy)
 
         if proposed_omega >= omega_max_u
+            _gc_revert_move!(config, move_type, hop_from, hop_to,
+                             cluster_pairs, insert_site, deleted_site)
             continue
         end
 
@@ -1057,7 +1110,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
         elseif move_type == :delete
             if p_bias > 0.0
                 # Reverse composite density on the POST-deletion configuration
-                rev_set = lattice_biased_sites(proposed_lattice;
+                rev_set = lattice_biased_sites(config;
                                                predicate=bias_predicate,
                                                shells=bias_shells)
                 q_rev = p_insert * ((deleted_site in rev_set ?
@@ -1084,7 +1137,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
         end
 
         if accept
-            lattice.configuration = proposed_lattice
+            # The live configuration already carries the proposal; keep it
+            # (the walker's configuration field is never rebound to a copy)
             lattice.energy = proposed_energy
             n_accept += 1
             accept_this_walker = true
@@ -1101,6 +1155,9 @@ function MC_grand_canonical_walk!(n_steps::Int,
             else # :delete
                 delete_accepted += 1
             end
+        else
+            _gc_revert_move!(config, move_type, hop_from, hop_to,
+                             cluster_pairs, insert_site, deleted_site)
         end
     end
 
@@ -1113,6 +1170,31 @@ function MC_grand_canonical_walk!(n_steps::Int,
             insert_biased_attempted=insert_biased_attempted,
             insert_biased_accepted=insert_biased_accepted,
             delete_attempted=delete_attempted, delete_accepted=delete_accepted)
+end
+
+"""
+    _gc_revert_move!(config, move_type, hop_from, hop_to, cluster_pairs,
+                     insert_site, deleted_site)
+
+Internal: revert a rejected in-place grand-canonical proposal. Swap and
+cluster proposals revert by involution replay (`_lattice_walk_apply!`,
+`_apply_cluster_pairs!`); insertion and deletion revert by flipping the
+recorded site back. No random draws.
+"""
+@inline function _gc_revert_move!(config, move_type::Symbol,
+                                  hop_from::Int, hop_to::Int,
+                                  cluster_pairs::Vector{Tuple{Int,Int}},
+                                  insert_site::Int, deleted_site::Int)
+    if move_type == :move
+        _lattice_walk_apply!(config, hop_from, hop_to)
+    elseif move_type == :cluster
+        _apply_cluster_pairs!(config, cluster_pairs)
+    elseif move_type == :insert
+        config.components[1][insert_site] = false
+    else # :delete
+        config.components[1][deleted_site] = true
+    end
+    return config
 end
 
 """

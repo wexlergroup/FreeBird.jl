@@ -14,6 +14,7 @@ export ClassicalHamiltonian
 export GenericLatticeHamiltonian, MLatticeHamiltonian
 export ClusterInteraction, ClusterLatticeHamiltonian
 export SiteFieldLatticeHamiltonian
+export supports_site_deltas
 
 abstract type AbstractHamiltonian end
 
@@ -462,5 +463,23 @@ function Base.show(io::IO, h::SiteFieldLatticeHamiltonian{H,U}) where {H,U}
             ustrip(lo), ", ", ustrip(hi), "] ", unit(U))
     println(io, "    base: ", h.base)
 end
+
+"""
+    supports_site_deltas(hamiltonian::ClassicalHamiltonian) -> Bool
+
+Opt-in trait: whether an exact O(z) single-site occupancy-flip energy delta
+(`site_flip_delta` in `EnergyEval`) is available for the Hamiltonian type.
+
+The `false` fallback is a contract, not a failure: consumers fall back to
+full recomputation instead of silently mis-evaluating. `ClusterLatticeHamiltonian`
+deliberately stays `false` (an exact cluster delta needs precomputed
+site-to-embedding incidence lists that do not exist yet), and the site-field
+wrapper delegates to its base. New `ClassicalHamiltonian` types opt in by
+adding a method alongside their `site_flip_delta` method.
+"""
+supports_site_deltas(::ClassicalHamiltonian) = false
+supports_site_deltas(::GenericLatticeHamiltonian) = true
+supports_site_deltas(::MLatticeHamiltonian) = true
+supports_site_deltas(h::SiteFieldLatticeHamiltonian) = supports_site_deltas(h.base)
 
 end # module Hamiltonians

@@ -16,6 +16,7 @@ using AtomsCalculators
 export pbc_dist, pbc_displacement
 export interacting_energy, frozen_energy
 export single_site_energy
+export site_flip_delta
 export pair_force, interacting_gradient
 
 # definitions of frozen_energy and interacting_energy

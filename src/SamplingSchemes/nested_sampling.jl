@@ -507,7 +507,11 @@ end
 
 const _RESERVED_LEDGER_COLUMNS = (:iter, :emax, :omega, :energy, :num_particles, :log_compression,
                                   :move_attempted, :move_accepted, :insert_attempted,
-                                  :insert_accepted, :delete_attempted, :delete_accepted)
+                                  :insert_accepted, :delete_attempted, :delete_accepted,
+                                  :insert_biased_attempted, :insert_biased_accepted,
+                                  :galilean_attempted, :galilean_accepted,
+                                  :galilean_reflect_attempted, :galilean_reflect_evals,
+                                  :galilean_reflect_accepted, :step_size)
 
 """
     _validate_observables(observables, liveset::AbstractLiveSet)
@@ -2429,9 +2433,31 @@ end
 # schema order when `record_move_rates=true`)
 const _MOVE_RATE_COLUMNS = (:move_attempted, :move_accepted, :insert_attempted,
                             :insert_accepted, :delete_attempted, :delete_accepted)
+const _CAVITY_RATE_COLUMNS = (:insert_biased_attempted, :insert_biased_accepted)
+const _GALILEAN_RATE_COLUMNS = (:galilean_attempted, :galilean_accepted,
+                                :galilean_reflect_attempted,
+                                :galilean_reflect_evals,
+                                :galilean_reflect_accepted)
 
 _move_stats_snapshot(params::SamplingParameters) =
-    Tuple(get(params.move_stats, k, 0) for k in _MOVE_RATE_COLUMNS)
+    _move_stats_snapshot(params, _MOVE_RATE_COLUMNS)
+_move_stats_snapshot(params::SamplingParameters, cols::Tuple) =
+    Tuple(get(params.move_stats, k, 0) for k in cols)
+
+"""
+    _move_rate_columns(mc_routine::MCAtomGrandCanonicalMoves) -> Tuple
+
+The per-iteration rate-column set for the atomistic ideal-gas-referenced
+ledger, conditional on the routine's active channels: the six base
+grand-canonical columns always, the cavity pair when `p_bias > 0` (the run
+totals already carry the keys), and the five Galilean counters when
+`galilean_steps > 0`. Conditional-on-active-channel keeps the shipped
+six-column schema byte-identical for routines that use neither channel.
+"""
+_move_rate_columns(mc_routine::MCAtomGrandCanonicalMoves) =
+    (_MOVE_RATE_COLUMNS...,
+     (mc_routine.p_bias > 0 ? _CAVITY_RATE_COLUMNS : ())...,
+     (mc_routine.galilean_steps > 0 ? _GALILEAN_RATE_COLUMNS : ())...)
 
 """
     _warn_min_image_cutoff(pot, config)
@@ -2620,10 +2646,17 @@ function nested_sampling_step!(liveset::AtomWalkers,
         p_bias=mc_routine.p_bias, bias_radius=mc_routine.bias_radius,
         bias_grid=mc_routine.bias_grid)
     if accept && mc_routine.galilean_steps > 0 && to_walk.list_num_par[1] > 0
-        # Optional reflective decorrelation burst (see the refill branch)
-        MC_galilean_walk!(mc_routine.galilean_steps, to_walk, pot, emax;
+        # Optional reflective decorrelation burst (see the refill branch).
+        # Its counters accumulate immediately, unconditionally on the
+        # subsequent re-anchor outcome: the burst's cost is paid either way,
+        # and the delta ledger's fold-forward semantics keep the per-column
+        # closure against the run totals exact. Refill-branch bursts stay
+        # unaccumulated, per the plateau contract.
+        _, _, _, gal_stats = MC_galilean_walk!(mc_routine.galilean_steps,
+                          to_walk, pot, emax;
                           step_size=mc_routine.galilean_step_size,
                           n_refresh=mc_routine.galilean_n_refresh)
+        _accumulate_move_stats!(params, gal_stats)
     end
     if accept
         # Re-anchor the clone's energy from scratch (see the refill branch)
@@ -2690,11 +2723,20 @@ With `record_move_rates=true` the ledger gains the per-iteration acceptance colu
 `[:move_attempted, :move_accepted, :insert_attempted, :insert_accepted,
 :delete_attempted, :delete_accepted]`, recorded as the change in the run-total
 counters since the previous recorded row: the production diagnostic for how the
-per-channel acceptances evolve with descent depth. A recorded row therefore also
-carries the attempts of any failed replacements since the previous row;
-plateau-eviction rows run no decorrelation walk of their own, and refill-walk
-counters are deliberately not accumulated. The recorded columns sum exactly to
-the `move_stats` run totals accumulated through the last recorded row. The names are reserved ledger columns, rejected as
+per-channel acceptances evolve with descent depth. The column set is conditional
+on the routine's active channels: `p_bias > 0` adds the cavity pair
+`[:insert_biased_attempted, :insert_biased_accepted]` (subsets of the insertion
+columns), and `galilean_steps > 0` adds the five Galilean counters
+`[:galilean_attempted, :galilean_accepted, :galilean_reflect_attempted,
+:galilean_reflect_evals, :galilean_reflect_accepted]` accumulated from every
+ordinary-cull burst (unconditionally on the subsequent re-anchor outcome, so
+every paid burst appears in some row's delta). A trailing `:step_size` column
+records the adapted step size at each row push. A recorded row also carries the
+attempts of any failed replacements since the previous row; plateau-eviction
+rows run no decorrelation walk of their own, and refill-walk counters
+(including refill bursts) are deliberately not accumulated. The recorded
+columns sum exactly to the `move_stats` run totals accumulated through the
+last recorded row. The names are reserved ledger columns, rejected as
 observable names.
 
 Observable callbacks must handle empty configurations: under this construction a
@@ -2726,10 +2768,12 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
     empty!(params.move_stats)
 
     df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[], log_compression=Float64[])
+    rate_cols = _move_rate_columns(mc_routine)
     if record_move_rates
-        for name in _MOVE_RATE_COLUMNS
+        for name in rate_cols
             df[!, name] = Int[]
         end
+        df[!, :step_size] = Float64[]
     end
     if observables !== nothing
         _validate_observables(observables, liveset)
@@ -2739,7 +2783,7 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
     end
     culled = nothing
     empty_frame_warned = false
-    rate_prev = record_move_rates ? _move_stats_snapshot(params) : nothing
+    rate_prev = record_move_rates ? _move_stats_snapshot(params, rate_cols) : nothing
 
     for i in 1:n_steps
         print_info = i % save_strategy.n_info == 0
@@ -2784,8 +2828,10 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
                     "but the pre-sorted worst walker had $(culled.energy))")
             end
             if record_move_rates
-                snap = _move_stats_snapshot(params)
-                rate_row = snap .- rate_prev
+                snap = _move_stats_snapshot(params, rate_cols)
+                # step_size is recorded at row push, after the iteration's
+                # adjustment (the last recorded row carries the final value)
+                rate_row = (snap .- rate_prev..., params.step_size)
                 rate_prev = snap
             else
                 rate_row = ()

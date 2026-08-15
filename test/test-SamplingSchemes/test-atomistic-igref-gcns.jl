@@ -346,7 +346,10 @@ end
             ls, params, 40, MCAtomGrandCanonicalMoves(), save; record_move_rates=true)
         rate_names = ["move_attempted", "move_accepted", "insert_attempted",
                       "insert_accepted", "delete_attempted", "delete_accepted"]
-        @test names(df) == vcat(["iter", "emax", "num_particles", "log_compression"], rate_names)
+        # Schema pin updated for the trailing step-size column (an
+        # order-preserving append under the same kwarg; disclosed)
+        @test names(df) == vcat(["iter", "emax", "num_particles", "log_compression"],
+                                rate_names, ["step_size"])
         # Closure: recorded per-iteration deltas sum to the run totals
         for name in rate_names
             @test sum(df[!, name]) == get(params.move_stats, Symbol(name), 0)

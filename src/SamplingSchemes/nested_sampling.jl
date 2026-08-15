@@ -46,6 +46,7 @@ mutable struct NestedSamplingParameters <: SamplingParameters
     cluster_accept_history::Vector{Float64}
     cluster_adjust_iterations::Vector{Int}
     plateau_refill_target::Int64
+    move_stats::Dict{Symbol,Int}
 end
 
 function NestedSamplingParameters(;
@@ -66,8 +67,9 @@ function NestedSamplingParameters(;
             cluster_accept_history::Vector{Float64}=Float64[],
             cluster_adjust_iterations::Vector{Int}=Int[],
             plateau_refill_target::Int64=0,
+            move_stats::Dict{Symbol,Int}=Dict{Symbol,Int}(),
             )
-    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, accept_range, fail_count, allowed_fail_count, energy_perturbation, random_seed, cluster_p, cluster_accepted, cluster_total, cluster_p_history, cluster_accept_history, cluster_adjust_iterations, plateau_refill_target)
+    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, accept_range, fail_count, allowed_fail_count, energy_perturbation, random_seed, cluster_p, cluster_accepted, cluster_total, cluster_p_history, cluster_accept_history, cluster_adjust_iterations, plateau_refill_target, move_stats)
 end
 
 """
@@ -692,6 +694,13 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     end
     # accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
     # @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: $(round(ns_params.step_size; sigdigits=4))"
+    # Driver-side counter synthesis, no kernel change: the kernel attempts a
+    # displacement every step and returns the rate as an integer ratio over
+    # exactly mc_steps steps, so the rounding recovers the acceptance count
+    # bit-exactly. Refill walks above are deliberately not accumulated.
+    _accumulate_move_stats!(ns_params,
+        (move_attempted=ns_params.mc_steps,
+         move_accepted=round(Int, rate * ns_params.mc_steps)))
     if accept
         push!(ats, at)
         popfirst!(ats)
@@ -1328,6 +1337,18 @@ Perform a nested sampling loop for a given number of steps.
   prior-volume weights depend only on the iteration index, so the
   substituted column is a valid estimator over the same ladder). The
   default `nothing` changes nothing.
+- `record_move_rates::Bool=false`: Per-iteration acceptance and step-size
+  ledger, supported for the serial atomistic routines (`MCRandomWalkMaxE`,
+  `MCRandomWalkClone`, `MCGalileanWalk`) on an `AtomWalkers` liveset only;
+  other liveset or routine types throw up front, since their step methods
+  run different kernels. When true the ledger declares `log_compression`
+  eagerly, then the routine's rate columns (`move_attempted`/`move_accepted`
+  for the random-walk routines, the five Galilean counters for the
+  reflective one), then a `step_size` column recording the adapted value at
+  each row push; observables follow. Deltas are snapshot-differenced run
+  totals: plateau rows record zeros, failed iterations fold into the next
+  recorded row, and refill walks are never accumulated. The default keeps
+  the shipped schema byte-identically.
 
 # Returns
 - `df`: A DataFrame containing the iteration number and maximum energy for each step,
@@ -1341,7 +1362,8 @@ function nested_sampling(liveset::AbstractLiveSet,
                                 mc_routine::MCRoutine,
                                 save_strategy::DataSavingStrategy;
                                 observables::Union{Nothing,AbstractVector{<:Pair{Symbol,<:Any}}}=nothing,
-                                dead_point_callback::Union{Nothing,Function}=nothing)
+                                dead_point_callback::Union{Nothing,Function}=nothing,
+                                record_move_rates::Bool=false)
     # Initialize cluster_p and reset counters from MCMixedMoves if applicable
     if mc_routine isa MCMixedMoves && mc_routine.clusters_freq > 0
         ns_params.cluster_p = mc_routine.initial_cluster_p
@@ -1354,7 +1376,34 @@ function nested_sampling(liveset::AbstractLiveSet,
     # Defensive: a parameters object recovered from a run that ended inside a
     # plateau block must not arm a fresh run's first cull as a tie eviction.
     ns_params.plateau_refill_target = 0
+    empty!(ns_params.move_stats)
+    if record_move_rates
+        # Both halves of the restriction are load-bearing: the per-iteration
+        # ledger relies on the five-value, log-compression-emitting step
+        # returns and the counter accumulation of the serial atomistic step
+        # methods. Another liveset type (a lattice liveset, or the surface
+        # walkers with their own step method) dispatches to a different step
+        # even under an allowed routine, so it is rejected up front, before
+        # any walker is touched.
+        (liveset isa AtomWalkers && !(liveset isa LJSurfaceWalkers) &&
+         mc_routine isa Union{MCRandomWalkMaxE,MCRandomWalkClone,MCGalileanWalk}) ||
+            throw(ArgumentError(
+                "record_move_rates: supported only for the serial atomistic " *
+                "routines (MCRandomWalkMaxE, MCRandomWalkClone, " *
+                "MCGalileanWalk) on an AtomWalkers liveset"))
+    end
     df = DataFrame(iter=Int[], emax=Float64[])
+    can_rate_cols = record_move_rates ? _move_rate_columns(mc_routine) : ()
+    if record_move_rates
+        # Eager column declaration: the allowed routines' step methods all
+        # emit log_t, so the lazy log_compression addition below never fires
+        # first and the column order is deterministic
+        df[!, :log_compression] = Float64[]
+        for name in can_rate_cols
+            df[!, name] = Int[]
+        end
+        df[!, :step_size] = Float64[]
+    end
     if observables !== nothing
         mc_routine isa MCRoutineParallel && throw(ArgumentError(
             "observables: parallel/multi-cull MC routines are not supported " *
@@ -1373,6 +1422,8 @@ function nested_sampling(liveset::AbstractLiveSet,
             "undefined"))
     end
     culled = nothing
+    can_rate_prev = record_move_rates ?
+        _move_stats_snapshot(ns_params, can_rate_cols) : nothing
     for i in 1:n_steps
         print_info = i % save_strategy.n_info == 0
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
@@ -1412,10 +1463,24 @@ function nested_sampling(liveset::AbstractLiveSet,
                 # column can be added lazily without backfilling.
                 df[!, :log_compression] = Float64[]
             end
-            row = observables === nothing ? (iter, emax.val) :
-                (iter, emax.val,
-                 (Float64(f(culled.configuration)) for (_, f) in observables)...)
-            push!(df, log_t === missing ? row : (row..., log_t))
+            if record_move_rates
+                # Snapshot-differenced per-iteration deltas plus the adapted
+                # step size at row push; plateau-eviction rows run no walk and
+                # record zeros, failed iterations fold into the next recorded
+                # row, and each column sums to its run total
+                snap = _move_stats_snapshot(ns_params, can_rate_cols)
+                rate_row = (snap .- can_rate_prev..., ns_params.step_size)
+                can_rate_prev = snap
+                push!(df, observables === nothing ?
+                    (iter, emax.val, log_t, rate_row...) :
+                    (iter, emax.val, log_t, rate_row...,
+                     (Float64(f(culled.configuration)) for (_, f) in observables)...))
+            else
+                row = observables === nothing ? (iter, emax.val) :
+                    (iter, emax.val,
+                     (Float64(f(culled.configuration)) for (_, f) in observables)...)
+                push!(df, log_t === missing ? row : (row..., log_t))
+            end
             dead_point_callback === nothing || dead_point_callback(iter, culled)
         end
         print_message(i, iter, emax, ns_params.step_size, print_info, liveset)
@@ -2229,9 +2294,12 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         return iter, emax, liveset, ns_params, log_t
     end
     to_walk = deepcopy(rand(ats[2:end]))
-    accept, rate, at = MC_galilean_walk!(ns_params.mc_steps, to_walk, pot, emax;
+    accept, rate, at, gal_stats = MC_galilean_walk!(ns_params.mc_steps, to_walk, pot, emax;
                                          step_size=ns_params.step_size,
                                          n_refresh=mc_routine.n_refresh)
+    # Segment counters accumulate on the ordinary path only; refill walks
+    # above are deliberately not accumulated (the plateau contract)
+    _accumulate_move_stats!(ns_params, gal_stats)
     if accept
         push!(ats, at)
         popfirst!(ats)
@@ -2458,6 +2526,12 @@ _move_rate_columns(mc_routine::MCAtomGrandCanonicalMoves) =
     (_MOVE_RATE_COLUMNS...,
      (mc_routine.p_bias > 0 ? _CAVITY_RATE_COLUMNS : ())...,
      (mc_routine.galilean_steps > 0 ? _GALILEAN_RATE_COLUMNS : ())...)
+# Canonical (fixed-N) routes: the serial random-walk routines synthesize
+# displacement counters driver-side; the reflective route records the
+# Galilean segment counters
+_move_rate_columns(::Union{MCRandomWalkMaxE,MCRandomWalkClone}) =
+    (:move_attempted, :move_accepted)
+_move_rate_columns(::MCGalileanWalk) = _GALILEAN_RATE_COLUMNS
 
 """
     _warn_min_image_cutoff(pot, config)

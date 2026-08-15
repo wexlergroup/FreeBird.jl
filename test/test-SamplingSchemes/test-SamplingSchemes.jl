@@ -14,6 +14,8 @@ include("test-atomistic-gc-interacting-regressions.jl")
     include("test-grand_canonical_ns.jl")
     # test ideal-gas-referenced grand-canonical nested sampling
     include("test-ideal-gas-ref-gcns.jl")
+    # seeded trajectory pins for the lattice grand-canonical kernels/drivers
+    include("test-lattice-gc-trajectory-pins.jl")
     # test atomistic ideal-gas-referenced grand-canonical nested sampling
     include("test-atomistic-igref-gcns.jl")
     # test the atomistic ideal-gas-referenced ledger assembly

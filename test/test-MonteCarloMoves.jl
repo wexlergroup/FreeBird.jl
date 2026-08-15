@@ -1425,3 +1425,87 @@ end
         @test position(w1.configuration, :) == position(w2.configuration, :)
     end
 end
+
+@testset "Galilean walk kernel statistics" begin
+    using Random
+    gs_box = [[20.0, 0.0, 0.0], [0.0, 20.0, 0.0], [0.0, 0.0, 20.0]]u"Å"
+    gs_pbc = (true, true, true)
+    gs_lj = LJParameters(epsilon=0.05, sigma=2.5, cutoff=2.0, shift=true)
+
+    @testset "key order and the zero-filled empty return" begin
+        w0 = AtomWalker(FastSystem(atomic_system([:Ar => [5.0, 5.0, 5.0]u"Å"],
+                                                 gs_box, gs_pbc)))
+        w0.energy = 0.0u"eV"
+        Random.seed!(84100)
+        _, _, _, st = MC_galilean_walk!(2, w0, LJParameters(epsilon=0.0),
+                                        1.0u"eV"; step_size=0.5, n_refresh=4)
+        @test keys(st) == (:galilean_attempted, :galilean_accepted,
+                           :galilean_reflect_attempted,
+                           :galilean_reflect_evals,
+                           :galilean_reflect_accepted)
+        empty_sys = FastSystem(cell_vectors(w0.configuration), gs_pbc,
+                               empty(position(w0.configuration, :)),
+                               empty(species(w0.configuration, :)),
+                               empty(mass(w0.configuration, :)))
+        we = AtomWalker{1}(empty_sys)
+        we.energy = 0.0u"eV"
+        acc_e, rate_e, _, st_e = MC_galilean_walk!(3, we, gs_lj, 1.0u"eV";
+                                                   step_size=0.5, n_refresh=4)
+        @test acc_e == false && rate_e == 0.0
+        @test st_e == (galilean_attempted=0, galilean_accepted=0,
+                       galilean_reflect_attempted=0, galilean_reflect_evals=0,
+                       galilean_reflect_accepted=0)
+    end
+
+    @testset "closed-form counter fixtures" begin
+        # A free particle under a non-binding ceiling never reflects
+        Random.seed!(84101)
+        w1 = AtomWalker(FastSystem(atomic_system([:Ar => [5.0, 5.0, 5.0]u"Å"],
+                                                 gs_box, gs_pbc)))
+        w1.energy = 0.0u"eV"
+        acc1, rate1, _, st1 = MC_galilean_walk!(10, w1,
+            LJParameters(epsilon=0.0), 1.0u"eV"; step_size=2.0, n_refresh=4)
+        @test acc1 == true && rate1 == 1.0
+        @test st1.galilean_attempted == 40
+        @test st1.galilean_accepted == 40
+        @test st1.galilean_reflect_attempted == 0
+        @test st1.galilean_reflect_evals == 0
+        @test st1.galilean_reflect_accepted == 0
+
+        # The same potential under an unreachable ceiling reflects every
+        # segment with a degenerate (zero) gradient: one gradient per
+        # segment, never a second trial energy
+        Random.seed!(84102)
+        w2 = AtomWalker(FastSystem(atomic_system([:Ar => [5.0, 5.0, 5.0]u"Å"],
+                                                 gs_box, gs_pbc)))
+        w2.energy = 0.0u"eV"
+        acc2, rate2, _, st2 = MC_galilean_walk!(5, w2,
+            LJParameters(epsilon=0.0), -1.0u"eV"; step_size=1.0, n_refresh=4)
+        @test acc2 == false && rate2 == 0.0
+        @test st2.galilean_attempted == 20
+        @test st2.galilean_reflect_attempted == 20
+        @test st2.galilean_reflect_evals == 0
+        @test st2.galilean_reflect_accepted == 0
+        @test st2.galilean_accepted == 0
+    end
+
+    @testset "interacting fixture: chain and identities" begin
+        # A bound pair under a tight ceiling (the shipped reversibility
+        # class): reflections fire, every Lennard-Jones gradient is usable,
+        # and the counter chain and rate identity hold exactly
+        Random.seed!(84103)
+        wp = AtomWalker(FastSystem(atomic_system(
+            [:Ar => [8.0, 10.0, 10.0]u"Å", :Ar => [11.0, 10.0, 10.0]u"Å"],
+            gs_box, gs_pbc)))
+        wp.energy = interacting_energy(wp.configuration, gs_lj,
+                                       wp.list_num_par, wp.frozen)
+        emaxp = wp.energy + 0.004u"eV"
+        accp, ratep, _, stp = MC_galilean_walk!(20, wp, gs_lj, emaxp;
+                                                step_size=0.9, n_refresh=6)
+        @test stp.galilean_reflect_accepted <= stp.galilean_reflect_evals <=
+              stp.galilean_reflect_attempted <= stp.galilean_attempted
+        @test ratep == stp.galilean_accepted / stp.galilean_attempted
+        @test stp.galilean_reflect_attempted > 0
+        @test stp.galilean_reflect_evals == stp.galilean_reflect_attempted
+    end
+end

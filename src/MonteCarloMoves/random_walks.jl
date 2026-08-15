@@ -1732,6 +1732,9 @@ function _galilean_trajectory!(at::AtomWalker{1},
     config = at.configuration
     n = at.list_num_par[1]
     n_inside = 0
+    n_reflect_att = 0
+    n_reflect_eval = 0
+    n_reflect_acc = 0
     current_E = at.energy
     for _ in 1:n_refresh
         saved = copy(config.position)
@@ -1746,6 +1749,8 @@ function _galilean_trajectory!(at::AtomWalker{1},
             n_inside += 1
             continue
         end
+        # First trial failed: exactly one gradient per such segment
+        n_reflect_att += 1
         grad = interacting_gradient(config, pot, at.list_num_par, at.frozen)
         v_r, ok = _galilean_reflect(v, grad)
         if ok
@@ -1753,10 +1758,13 @@ function _galilean_trajectory!(at::AtomWalker{1},
                 pos = config.position[i] + (step_size * v_r[i]) * u"Å"
                 config.position[i] = periodic_boundary_wrap!(pos, config)
             end
+            # Usable gradient: the second trial energy is evaluated
+            n_reflect_eval += 1
             E2 = interacting_energy(config, pot, at.list_num_par, at.frozen) + at.energy_frozen_part
             if E2 < emax
                 current_E = E2
                 n_inside += 1
+                n_reflect_acc += 1
                 v = v_r
                 continue
             end
@@ -1766,7 +1774,7 @@ function _galilean_trajectory!(at::AtomWalker{1},
         v = [-vi for vi in v]
     end
     at.energy = current_E
-    return v, n_inside
+    return v, n_inside, n_reflect_att, n_reflect_eval, n_reflect_acc
 end
 
 """
@@ -1793,6 +1801,16 @@ the velocity, which would break reversibility); an empty walker returns unchange
 - `accept_this_walker::Bool`: Whether any segment ended inside the constraint.
 - `accept_rate::Float64`: Fraction of segments ending inside the constraint.
 - `at::AtomWalker{1}`: The updated walker.
+- `stats::NamedTuple`: Integer segment counters, in order
+  `(galilean_attempted, galilean_accepted, galilean_reflect_attempted,
+  galilean_reflect_evals, galilean_reflect_accepted)`: segments run
+  (`n_steps` × `n_refresh`), segments ending inside (the rate numerator, so
+  `rate == galilean_accepted / galilean_attempted` is an identity), segments
+  whose first trial failed (each computing exactly one gradient), reflections
+  with a usable gradient (each evaluating the second trial energy, so full
+  energy evaluations = `galilean_attempted + galilean_reflect_evals`), and
+  reflected segments ending inside. A trailing addition: three-name
+  destructures of the previous return keep working.
 """
 function MC_galilean_walk!(n_steps::Int,
                            at::AtomWalker{1},
@@ -1816,17 +1834,37 @@ function MC_galilean_walk!(n_steps::Int,
         end
     end
     n = at.list_num_par[1]
-    n == 0 && return false, 0.0, at
+    n == 0 && return false, 0.0, at,
+                (galilean_attempted=0, galilean_accepted=0,
+                 galilean_reflect_attempted=0, galilean_reflect_evals=0,
+                 galilean_reflect_accepted=0)
 
     total_inside = 0
+    total_reflect_att = 0
+    total_reflect_eval = 0
+    total_reflect_acc = 0
     for _ in 1:n_steps
         raw = [SVector(randn(), randn(), randn()) for _ in 1:n]
         nrm = sqrt(sum(vi -> vi[1]^2 + vi[2]^2 + vi[3]^2, raw))
         v = [vi / nrm for vi in raw]
-        _, n_inside = _galilean_trajectory!(at, pot, emax, v, n_refresh, step_size)
+        _, n_inside, r_att, r_eval, r_acc =
+            _galilean_trajectory!(at, pot, emax, v, n_refresh, step_size)
         total_inside += n_inside
+        total_reflect_att += r_att
+        total_reflect_eval += r_eval
+        total_reflect_acc += r_acc
     end
-    return total_inside > 0, total_inside / (n_steps * n_refresh), at
+    # Trailing stats element (integer counters only, no draws, no
+    # floating-point change): closes the call-count accounting exactly.
+    # Full energy evaluations = galilean_attempted + galilean_reflect_evals;
+    # gradient evaluations = galilean_reflect_attempted;
+    # rate == galilean_accepted / galilean_attempted stays an identity.
+    return total_inside > 0, total_inside / (n_steps * n_refresh), at,
+           (galilean_attempted=n_steps * n_refresh,
+            galilean_accepted=total_inside,
+            galilean_reflect_attempted=total_reflect_att,
+            galilean_reflect_evals=total_reflect_eval,
+            galilean_reflect_accepted=total_reflect_acc)
 end
 
 """

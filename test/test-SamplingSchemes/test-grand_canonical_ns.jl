@@ -812,4 +812,125 @@
         @test [k for k in 2:6 if keys_m[k] < worst_m] ==
               [k for k in 2:6 if gp_e(mixed[k]) < worst_m]
     end
+
+    @testset "null-move accounting and swap modes" begin
+        using Random
+
+        ns_lat() = MLattice{1,SquareLattice}(lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)], supercell_dimensions=(4, 4, 1),
+            periodicity=(true, true, false), cutoff_radii=[1.1],
+            components=[[false for _ in 1:16]], adsorptions=:full)
+        ns_ham = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
+        function swap_only_walk(lat; swap_mode=:uniform_pair, nsteps=400)
+            wk = LatticeWalker(lat, energy=interacting_energy(lat, ns_ham),
+                               iter=0)
+            _, _, _, _, _, ms = MC_grand_canonical_walk!(nsteps, wk, ns_ham,
+                1.0e3, 0.0; p_move=1.0, p_insert=0.0, z0=1.0,
+                energy_perturb=1e-9, swap_mode=swap_mode)
+            return wk, ms
+        end
+
+        @testset "null classification" begin
+            # All-empty and all-occupied fixtures make every uniform-pair
+            # proposal a null
+            Random.seed!(99101)
+            _, ms_e = swap_only_walk(ns_lat())
+            @test ms_e.swap_attempted == 400
+            @test ms_e.swap_null_attempted == ms_e.swap_attempted
+            lat_f = ns_lat()
+            lat_f.components[1] .= true
+            Random.seed!(99102)
+            _, ms_f = swap_only_walk(lat_f)
+            @test ms_f.swap_null_attempted == ms_f.swap_attempted
+            # Mixed coverage: subset identities
+            lat_m = ns_lat()
+            Random.seed!(99103)
+            for i in 1:16
+                lat_m.components[1][i] = rand() < 0.5
+            end
+            _, ms_m = swap_only_walk(lat_m)
+            @test ms_m.swap_null_accepted <= ms_m.swap_null_attempted
+            @test ms_m.swap_null_attempted <= ms_m.swap_attempted
+            @test ms_m.swap_null_attempted > 0
+            @test ms_m.swap_attempted > ms_m.swap_null_attempted
+        end
+
+        @testset "run totals carry the new keys" begin
+            ns_save = SaveEveryN("t_nsw.csv", "t_nsw.traj", "t_nsw.ls",
+                                 1000000, 1000000, 1000000)
+            Random.seed!(99104)
+            ws = [LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV",
+                                iter=0) for _ in 1:8]
+            ls = LatticeGasWalkers(ws, ham; assign_energy=false)
+            gc = GrandCanonicalNestedSamplingParameters(mc_steps=20,
+                chemical_potential=-0.05, energy_perturbation=1e-9)
+            _, _, pout = grand_canonical_nested_sampling(ls, gc, Int64(20),
+                MCGrandCanonicalMoves(), ns_save)
+            rm.(["t_nsw.csv", "t_nsw.traj", "t_nsw.ls"], force=true)
+            @test haskey(pout.move_stats, :swap_null_attempted)
+            @test haskey(pout.move_stats, :swap_null_accepted)
+            @test pout.move_stats[:swap_null_attempted] <=
+                  pout.move_stats[:swap_attempted]
+        end
+
+        @testset "swap_mode default A/B and occupied-empty mechanics" begin
+            # Same-seed A/B: a routine that never mentions swap_mode against
+            # the explicit default
+            function ab_run(mode)
+                Random.seed!(99105)
+                lat = ns_lat()
+                for i in 1:16
+                    lat.components[1][i] = rand() < 0.5
+                end
+                wk = LatticeWalker(lat,
+                    energy=interacting_energy(lat, ns_ham), iter=0)
+                if mode === nothing
+                    # A call that never mentions the keyword
+                    _, r, _, _, _, ms = MC_grand_canonical_walk!(300, wk,
+                        ns_ham, 1.0e3, 0.0; p_move=0.4, p_insert=0.3, z0=1.0,
+                        energy_perturb=1e-9)
+                else
+                    _, r, _, _, _, ms = MC_grand_canonical_walk!(300, wk,
+                        ns_ham, 1.0e3, 0.0; p_move=0.4, p_insert=0.3, z0=1.0,
+                        energy_perturb=1e-9, swap_mode=mode)
+                end
+                return wk.energy.val, sum(wk.configuration.components[1]), r,
+                       ms
+            end
+            eA, nA, rA, msA = ab_run(nothing)
+            eB, nB, rB, msB = ab_run(:uniform_pair)
+            @test eA == eB
+            @test nA == nB
+            @test rA == rB
+            @test msA == msB
+
+            # occupied-empty: zero nulls, N conserved on the swap-only walk,
+            # guard skips on empty and full lattices
+            lat_oe = ns_lat()
+            Random.seed!(99106)
+            for i in 1:16
+                lat_oe.components[1][i] = rand() < 0.5
+            end
+            n0 = sum(lat_oe.components[1])
+            wk_oe, ms_oe = swap_only_walk(lat_oe; swap_mode=:occupied_empty)
+            @test ms_oe.swap_null_attempted == 0
+            @test ms_oe.swap_attempted == 400
+            @test sum(wk_oe.configuration.components[1]) == n0
+            Random.seed!(99107)
+            _, ms_oee = swap_only_walk(ns_lat(); swap_mode=:occupied_empty)
+            @test ms_oee.swap_attempted == 0
+            lat_oef = ns_lat()
+            lat_oef.components[1] .= true
+            Random.seed!(99108)
+            _, ms_oef = swap_only_walk(lat_oef; swap_mode=:occupied_empty)
+            @test ms_oef.swap_attempted == 0
+
+            # constructor and kernel validation reject unknown modes
+            @test_throws ArgumentError MCGrandCanonicalMoves(
+                swap_mode=:diagonal)
+            bad_wk = LatticeWalker(ns_lat(), energy=0.0u"eV", iter=0)
+            @test_throws ArgumentError MC_grand_canonical_walk!(1, bad_wk,
+                ns_ham, 1.0e3, 0.0; swap_mode=:diagonal)
+        end
+    end
 end

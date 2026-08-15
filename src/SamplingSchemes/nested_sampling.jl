@@ -1459,6 +1459,72 @@ function _shared_geometry_walker(w::LatticeWalker, cfg::MLattice{C,G}) where {C,
 end
 
 """
+    _perturbation_energy_bound(h, lattice) -> Union{Float64,Nothing}
+
+Magnitude bound on the lattice energy in the Hamiltonian's own energy
+units: the on-site magnitude times the site count, plus each coupled
+shell's magnitude times its total ordered-entry count over two (image
+multiplicity included, read from the built neighbor lists), plus the
+site-field and cluster magnitudes where applicable. Returns `nothing` for
+Hamiltonian types without a method, which skips the tie-breaker warning.
+"""
+function _perturbation_energy_bound(h::GenericLatticeHamiltonian{N,U},
+                                    lattice) where {N,U}
+    nbrs = lattice.neighbors
+    b = abs(ustrip(h.on_site_interaction)) * length(lattice.components[1])
+    shells = isempty(nbrs) ? 0 : length(nbrs[1])
+    for n in 1:min(N, shells)
+        entries = sum(length(nbrs[i][n]) for i in eachindex(nbrs))
+        b += abs(ustrip(h.nth_neighbor_interactions[n])) * entries / 2
+    end
+    return b
+end
+function _perturbation_energy_bound(h::SiteFieldLatticeHamiltonian, lattice)
+    b = _perturbation_energy_bound(h.base, lattice)
+    b === nothing && return nothing
+    return b + sum(x -> abs(ustrip(x)), h.field)
+end
+_perturbation_energy_bound(h::MLatticeHamiltonian, lattice) =
+    _perturbation_energy_bound(h.Hamiltonians[1, 1], lattice)
+function _perturbation_energy_bound(h::ClusterLatticeHamiltonian, lattice)
+    b = _perturbation_energy_bound(h.pair_ham, lattice)
+    b === nothing && return nothing
+    for c in h.clusters
+        b += abs(ustrip(c.coupling)) * length(c.embeddings)
+    end
+    return b
+end
+_perturbation_energy_bound(h, lattice) = nothing
+
+"""
+    _warn_perturbation_scale(liveset::LatticeGasWalkers, delta::Float64)
+
+Warn once, at driver entry, when the configured `energy_perturbation` sits
+below the documented degenerate-plateau resolution floor
+`K^2 * eps(E_bound)`: below it the K walkers cannot reliably draw
+distinct tie-breaking values on a degenerate plateau, and the failure mode
+is silent (plateaus decompress at machine granularity and read as poor
+mixing). A warning, never a throw; a zero perturbation is a deliberate
+no-perturbation choice and is not warned about.
+"""
+function _warn_perturbation_scale(liveset::LatticeGasWalkers, delta::Float64)
+    isempty(liveset.walkers) && return nothing
+    bound = _perturbation_energy_bound(liveset.hamiltonian,
+                                       liveset.walkers[1].configuration)
+    bound === nothing && return nothing
+    floor_delta = length(liveset.walkers)^2 * eps(bound)
+    if 0.0 < delta < floor_delta
+        @warn "energy_perturbation = $delta sits below the degenerate-" *
+              "plateau resolution floor K^2 * eps(E_bound) = $floor_delta " *
+              "(E_bound = $bound in the Hamiltonian's energy units, K = " *
+              "$(length(liveset.walkers))); ties may decompress at machine " *
+              "granularity and read as poor mixing. Recommended minimum: " *
+              "$floor_delta."
+    end
+    return nothing
+end
+
+"""
     _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonicalNestedSamplingParameters)
 
 Initialize walkers with random microstates for grand-canonical NS.
@@ -1511,18 +1577,26 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     mu = gc_params.chemical_potential
     n_walkers = length(ats)
 
-    # Sort by grand potential (descending — worst first)
-    sort!(ats, by = w -> _grand_potential(w, mu), rev=true)
+    # Sort by grand potential (descending — worst first): one O(K·M) key
+    # sweep, then a stable sortperm on the cached keys. The comparisons see
+    # the identical key values, so the resulting order (ties included), the
+    # random stream, and every recorded digit match the by-comparator sort,
+    # while the per-iteration cost drops from O(K·M·log K) to
+    # O(K·M + K·log K); the cached keys are reused below.
+    omega_keys = [_grand_potential(w, mu) for w in ats]
+    omega_perm = sortperm(omega_keys, rev=true)
+    permute!(ats, omega_perm)
+    permute!(omega_keys, omega_perm)
 
     iter::Union{Missing,Int} = missing
     worst = ats[1]
-    omega_worst = _grand_potential(worst, mu)
+    omega_worst = omega_keys[1]
     energy_worst = worst.energy
     n_worst = sum(worst.configuration.components[1])
 
     # Select parent: prefer walkers strictly below omega_worst
     omega_max_val = omega_worst.val  # unitless for the MC function
-    eligible = [k for k in 2:n_walkers if _grand_potential(ats[k], mu) < omega_worst]
+    eligible = [k for k in 2:n_walkers if omega_keys[k] < omega_worst]
     if !isempty(eligible)
         parent_idx = rand(eligible)
     else
@@ -1589,6 +1663,11 @@ highest-Ω walker, record (Ω, E, N), replace with a decorrelated clone.
   `(iter, walker) -> ...` invoked with the culled walker immediately after
   its ledger row is pushed; see [`nested_sampling`](@ref) for the contract.
 
+- `stop_on_stall::Bool=false`: When true and `fail_count` reaches
+  `allowed_fail_count`, warn once and return the partial ledger and the
+  intact live set (`fail_count` stays at threshold); the default keeps the
+  shipped warn-and-continue behavior byte-identically.
+
 # Returns
 - `df::DataFrame`: Columns `[:iter, :omega, :energy, :num_particles]`,
   plus one column per requested observable.
@@ -1601,9 +1680,11 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
                                          mc_routine::MCGrandCanonicalMoves,
                                          save_strategy::DataSavingStrategy;
                                          observables::Union{Nothing,AbstractVector{<:Pair{Symbol,<:Any}}}=nothing,
-                                         dead_point_callback::Union{Nothing,Function}=nothing)
+                                         dead_point_callback::Union{Nothing,Function}=nothing,
+                                         stop_on_stall::Bool=false)
     # Initialize walkers with random microstates
     _init_gc_walkers!(liveset, gc_params)
+    _warn_perturbation_scale(liveset, gc_params.energy_perturbation)
 
     # Initialize cluster_p and reset counters from MCGrandCanonicalMoves if applicable
     if mc_routine.clusters_freq > 0
@@ -1632,11 +1713,13 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
 
         if observables !== nothing || dead_point_callback !== nothing
-            # Pre-sort with the step's own comparator (Ω = E − μN, descending)
-            # and hold the walker the step will cull; see `nested_sampling`.
-            sort!(liveset.walkers,
-                  by = w -> _grand_potential(w, gc_params.chemical_potential),
-                  rev=true)
+            # Pre-sort with the step's own ordering (Ω = E − μN, descending,
+            # cached keys through a stable sortperm, order-identical to the
+            # by-comparator sort) and hold the walker the step will cull;
+            # see `nested_sampling`.
+            pre_keys = [_grand_potential(w, gc_params.chemical_potential)
+                        for w in liveset.walkers]
+            permute!(liveset.walkers, sortperm(pre_keys, rev=true))
             culled = liveset.walkers[1]
         end
 
@@ -1647,6 +1730,13 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
 
         if gc_params.fail_count >= gc_params.allowed_fail_count
             @warn "GC-NS: Failed $(gc_params.allowed_fail_count) times in a row."
+            # Opt-in stall stop: return the partial ledger and the intact
+            # live set instead of burning the remaining iteration budget
+            # (the driver re-initializes its live set on entry, so a stalled
+            # run cannot be chunked around from outside). The break leaves
+            # fail_count at threshold so a caller can distinguish a stalled
+            # return (the atomistic convention).
+            stop_on_stall && break
             gc_params.fail_count = 0
         end
 
@@ -1954,6 +2044,11 @@ extract them from the returned liveset.
   a valid estimator of the second Hamiltonian's grand potential over the
   same ladder, with the returned Kish N_eff as its fidelity diagnostic.
 
+- `stop_on_stall::Bool=false`: When true and `fail_count` reaches
+  `allowed_fail_count`, warn once and return the partial ledger and the
+  intact live set (`fail_count` stays at threshold); the default keeps the
+  shipped warn-and-continue behavior byte-identically.
+
 # Returns
 - `df::DataFrame`: Columns `[:iter, :emax, :num_particles]`,
   plus one column per requested observable.
@@ -1966,9 +2061,11 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
                                               mc_routine::MCGrandCanonicalMoves,
                                               save_strategy::DataSavingStrategy;
                                               observables::Union{Nothing,AbstractVector{<:Pair{Symbol,<:Any}}}=nothing,
-                                              dead_point_callback::Union{Nothing,Function}=nothing)
+                                              dead_point_callback::Union{Nothing,Function}=nothing,
+                                              stop_on_stall::Bool=false)
     # Initialize walkers as i.i.d. draws from the Bernoulli(z0/(1+z0)) prior
     _init_ideal_gas_ref_walkers!(liveset, params)
+    _warn_perturbation_scale(liveset, params.energy_perturbation)
 
     # Initialize cluster_p and reset counters from MCGrandCanonicalMoves if applicable
     if mc_routine.clusters_freq > 0
@@ -2010,6 +2107,9 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
 
         if params.fail_count >= params.allowed_fail_count
             @warn "IG-ref GC-NS: Failed $(params.allowed_fail_count) times in a row."
+            # Opt-in stall stop (see grand_canonical_nested_sampling); the
+            # break leaves fail_count at threshold
+            stop_on_stall && break
             params.fail_count = 0
         end
 

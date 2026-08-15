@@ -698,4 +698,116 @@
         @test dfA.energy == dfB.energy
         @test dfA.num_particles == dfB.num_particles
     end
+
+    @testset "driver controls (Omega route)" begin
+        using Random
+
+        # Cached-key sortperm reproduces the by-comparator ordering
+        # including tie order (both are stable with identical key values):
+        # a tie-heavy walker vector sorted both ways gives the identical
+        # object sequence
+        Random.seed!(99001)
+        tie_ws = LatticeWalker[]
+        for i in 1:20
+            l = deepcopy(square_lattice)
+            w = LatticeWalker(l, energy=Float64(mod(i, 3)) * 0.01u"eV",
+                              iter=i)
+            push!(tie_ws, w)
+        end
+        mu_tie = -0.05
+        byfun = w -> SamplingSchemes._grand_potential(w, mu_tie)
+        a = copy(tie_ws)
+        sort!(a, by=byfun, rev=true)
+        b = copy(tie_ws)
+        permute!(b, sortperm([byfun(w) for w in b], rev=true))
+        @test all(a[i] === b[i] for i in eachindex(a))
+
+        # Parameter-crafted stall: empty initial occupancies with a
+        # deletion-only move mix are permanently guard-skipped, so every
+        # step fails. stop_on_stall = true returns the partial (empty)
+        # ledger and the intact live set after one warning.
+        stall_save = SaveEveryN("t_stall_gc.csv", "t_stall_gc.traj",
+                                "t_stall_gc.ls", 1000000, 1000000, 1000000)
+        stall_cleanup() = rm.(["t_stall_gc.csv", "t_stall_gc.traj",
+                               "t_stall_gc.ls"], force=true)
+        function stall_run(; kwargs...)
+            Random.seed!(99002)
+            ws = [LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV",
+                                iter=0) for _ in 1:8]
+            ls = LatticeGasWalkers(ws, ham; assign_energy=false)
+            gc = GrandCanonicalNestedSamplingParameters(mc_steps=10,
+                chemical_potential=-0.05, energy_perturbation=1e-9,
+                init_occupation_p=0.0, allowed_fail_count=3)
+            d, lsx, _ = grand_canonical_nested_sampling(ls, gc, Int64(40),
+                MCGrandCanonicalMoves(p_move=0.0, p_insert=0.0), stall_save;
+                kwargs...)
+            stall_cleanup()
+            return d, lsx
+        end
+        d_stop, ls_stop = @test_logs (:warn, r"GC-NS: Failed") match_mode=:any stall_run(
+            stop_on_stall=true)
+        @test nrow(d_stop) == 0
+        @test length(ls_stop.walkers) == 8
+        # The default warn-and-continue burns the whole budget but returns
+        # the same (empty) ledger; explicit false matches the unmentioned
+        # default digit-for-digit
+        d_def, _ = stall_run()
+        d_off, _ = stall_run(stop_on_stall=false)
+        @test nrow(d_def) == 0
+        @test d_def.iter == d_off.iter
+
+        # The default A/B on a healthy (non-stalling) fixture: explicit
+        # stop_on_stall = false against a call that never mentions it,
+        # digit-identical ledgers and live sets
+        function healthy_run(; kwargs...)
+            Random.seed!(99010)
+            ws = [LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV",
+                                iter=0) for _ in 1:8]
+            ls = LatticeGasWalkers(ws, ham; assign_energy=false)
+            gc = GrandCanonicalNestedSamplingParameters(mc_steps=20,
+                chemical_potential=-0.05, energy_perturbation=1e-9)
+            d, lsx, _ = grand_canonical_nested_sampling(ls, gc, Int64(30),
+                MCGrandCanonicalMoves(), stall_save; kwargs...)
+            stall_cleanup()
+            return d, lsx
+        end
+        h_def, ls_hd = healthy_run()
+        h_off, ls_ho = healthy_run(stop_on_stall=false)
+        @test nrow(h_def) > 0
+        @test h_def.omega == h_off.omega
+        @test h_def.energy == h_off.energy
+        @test [w.energy.val for w in ls_hd.walkers] ==
+              [w.energy.val for w in ls_ho.walkers]
+
+        # Observables and the dead-point callback ride the rewritten cached-
+        # key pre-sort: a run with both on records the identical physics
+        # columns as the plain same-seed run
+        obs_d, _ = healthy_run(observables=[:n_occ =>
+                                   cfg -> Float64(sum(cfg.components[1]))],
+                               dead_point_callback=(iter, w) -> nothing)
+        @test obs_d.omega == h_def.omega
+        @test obs_d.energy == h_def.energy
+        @test obs_d.num_particles == h_def.num_particles
+
+        # Eligible-set contents on a crafted degenerate (all-tied) live set
+        # match the by-comparator comprehension: both are empty, and on a
+        # mixed set both agree entry-for-entry
+        mu_e = -0.05
+        gp_e = w -> SamplingSchemes._grand_potential(w, mu_e)
+        tied = [LatticeWalker(deepcopy(square_lattice),
+                              energy=0.1u"eV", iter=0) for _ in 1:6]
+        keys_t = [gp_e(w) for w in tied]
+        worst_t = maximum(keys_t)
+        elig_cached = [k for k in 2:6 if keys_t[k] < worst_t]
+        elig_direct = [k for k in 2:6 if gp_e(tied[k]) < worst_t]
+        @test elig_cached == elig_direct == Int[]
+        mixed = [LatticeWalker(deepcopy(square_lattice),
+                               energy=Float64(mod(i, 3)) * 0.01u"eV", iter=i)
+                 for i in 1:6]
+        sort!(mixed, by=gp_e, rev=true)
+        keys_m = [gp_e(w) for w in mixed]
+        worst_m = keys_m[1]
+        @test [k for k in 2:6 if keys_m[k] < worst_m] ==
+              [k for k in 2:6 if gp_e(mixed[k]) < worst_m]
+    end
 end

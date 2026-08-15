@@ -299,6 +299,14 @@ particle insertion and deletion.
   same-seed trajectories are not digit-identical to the default; flipping
   the default is deliberately out of scope (a published-run reproducibility
   contract).
+- `swap_mode::Symbol`: Local-swap proposal distribution, `:uniform_pair`
+  (default; the shipped uniform site-pair draw, in which equal-occupancy
+  pairs are accepted no-ops counted by the `swap_null_*` subset counters) or
+  `:occupied_empty` (opt-in; `hop_from` uniform over occupied sites and
+  `hop_to` uniform over empty sites, symmetric with no acceptance
+  correction, zero nulls by construction, guard-skipped on empty and full
+  lattices). `:occupied_empty` changes the random stream and stays off by
+  default.
 
 When `clusters_freq == 0` (the default), the fixed-N branch uses only local swaps
 (`lattice_random_walk!`), preserving backward compatibility with existing scripts.
@@ -326,6 +334,7 @@ struct MCGrandCanonicalMoves <: MCRoutine
     bias_predicate::Symbol
     bias_shells::Int
     incremental::Bool
+    swap_mode::Symbol
     function MCGrandCanonicalMoves(;
             p_move::Float64=0.5,
             p_insert::Float64=0.25,
@@ -339,9 +348,13 @@ struct MCGrandCanonicalMoves <: MCRoutine
             p_bias::Float64=0.0,
             bias_predicate::Symbol=:contact,
             bias_shells::Int=1,
-            incremental::Bool=false)
+            incremental::Bool=false,
+            swap_mode::Symbol=:uniform_pair)
         if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
             throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
+        end
+        if swap_mode !== :uniform_pair && swap_mode !== :occupied_empty
+            throw(ArgumentError("unknown swap_mode :$swap_mode; expected :uniform_pair or :occupied_empty"))
         end
         if !(0.0 <= p_bias <= 1.0)
             throw(ArgumentError("p_bias must satisfy 0 <= p_bias <= 1"))
@@ -361,7 +374,7 @@ struct MCGrandCanonicalMoves <: MCRoutine
         new(p_move, p_insert, clusters_freq, swaps_freq,
             initial_cluster_p, target_cluster_accept, cluster_adjust_interval,
             cluster_p_floor, cluster_p_ceiling,
-            p_bias, bias_predicate, bias_shells, incremental)
+            p_bias, bias_predicate, bias_shells, incremental, swap_mode)
     end
 end
 
@@ -1616,7 +1629,8 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         p_bias=mc_routine.p_bias,
         bias_predicate=mc_routine.bias_predicate,
         bias_shells=mc_routine.bias_shells,
-        incremental=mc_routine.incremental)
+        incremental=mc_routine.incremental,
+        swap_mode=mc_routine.swap_mode)
 
     if accept
         push!(ats, to_walk)
@@ -1983,7 +1997,8 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         p_bias=mc_routine.p_bias,
         bias_predicate=mc_routine.bias_predicate,
         bias_shells=mc_routine.bias_shells,
-        incremental=mc_routine.incremental)
+        incremental=mc_routine.incremental,
+        swap_mode=mc_routine.swap_mode)
 
     if accept
         push!(ats, to_walk)

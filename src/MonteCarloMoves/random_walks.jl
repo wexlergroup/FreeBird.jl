@@ -911,6 +911,13 @@ Cluster moves are symmetric (no Metropolis correction), accepted if Ω < Ω_max.
   re-anchors the accumulator. The default is draw-count and digit identical
   to the shipped arithmetic; the delta path accumulates in a different
   floating-point order, so same-seed trajectories differ from the default.
+- `swap_mode::Symbol=:uniform_pair`: Local-swap proposal distribution.
+  `:uniform_pair` keeps the shipped uniform site-pair draw (equal-occupancy
+  pairs are accepted no-ops, counted by the `swap_null_*` subset counters);
+  `:occupied_empty` (opt-in, changes the random stream) draws `hop_from`
+  uniform over occupied and `hop_to` uniform over empty sites, symmetric
+  with no acceptance correction and zero nulls, guard-skipped on empty and
+  full lattices.
 
 # Returns
 - `accept_this_walker::Bool`: Whether at least one move was accepted.
@@ -919,7 +926,8 @@ Cluster moves are symmetric (no Metropolis correction), accepted if Ω < Ω_max.
 - `cluster_accepted_count::Int`: Number of accepted cluster moves (for adaptive tuning).
 - `cluster_total_count::Int`: Number of attempted cluster moves (for adaptive tuning).
 - `move_stats::NamedTuple`: Per-move-type attempt/accept counters for the walk:
-  `swap_*`, `cluster_*` (duplicating the two preceding elements),
+  `swap_*`, `swap_null_*` (subsets of the swap pair: equal-occupancy no-op
+  proposals), `cluster_*` (duplicating the two preceding elements),
   `insert_uniform_*`, `insert_biased_*`, `delete_*`. Attempts are counted at
   proposal: ceiling rejections included, guard skips excluded, and an
   empty-biased-set null proposal counts as an attempted biased insert.
@@ -940,7 +948,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                   p_bias::Float64=0.0,
                                   bias_predicate::Symbol=:contact,
                                   bias_shells::Int=1,
-                                  incremental::Bool=false)
+                                  incremental::Bool=false,
+                                  swap_mode::Symbol=:uniform_pair)
     if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
         throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
     end
@@ -955,6 +964,9 @@ function MC_grand_canonical_walk!(n_steps::Int,
     end
     if bias_shells < 1
         throw(ArgumentError("bias_shells must be >= 1, got $bias_shells"))
+    end
+    if swap_mode !== :uniform_pair && swap_mode !== :occupied_empty
+        throw(ArgumentError("unknown swap_mode :$swap_mode; expected :uniform_pair or :occupied_empty"))
     end
     if p_bias > 0.0
         nbrs = lattice.configuration.neighbors
@@ -982,6 +994,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
     cluster_total_count = 0
     swap_attempted = 0
     swap_accepted = 0
+    swap_null_attempted = 0
+    swap_null_accepted = 0
     insert_uniform_attempted = 0
     insert_uniform_accepted = 0
     insert_biased_attempted = 0
@@ -1013,13 +1027,21 @@ function MC_grand_canonical_walk!(n_steps::Int,
     # in the identical order and draws the identical random stream.
     use_deltas = incremental && supports_site_deltas(h)
     zero_e = 0.0 * unit(lattice.energy)
-    raw = use_deltas ? interacting_energy(lattice.configuration, h) : zero_e
+    # The unperturbed-energy anchor serves two consumers: the incremental
+    # path advances it by exact deltas, and a detected null swap carries it
+    # instead of re-evaluating an unchanged configuration. On the default
+    # path the anchor only ever holds fresh full-recompute values, so the
+    # null-swap carry is bit-identical to the evaluation it skips
+    # (interacting_energy is deterministic); on the opt-in incremental path
+    # the carry is raw + 0, exact under the delta discipline.
+    raw = interacting_energy(lattice.configuration, h)
     step_delta = zero_e
 
     for _ in 1:n_steps
         r = rand()
         config = lattice.configuration
         n = sum(config.components[1])
+        was_null = false
 
         if r < p_move
             # Fixed-N branch: choose cluster or local swap
@@ -1031,7 +1053,29 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 cluster_total_count += 1
             else
                 # Local swap
-                if use_deltas
+                if swap_mode === :occupied_empty
+                    # Opt-in zero-null proposal: hop_from uniform over
+                    # occupied sites, hop_to uniform over empty sites. The
+                    # proposal probability of every candidate pair is
+                    # 1/(N(M-N)) in both directions (the reverse swap sees
+                    # the same N), so the move is symmetric with no
+                    # acceptance correction and conserves N. Empty and full
+                    # lattices have no valid proposal: guard skip, not
+                    # counted as an attempt (the insert/delete convention).
+                    if n == 0 || n == n_sites
+                        continue
+                    end
+                    hop_from = rand(findall(config.components[1]))
+                    hop_to = rand(findall(.!config.components[1]))
+                    if use_deltas
+                        step_delta = site_flip_delta(config, h, hop_from)
+                        config.components[1][hop_from] = !config.components[1][hop_from]
+                        step_delta += site_flip_delta(config, h, hop_to)
+                        config.components[1][hop_to] = !config.components[1][hop_to]
+                    else
+                        _lattice_walk_apply!(config, hop_from, hop_to)
+                    end
+                elseif use_deltas
                     # Inlined draws in lockstep with _lattice_walk_draw!
                     # (identical order). A non-null pair composes two flips
                     # with the second delta evaluated on the intermediate
@@ -1045,13 +1089,19 @@ function MC_grand_canonical_walk!(n_steps::Int,
                         step_delta += site_flip_delta(config, h, hop_to)
                         config.components[1][hop_to] = !config.components[1][hop_to]
                     else
-                        step_delta = zero_e
+                        was_null = true
                     end
                 else
                     hop_from, hop_to = _lattice_walk_draw!(config)
+                    # Post-exchange classification: a non-null pair still
+                    # differs after the exchange; an equal-occupancy pair
+                    # was a no-op
+                    was_null = config.components[1][hop_from] ==
+                               config.components[1][hop_to]
                 end
                 move_type = :move
                 swap_attempted += 1
+                was_null && (swap_null_attempted += 1)
             end
         elseif r < p_move + p_insert
             # Insertion
@@ -1127,7 +1177,12 @@ function MC_grand_canonical_walk!(n_steps::Int,
         end
 
         perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
-        if use_deltas && move_type != :cluster
+        if was_null
+            # A null swap left the configuration untouched: carry the
+            # anchored unperturbed energy instead of re-evaluating it
+            # (bit-identical, and the O(M) sweep is skipped)
+            proposed_raw = raw
+        elseif use_deltas && move_type != :cluster
             proposed_raw = raw + step_delta
         else
             proposed_raw = interacting_energy(config, h)
@@ -1200,6 +1255,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 cluster_accepted_count += 1
             elseif move_type == :move
                 swap_accepted += 1
+                was_null && (swap_null_accepted += 1)
             elseif move_type == :insert
                 if insert_from_biased
                     insert_biased_accepted += 1
@@ -1218,6 +1274,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
     return accept_this_walker, n_accept / max(n_steps, 1), lattice,
            cluster_accepted_count, cluster_total_count,
            (swap_attempted=swap_attempted, swap_accepted=swap_accepted,
+            swap_null_attempted=swap_null_attempted,
+            swap_null_accepted=swap_null_accepted,
             cluster_attempted=cluster_total_count, cluster_accepted=cluster_accepted_count,
             insert_uniform_attempted=insert_uniform_attempted,
             insert_uniform_accepted=insert_uniform_accepted,

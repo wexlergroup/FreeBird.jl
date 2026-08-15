@@ -225,7 +225,9 @@
             p_move=0.5, p_insert=0.25, energy_perturb=0.0)
         @test counters isa NamedTuple
         @test keys(counters) == (
-            :swap_attempted, :swap_accepted, :cluster_attempted, :cluster_accepted,
+            :swap_attempted, :swap_accepted,
+            :swap_null_attempted, :swap_null_accepted,
+            :cluster_attempted, :cluster_accepted,
             :insert_uniform_attempted, :insert_uniform_accepted,
             :insert_biased_attempted, :insert_biased_accepted,
             :delete_attempted, :delete_accepted)

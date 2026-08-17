@@ -197,4 +197,111 @@
             @test_throws ArgumentError inflection_transitions(df, K; edge=0)
         end
     end
+
+    @testset "kish_effective_sample_size" begin
+        using Random
+
+        # Exact closures: uniform log-weights return exactly n (the ratio
+        # n^2/n is exact); the two-point value against an independent
+        # linear-space hand computation
+        for n in (1, 2, 7, 100)
+            @test kish_effective_sample_size(zeros(n)) == Float64(n)
+            @test kish_effective_sample_size(fill(3.7, n)) == Float64(n)
+        end
+        let a = 0.3, b = -1.2
+            wa, wb = exp(a), exp(b)
+            @test isapprox(kish_effective_sample_size([a, b]),
+                           (wa + wb)^2 / (wa^2 + wb^2); rtol=1e-12)
+        end
+
+        # Shift invariance: generic shifts at rtol (the addition rounds each
+        # entry before the max-shift can remove it, so bitwise equality there
+        # would be rounding luck); bitwise on an exact-dyadic fixture whose
+        # entries and shift are multiples of 2^-16 with bounded magnitude, so
+        # every addition is exact and the max-shift restores the residuals
+        rng = MersenneTwister(91021)
+        lw = randn(rng, 200)
+        base = kish_effective_sample_size(lw)
+        for c in (pi, -17.3)
+            @test isapprox(kish_effective_sample_size(lw .+ c), base; rtol=1e-12)
+        end
+        # An extreme shift costs precision in the inputs themselves (ulp(1e6)
+        # is ~1.2e-10, rounding every entry before the max-shift can act), so
+        # its gate reflects input rounding, not the ratio: measured 3.5e-12
+        @test isapprox(kish_effective_sample_size(lw .+ 1e6), base; rtol=1e-9)
+        lwd = Float64.(rand(rng, -2^18:2^18, 300)) ./ 2^16
+        cshift = 7.0 * 2.0^-5
+        @test kish_effective_sample_size(lwd .+ cshift) ==
+              kish_effective_sample_size(lwd)
+
+        # Bounds, with both equality cases hit exactly (uniform above; a
+        # dominant weight whose competitors underflow to exact zeros here)
+        for seed in (91031, 91032, 91033)
+            lwr = 3 .* randn(MersenneTwister(seed), 500)
+            e = kish_effective_sample_size(lwr)
+            @test 1.0 <= e <= 500.0
+        end
+        @test kish_effective_sample_size([0.0, -800.0, -800.0]) == 1.0
+
+        # Geometric shell weights (the nested-sampling prior profile): the
+        # closed form (1 + r)(1 - r^J)^2 / ((1 - r)(1 - r^(2J))) with
+        # r = K/(K + 1), and its deep-ladder limit 2K + 1
+        for (K, J) in ((10, 200), (500, 50_000))
+            r = K / (K + 1)
+            lw_geo = (1:J) .* log(r) .- log(K + 1)
+            closed = (1 + r) * (1 - r^J)^2 / ((1 - r) * (1 - r^(2J)))
+            @test isapprox(kish_effective_sample_size(lw_geo), closed; rtol=1e-12)
+        end
+        let K = 500, J = 50_000
+            r = K / (K + 1)
+            lw_geo = (1:J) .* log(r) .- log(K + 1)
+            @test isapprox(kish_effective_sample_size(lw_geo), 2K + 1; rtol=1e-10)
+        end
+
+        # Independent-draw laws for iid weights a^N: ESS/n concentrates on
+        # exp(-λ(a-1)^2) for N ~ Poisson(λ) and on
+        # ((1 + p(a-1))^2 / (1 + p(a^2-1)))^M for N ~ Binomial(M, p).
+        # Gates calibrated from three seeds each (91001-91003, 91011-91013)
+        # at >= 3x the maximum relative deviation, per statistic; shipped
+        # seeds 91001/91011 (measured deviations 0.00006/0.00141 and
+        # 0.00010/0.02173 against gates 0.0015/0.07 and 0.006/0.24).
+        binom_draw(rng, M, p) = count(_ -> rand(rng) < p, 1:M)
+        function pois_draw(rng, lam)
+            L = exp(-lam)
+            k = 0
+            acc = rand(rng)
+            while acc > L
+                k += 1
+                acc *= rand(rng)
+            end
+            return k
+        end
+        n_iid = 40_000
+        let rng_b = MersenneTwister(91001)
+            Ns = [binom_draw(rng_b, 64, 0.5) for _ in 1:n_iid]
+            for (s, gate) in ((0.05, 0.0015), (0.2, 0.07))
+                a = exp(s)
+                pred = ((1 + 0.5 * (a - 1))^2 / (1 + 0.5 * (a^2 - 1)))^64
+                meas = kish_effective_sample_size(s .* Ns) / n_iid
+                @test abs(meas / pred - 1) < gate
+            end
+        end
+        let rng_p = MersenneTwister(91011)
+            Ns = [pois_draw(rng_p, 8.0) for _ in 1:n_iid]
+            for (s, gate) in ((0.1, 0.006), (0.3, 0.24))
+                a = exp(s)
+                pred = exp(-8.0 * (a - 1)^2)
+                meas = kish_effective_sample_size(s .* Ns) / n_iid
+                @test abs(meas / pred - 1) < gate
+            end
+        end
+
+        # Errors and zero weights: -Inf entries are legal zero weights that
+        # drop out; NaN, +Inf, emptiness, and all-(-Inf) throw
+        @test kish_effective_sample_size([-Inf, 0.0, 0.0]) == 2.0
+        @test_throws ArgumentError kish_effective_sample_size(Float64[])
+        @test_throws ArgumentError kish_effective_sample_size([1.0, NaN])
+        @test_throws ArgumentError kish_effective_sample_size([1.0, Inf])
+        @test_throws ArgumentError kish_effective_sample_size([-Inf, -Inf])
+    end
 end

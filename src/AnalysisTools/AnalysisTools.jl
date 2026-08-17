@@ -16,6 +16,7 @@ export gc_thermodynamic_stats_fixed_N
 export microcanonical_entropy, caloric_derivatives, inflection_transitions
 export transition_convergence
 export gc_thermodynamic_stats_ideal_ref
+export kish_effective_sample_size
 
 """
     read_output(filename::String)
@@ -93,6 +94,47 @@ function ωᵢ(log_compression::AbstractVector{Float64}; ω0::Float64=1.0)
     X = ω0 .* exp.(cumsum(log_compression))
     Xprev = [ω0; X[1:end-1]]
     return Xprev .- X
+end
+
+"""
+    kish_effective_sample_size(log_weights::AbstractVector{<:Real})
+
+Computes the Kish effective sample size
+```math
+N_\\mathrm{eff} = \\frac{\\left(\\sum_i w_i\\right)^2}{\\sum_i w_i^2}
+```
+of a weighted sample from its log-weights. The maximum log-weight is subtracted
+before exponentiation, so a common additive constant in the log-weights (a common
+scale factor in the weights, such as an `ω0` convention) cannot overflow or
+underflow the ratio, and weight collections spanning hundreds of nats — where
+linear-space weights underflow to `0.0` — are handled without loss.
+
+The value ranges from 1 (a single weight dominates) to `length(log_weights)`
+(all weights equal) and measures how many equally-weighted samples the weighted
+collection is worth for estimator-variance purposes. Entries of `-Inf` (zero
+weights) are legal and drop out of both sums, so the returned value is the
+effective sample size of the surviving finite-weight entries.
+
+# Arguments
+- `log_weights::AbstractVector{<:Real}`: Natural logs of the (unnormalized)
+  sample weights. Must be non-empty, must not contain `NaN` or `+Inf`, and must
+  contain at least one finite entry.
+
+# Returns
+- The Kish effective sample size, a `Float64` in `[1, length(log_weights)]`.
+"""
+function kish_effective_sample_size(log_weights::AbstractVector{<:Real})
+    isempty(log_weights) && throw(ArgumentError("log_weights must be non-empty"))
+    for lw in log_weights
+        (isnan(lw) || lw == Inf) && throw(ArgumentError(
+            "log_weights must not contain NaN or +Inf entries"))
+    end
+    m = maximum(log_weights)
+    m == -Inf && throw(ArgumentError(
+        "log_weights must contain at least one finite entry"))
+    ws = exp.(log_weights .- m)
+    sum_w = sum(ws)
+    return Float64(sum_w^2 / sum(abs2, ws))
 end
 
 """

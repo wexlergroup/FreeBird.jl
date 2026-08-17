@@ -22,6 +22,8 @@ include("test-atomistic-gc-interacting-regressions.jl")
     include("test-atomistic-igref-gcns.jl")
     # test the atomistic ideal-gas-referenced ledger assembly
     include("test-atomistic-igref-stats.jl")
+    # test the ideal-gas-referenced effective-sample-size reductions
+    include("test-igref-ess.jl")
     # regression coverage for the continuous-space grand-canonical route
     include("test-atomistic-gc-regressions.jl")
     # test atomistic GC-NS fixed-N post-processing (ideal gas reference)

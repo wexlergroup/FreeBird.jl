@@ -551,6 +551,13 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
     if live_emax !== nothing && length(live_emax) != length(live_numbers)
         throw(DimensionMismatch("live_emax and live_numbers must have the same length"))
     end
+    if live_emax !== nothing && !isempty(live_emax) && length(live_emax) != n_walkers
+        # The tail charges X_n/K per supplied walker (a fixed share), so a
+        # truncated tail silently drops the missing walkers' residual mass
+        @warn "live-set tail has $(length(live_emax)) entries but n_walkers = " *
+              "$(n_walkers): the tail carries $(length(live_emax))/$(n_walkers) " *
+              "of the residual prior mass"
+    end
     n_dead = nrow(df)
     if n_dead == 0 && (live_emax === nothing || isempty(live_emax))
         throw(ArgumentError("df is empty and no live walkers were provided"))
@@ -1074,6 +1081,13 @@ function gc_effective_sample_size_ideal_ref(df::DataFrame,
     end
     if live_emax !== nothing && length(live_emax) != length(live_numbers)
         throw(DimensionMismatch("live_emax and live_numbers must have the same length"))
+    end
+    if live_emax !== nothing && !isempty(live_emax) && length(live_emax) != n_walkers
+        # Same guard as the sibling's lattice method: the fixed X_n/K share
+        # makes any shorter tail an under-count
+        @warn "live-set tail has $(length(live_emax)) entries but n_walkers = " *
+              "$(n_walkers): the tail carries $(length(live_emax))/$(n_walkers) " *
+              "of the residual prior mass"
     end
     n_dead = nrow(df)
     if n_dead == 0 && (live_emax === nothing || isempty(live_emax))

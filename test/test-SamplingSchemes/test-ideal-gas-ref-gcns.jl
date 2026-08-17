@@ -334,6 +334,14 @@
         # smaller effective sample size than an in-window point
         @test stats.N_eff[1, 1] < stats.N_eff[4, 1] / 10
         @test all(stats.N_eff .<= nrow(df) + length(live_E))
+
+        # The effective-sample-size reduction reproduces the collapse
+        # ordering and the row-count ceiling on the same fixture
+        ess_l = gc_effective_sample_size_ideal_ref(
+            df, igref_n_sites, 1.0, μs, Ts, n_walkers;
+            ω0=(n_walkers + 1) / n_walkers, live_emax=live_E, live_numbers=live_N)
+        @test ess_l[1, 1] < ess_l[4, 1] / 10
+        @test all(ess_l .<= nrow(df) + length(live_E))
     end
 
     # ================================================================

@@ -747,7 +747,10 @@
         μs = [-0.02, 0.03]
         Ts = [300.0, 600.0]
 
-        stats = gc_thermodynamic_stats_ideal_ref(df, M, z0, μs, Ts, K;
+        # The deliberately short synthetic tail (2 entries vs K = 4) now
+        # trips the live-tail length guard: expect its warning at every call
+        stats = @test_logs (:warn, r"live-set tail") match_mode = :any gc_thermodynamic_stats_ideal_ref(
+            df, M, z0, μs, Ts, K;
             ω0=ω0, live_emax=live_E, live_numbers=live_N,
             observable_cols=[:a], live_observables=Dict(:a => live_a))
 
@@ -775,7 +778,8 @@
         # Mixed value types (Vector{Int} + Vector{Float64} typejoin to
         # Dict{Symbol,Vector}) pin the loosened Dict annotation: this is
         # exactly the documented self-consistency call
-        stats2 = gc_thermodynamic_stats_ideal_ref(df, M, z0, μs, Ts, K;
+        stats2 = @test_logs (:warn, r"live-set tail") match_mode = :any gc_thermodynamic_stats_ideal_ref(
+            df, M, z0, μs, Ts, K;
             ω0=ω0, live_emax=live_E, live_numbers=live_N,
             observable_cols=[:num_particles, :emax],
             live_observables=Dict(:num_particles => live_N, :emax => live_E))
@@ -785,7 +789,8 @@
         # Live-tail-only analysis: a zero-row ledger need not carry the
         # observable columns (mirrors the fixed-N empty-sector convention)
         df_empty = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[])
-        st_tail = gc_thermodynamic_stats_ideal_ref(df_empty, M, z0, μs, Ts, K;
+        st_tail = @test_logs (:warn, r"live-set tail") match_mode = :any gc_thermodynamic_stats_ideal_ref(
+            df_empty, M, z0, μs, Ts, K;
             ω0=ω0, live_emax=live_E, live_numbers=live_N,
             observable_cols=[:a], live_observables=Dict(:a => live_a))
         for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
@@ -807,18 +812,20 @@
         # Validation traps
         @test_throws ArgumentError gc_thermodynamic_stats_ideal_ref(
             df, M, z0, μs, Ts, K; observable_cols=[:nope])
-        @test_throws ArgumentError gc_thermodynamic_stats_ideal_ref(
+        # These four traps pass the short tail, so the guard warns before the
+        # validation throws: assert both the warning and the throw
+        @test_logs (:warn, r"live-set tail") match_mode = :any @test_throws ArgumentError gc_thermodynamic_stats_ideal_ref(
             df, M, z0, μs, Ts, K; observable_cols=[:a, :a],
             live_emax=live_E, live_numbers=live_N,
             live_observables=Dict(:a => live_a))
-        @test_throws ArgumentError gc_thermodynamic_stats_ideal_ref(
+        @test_logs (:warn, r"live-set tail") match_mode = :any @test_throws ArgumentError gc_thermodynamic_stats_ideal_ref(
             df, M, z0, μs, Ts, K; observable_cols=[:a],
             live_emax=live_E, live_numbers=live_N)
-        @test_throws ArgumentError gc_thermodynamic_stats_ideal_ref(
+        @test_logs (:warn, r"live-set tail") match_mode = :any @test_throws ArgumentError gc_thermodynamic_stats_ideal_ref(
             df, M, z0, μs, Ts, K; observable_cols=[:a],
             live_emax=live_E, live_numbers=live_N,
             live_observables=Dict(:b => live_a))
-        @test_throws DimensionMismatch gc_thermodynamic_stats_ideal_ref(
+        @test_logs (:warn, r"live-set tail") match_mode = :any @test_throws DimensionMismatch gc_thermodynamic_stats_ideal_ref(
             df, M, z0, μs, Ts, K; observable_cols=[:a],
             live_emax=live_E, live_numbers=live_N,
             live_observables=Dict(:a => [1.0]))

@@ -522,7 +522,7 @@
         # closed form logΞ = M·ln(1+z0) + logsumexp(-ln K + N·βμ - β·E)
         live_E = [-0.1, -0.2]
         live_N = [1, 2]
-        stats_live = gc_thermodynamic_stats_ideal_ref(
+        stats_live = @test_logs (:warn, r"live-set tail") match_mode = :any gc_thermodynamic_stats_ideal_ref(
             df_empty, 16, 1.0, μs, Ts, 100;
             live_emax=live_E, live_numbers=live_N)
         β = 1 / (kb * Ts[1])
@@ -975,5 +975,42 @@
         end
         @test !any(occursin("resolution floor", string(l.message))
                    for l in logs_hi)
+    end
+
+    # ================================================================
+    @testset "live-tail length guard" begin
+        # Athermal fixture: 10-row ledger, K = 8, all energies zero, z = z0,
+        # Skilling ω0 so Σω = 1 with the full tail. A truncated tail drops the
+        # missing walkers' share of the residual mass X_n = (K/(K+1))^10.
+        K_g, J_g = 8, 10
+        df_g = DataFrame(iter=1:J_g, emax=zeros(J_g), num_particles=fill(3, J_g))
+        w0_g = (K_g + 1) / K_g
+        full_E, full_N = zeros(K_g), fill(3, K_g)
+        half_E, half_N = zeros(4), fill(3, 4)
+
+        # A K-length tail is warning-free
+        s_full = @test_logs min_level = Base.CoreLogging.Warn gc_thermodynamic_stats_ideal_ref(
+            df_g, 16, 1.0, [0.0], [300.0], K_g;
+            ω0=w0_g, live_emax=full_E, live_numbers=full_N)
+        # A truncated tail warns, naming both lengths and the tail-mass factor
+        s_half = @test_logs (:warn, r"4 entries.*n_walkers = 8.*4/8") gc_thermodynamic_stats_ideal_ref(
+            df_g, 16, 1.0, [0.0], [300.0], K_g;
+            ω0=w0_g, live_emax=half_E, live_numbers=half_N)
+        # The deficit the warning protects against, pinned to the closed form
+        X_g = (K_g / (K_g + 1))^J_g
+        @test isapprox(s_half.logXi[1, 1] - s_full.logXi[1, 1],
+                       log(1 - X_g / 2); rtol=1e-12)
+        # Dead-only calls are unaffected and warning-free
+        s_dead = @test_logs min_level = Base.CoreLogging.Warn gc_thermodynamic_stats_ideal_ref(
+            df_g, 16, 1.0, [0.0], [300.0], K_g)
+        @test isfinite(s_dead.logXi[1, 1])
+        # The effective-sample-size reduction's lattice method shares the guard
+        @test_logs (:warn, r"4 entries.*n_walkers = 8") gc_effective_sample_size_ideal_ref(
+            df_g, 16, 1.0, [0.0], [300.0], K_g;
+            live_emax=half_E, live_numbers=half_N)
+        e_full = @test_logs min_level = Base.CoreLogging.Warn gc_effective_sample_size_ideal_ref(
+            df_g, 16, 1.0, [0.0], [300.0], K_g;
+            live_emax=full_E, live_numbers=full_N)
+        @test all(isfinite, e_full)
     end
 end

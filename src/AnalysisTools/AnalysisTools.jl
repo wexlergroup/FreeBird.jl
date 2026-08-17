@@ -17,6 +17,7 @@ export microcanonical_entropy, caloric_derivatives, inflection_transitions
 export transition_convergence
 export gc_thermodynamic_stats_ideal_ref
 export kish_effective_sample_size
+export gc_effective_sample_size_ideal_ref
 
 """
     read_output(filename::String)
@@ -460,8 +461,15 @@ observables (`mean_N`, `var_N`, `mean_U`) are insensitive to `ω0`.
 The reweighting factor `(z/z0)^{N_j}` is pure importance sampling in μ: its
 reliability at each grid point is reported by the Kish effective sample size
 `N_eff = (Σ w)² / Σ w²`, which collapses as `|βμ − ln z0|` grows beyond
-roughly `1/√Var(N)`. Treat grid points with small `N_eff` (≲ 100) as
-unreliable and re-run with z0 closer to the target fugacity.
+roughly `1/√Var(N)`. Because the combined weights also carry the shell decay
+and the Boltzmann factor, the raw `N_eff` has no run-independent baseline —
+judge grid points by degradation relative to the run's own reference point
+`μ0(T) = k_B T ln z0` (a threshold on the ratio, computed by
+`gc_effective_sample_size_ideal_ref` with `relative = true`) rather than by an
+absolute cutoff, and re-run with z0 closer to the target fugacity when the
+ratio collapses. `N_eff` diagnoses μ-reweighting reliability, not ladder
+convergence: pooled live-tail rows can hold it near `K` on an under-converged
+ladder.
 
 Athermal (hard-core) models sampled with the finite-J recipe (see the
 `GenericLatticeHamiltonian` docstring) are evaluated here at a temperature low
@@ -930,6 +938,257 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
     return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U, N_eff=N_eff,
             var_U=var_U, cov_UN=cov_UN, p_N=p_N, N_support=N_support,
             observables=obs_out)
+end
+
+function _check_ess_mode(mode::Symbol, T0::Union{Nothing,Float64})
+    mode in (:kish, :anchored, :anchored_uniform) || throw(ArgumentError(
+        "mode must be :kish, :anchored, or :anchored_uniform (got :$mode)"))
+    if mode === :kish && T0 !== nothing
+        throw(ArgumentError(
+            "T0 is meaningful only for the anchored modes; mode = :kish " *
+            "ignores it, so passing both is an error"))
+    end
+    if T0 !== nothing && !(T0 > 0.0)
+        throw(ArgumentError("T0 must be a positive temperature"))
+    end
+    return nothing
+end
+
+# One grid cell of the effective-sample-size reduction: s is the reweighting
+# exponent per particle (zero exactly at the reference point), β the target's
+# inverse temperature, β0 the anchor's (β0 == β strips the energy factor).
+function _igref_ess_value(mode::Symbol, log_w0::Vector{Float64},
+                          Es::Vector{Float64}, Ns::Vector{Float64},
+                          s::Float64, β::Float64, β0::Float64)
+    if mode === :kish
+        return kish_effective_sample_size(log_w0 .+ s .* Ns .- β .* Es)
+    elseif mode === :anchored
+        return kish_effective_sample_size(log_w0 .+ s .* Ns .- (β - β0) .* Es)
+    else # :anchored_uniform
+        return kish_effective_sample_size(s .* Ns .- (β - β0) .* Es)
+    end
+end
+
+"""
+    gc_effective_sample_size_ideal_ref(df::DataFrame, n_sites::Int, z0::Float64,
+                                       μs::Vector{Float64}, Ts::Vector{Float64},
+                                       n_walkers::Int; kwargs...)
+    gc_effective_sample_size_ideal_ref(df::DataFrame, V, atomic_mass,
+                                       reference_activity, μ_grid, T_grid; kwargs...)
+
+Effective-sample-size reduction for ideal-gas-referenced grand-canonical
+nested-sampling output: returns a `Matrix{Float64}` of size
+`(length(μs), length(Ts))`, indexed `[i_μ, i_T]` like the fields of
+`gc_thermodynamic_stats_ideal_ref`, without evaluating any of that function's
+moment or distribution surfaces. The first method is the lattice route
+(`z = exp(βμ)`, shell weights rebuilt from `df.iter`); the second is the
+atomistic route (`z = exp(βμ)/Λ(T)^3`, shell weights decoded from
+`df.log_compression`), mirroring the sibling's dispatch, ledger conventions,
+and live-tail handling exactly. `n_cull` and `n_walkers` are lattice-route
+arguments only.
+
+Three modes, selected by the `mode` keyword:
+
+- `:kish` (default): the Kish effective sample size of the full combined
+  weights `ω_j (z/z0)^{N_j} e^{-βE_j}` — identical in value to the `N_eff`
+  field of `gc_thermodynamic_stats_ideal_ref`.
+- `:anchored`: the Kish effective sample size with the reweighting factor
+  anchored to a reference temperature,
+  `r_j = (z/z0)^{N_j} exp[-(E_j/k_B)(1/T - 1/T0)]`. The default
+  `T0 = nothing` means per-target `T0 = T`, under which the energy factor
+  drops out entirely and the mode measures μ-reweighting concentration alone;
+  at the reference point it then equals the run-independent prior-weight value
+  `(1 + r)(1 - r^J)^2 / ((1 - r)(1 - r^(2J)))` with `r = K/(K + n_cull)`
+  (about `2K + 1` on deep ladders at `n_cull = 1`; `2K/n_cull + 1` in
+  general), which is what makes it thresholdable.
+- `:anchored_uniform`: the unit-weight effective sample size of the anchored
+  factors alone, `(Σ r_j)^2 / Σ r_j^2`. Under the default per-target `T0` it
+  peaks at the reference point (where it equals the row count exactly) and
+  decays monotonically along rays away from it, unlike the two Kish modes, so
+  it locates a window center.
+
+`relative = true` divides each temperature column by the same mode's value at
+that temperature's reference point — the chemical potential
+`μ0(T) = k_B T ln z0` (lattice) or `k_B T (ln z0 + 3 ln Λ(T))` (atomistic)
+where the reweighting exponent vanishes; the anchor is evaluated with the
+exponent set to zero exactly, not through a rounded `μ0`. The returned surface
+then reads directly as degradation relative to the run's own center. The
+anchor value of `:kish` is not a maximum and the surface need not decrease
+monotonically away from it: a target whose thermal factor counteracts the
+geometric shell decay flattens the combined weights and raises the value.
+
+The effective sample size diagnoses μ-reweighting reliability, not ladder
+convergence: pooled live-tail rows can hold it near `K` on an under-converged
+ladder. Passing `T0` with `mode = :kish` throws an `ArgumentError`.
+
+# Arguments (lattice method)
+- `df::DataFrame`: NS output with columns `[:iter, :emax, :num_particles]`.
+- `n_sites::Int`: Number of lattice sites M.
+- `z0::Float64`: Reference fugacity of the prior used in the run (must match!).
+- `μs::Vector{Float64}`: Chemical potential grid (same energy units as `df.emax`).
+- `Ts::Vector{Float64}`: Temperature grid in K.
+- `n_walkers::Int`: Number of walkers K used in the NS run.
+- `mode::Symbol=:kish`: `:kish`, `:anchored`, or `:anchored_uniform` (above).
+- `relative::Bool=false`: Divide each column by its reference-point value.
+- `T0::Union{Nothing,Float64}=nothing`: Anchor temperature in K for the
+  anchored modes; `nothing` means per-target `T0 = T`.
+- `n_cull::Int=1`: Number of walkers culled per iteration.
+- `ω0::Float64=1.0`: Initial phase-space volume factor.
+- `live_emax::Union{Nothing,Vector{Float64}}=nothing`: Energies of the
+  surviving live walkers.
+- `live_numbers::Union{Nothing,Vector{Int}}=nothing`: Particle counts of the
+  surviving live walkers.
+- `kb::Float64`: Boltzmann constant (default: eV/K).
+
+The atomistic method replaces `(n_sites, z0, n_walkers)` with
+`(V, atomic_mass, reference_activity)` in the sibling's Unitful types, takes
+Unitful `μ_grid`/`T_grid`, types `T0` as a Unitful temperature, and requires
+the ledger's `:log_compression` column whenever `df` has rows.
+
+# Returns
+- A `Matrix{Float64}` of size `(length(μs), length(Ts))`, indexed `[i_μ, i_T]`.
+"""
+function gc_effective_sample_size_ideal_ref(df::DataFrame,
+                                            n_sites::Int,
+                                            z0::Float64,
+                                            μs::Vector{Float64},
+                                            Ts::Vector{Float64},
+                                            n_walkers::Int;
+                                            mode::Symbol=:kish,
+                                            relative::Bool=false,
+                                            T0::Union{Nothing,Float64}=nothing,
+                                            n_cull::Int=1,
+                                            ω0::Float64=1.0,
+                                            live_emax::Union{Nothing,Vector{Float64}}=nothing,
+                                            live_numbers::Union{Nothing,Vector{Int}}=nothing,
+                                            kb::Float64=8.617333262e-5)
+    _check_ess_mode(mode, T0)
+    if z0 <= 0.0
+        throw(ArgumentError("z0 must be positive"))
+    end
+    if n_sites <= 0
+        throw(ArgumentError("n_sites must be positive"))
+    end
+    if (live_emax === nothing) != (live_numbers === nothing)
+        throw(ArgumentError("live_emax and live_numbers must be provided together"))
+    end
+    if live_emax !== nothing && length(live_emax) != length(live_numbers)
+        throw(DimensionMismatch("live_emax and live_numbers must have the same length"))
+    end
+    n_dead = nrow(df)
+    if n_dead == 0 && (live_emax === nothing || isempty(live_emax))
+        throw(ArgumentError("df is empty and no live walkers were provided"))
+    end
+
+    # Weight assembly mirrors gc_thermodynamic_stats_ideal_ref: iteration-based
+    # shell weights in log space, live tail X_n/K per walker with no ω0 factor
+    log_w0 = n_dead > 0 ?
+        (log(ω0) + log(n_cull / (n_walkers + n_cull))) .+
+        Vector{Float64}(df.iter) .* log(n_walkers / (n_walkers + n_cull)) : Float64[]
+    Es = n_dead > 0 ? Vector{Float64}(df.emax) : Float64[]
+    Ns = n_dead > 0 ? Vector{Float64}(df.num_particles) : Float64[]
+    if live_emax !== nothing && !isempty(live_emax)
+        n_iters = n_dead > 0 ? maximum(df.iter) : 0
+        log_tail = n_iters * log(n_walkers / (n_walkers + n_cull)) - log(n_walkers)
+        log_w0 = vcat(log_w0, fill(log_tail, length(live_emax)))
+        Es = vcat(Es, live_emax)
+        Ns = vcat(Ns, Float64.(live_numbers))
+    end
+
+    log_z0 = log(z0)
+    out = Matrix{Float64}(undef, length(μs), length(Ts))
+    Threads.@threads for j in eachindex(Ts)
+        β = 1.0 / (kb * Ts[j])
+        β0 = T0 === nothing ? β : 1.0 / (kb * T0)
+        for i in eachindex(μs)
+            s = β * μs[i] - log_z0
+            out[i, j] = _igref_ess_value(mode, log_w0, Es, Ns, s, β, β0)
+        end
+        if relative
+            anchor = _igref_ess_value(mode, log_w0, Es, Ns, 0.0, β, β0)
+            for i in eachindex(μs)
+                out[i, j] /= anchor
+            end
+        end
+    end
+    return out
+end
+
+function gc_effective_sample_size_ideal_ref(df::DataFrame,
+                                            V::typeof(1.0u"Å^3"),
+                                            atomic_mass::typeof(1.0u"u"),
+                                            reference_activity::typeof(1.0u"Å^-3"),
+                                            μ_grid::AbstractVector{<:typeof(1.0u"eV")},
+                                            T_grid::AbstractVector{<:Unitful.Temperature};
+                                            mode::Symbol=:kish,
+                                            relative::Bool=false,
+                                            T0::Union{Nothing,Unitful.Temperature}=nothing,
+                                            ω0::Float64=1.0,
+                                            live_emax::Union{Nothing,Vector{Float64}}=nothing,
+                                            live_numbers::Union{Nothing,Vector{Int}}=nothing,
+                                            kb::Float64=8.617333262e-5)
+    T0_K = T0 === nothing ? nothing : Float64(ustrip(u"K", T0))
+    _check_ess_mode(mode, T0_K)
+    if reference_activity <= 0.0u"Å^-3"
+        throw(ArgumentError("reference_activity must be positive"))
+    end
+    if V <= 0.0u"Å^3"
+        throw(ArgumentError("V must be positive"))
+    end
+    if (live_emax === nothing) != (live_numbers === nothing)
+        throw(ArgumentError("live_emax and live_numbers must be provided together"))
+    end
+    if live_emax !== nothing && length(live_emax) != length(live_numbers)
+        throw(DimensionMismatch("live_emax and live_numbers must have the same length"))
+    end
+    n_dead = nrow(df)
+    if n_dead == 0 && (live_emax === nothing || isempty(live_emax))
+        throw(ArgumentError("df is empty and no live walkers were provided"))
+    end
+    if n_dead > 0
+        hasproperty(df, :log_compression) || throw(ArgumentError(
+            "the ledger has rows but no :log_compression column, so its compression " *
+            "cannot be reconstructed; only zero-accept (empty) ledgers may omit it"))
+    end
+    lc = n_dead > 0 ? Vector{Float64}(df.log_compression) : Float64[]
+    if any(x -> !isfinite(x) || x >= 0.0, lc)
+        throw(ArgumentError(
+            "corrupted :log_compression column: every entry must be finite and negative"))
+    end
+
+    # Weight assembly mirrors the atomistic gc_thermodynamic_stats_ideal_ref:
+    # compression-column shells, tail split over the surviving walkers with ω0
+    cs = cumsum(lc)
+    log_w0 = n_dead > 0 ?
+        (log(ω0) .+ vcat(0.0, cs[1:end-1]) .+ log.(-expm1.(lc))) : Float64[]
+    Es = n_dead > 0 ? Vector{Float64}(df.emax) : Float64[]
+    Ns = n_dead > 0 ? Vector{Float64}(df.num_particles) : Float64[]
+    if live_emax !== nothing && !isempty(live_emax)
+        log_tail = log(ω0) + (n_dead > 0 ? cs[end] : 0.0) - log(length(live_emax))
+        log_w0 = vcat(log_w0, fill(log_tail, length(live_emax)))
+        Es = vcat(Es, live_emax)
+        Ns = vcat(Ns, Float64.(live_numbers))
+    end
+
+    log_z0 = log(ustrip(u"Å^-3", reference_activity))
+    out = Matrix{Float64}(undef, length(μ_grid), length(T_grid))
+    Threads.@threads for j in eachindex(T_grid)
+        T_K = ustrip(u"K", T_grid[j])
+        β = 1.0 / (kb * T_K)
+        β0 = T0_K === nothing ? β : 1.0 / (kb * T0_K)
+        logΛ = log(ustrip(u"Å", _thermal_wavelength(atomic_mass, T_grid[j])))
+        for i in eachindex(μ_grid)
+            s = β * ustrip(u"eV", μ_grid[i]) - 3.0 * logΛ - log_z0
+            out[i, j] = _igref_ess_value(mode, log_w0, Es, Ns, s, β, β0)
+        end
+        if relative
+            anchor = _igref_ess_value(mode, log_w0, Es, Ns, 0.0, β, β0)
+            for i in eachindex(μ_grid)
+                out[i, j] /= anchor
+            end
+        end
+    end
+    return out
 end
 
 

@@ -703,6 +703,21 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
 end
 
 
+"""
+    _log_poisson_partial_sum(z0V::Float64, n_max::Int)
+
+The log reference mass of the truncated continuous ideal-gas measure:
+`log(Σ_{N=0}^{n_max} (z0V)^N / N!)`, computed in log space with a max-shifted
+logsumexp so neither `(z0V)^N` nor `N!` overflows. Exactly `0.0` at `n_max = 0`
+(the empty-configuration term alone) and tends to `z0V` as `n_max` grows (the
+unbounded mass `e^{z0V}`).
+"""
+function _log_poisson_partial_sum(z0V::Float64, n_max::Int)
+    n_max >= 0 || throw(ArgumentError("n_max must be non-negative"))
+    logterms = vcat(0.0, cumsum(log.(z0V ./ (1:n_max))))
+    max_log = maximum(logterms)
+    return max_log + log(sum(exp.(logterms .- max_log)))
+end
 
 
 """
@@ -714,7 +729,7 @@ end
                                      T_grid::AbstractVector{<:Unitful.Temperature};
                                      ω0=1.0, live_emax=nothing, live_numbers=nothing,
                                      observable_cols=Symbol[], live_observables=nothing,
-                                     kb=8.617333262e-5)
+                                     kb=8.617333262e-5, n_max=nothing)
 
 Reduce an atomistic energy-sorted ideal-gas-referenced grand-canonical ledger (see the
 `AtomisticIGRefGCNSParameters` method of `ideal_gas_referenced_nested_sampling`) to
@@ -727,6 +742,16 @@ Reduce an atomistic energy-sorted ideal-gas-referenced grand-canonical ledger (s
 with `z = exp(μ/kT)/Λ(T)³` the target activity, `z0` the run's reference activity, and
 `e^{z0V}` the reference measure's total mass. The thermal wavelength and the volume enter
 only here: the sampler is athermal and its ledger is reduced, never re-run.
+
+For a BOUNDED run (a finite `n_max` on `AtomisticIGRefGCNSParameters`), pass the same
+`n_max` here: the reference measure is then the truncated ideal gas on `0:n_max`, whose
+total mass `Σ_{N=0}^{n_max} (z0V)^N/N!` replaces `e^{z0V}` in the assembly
+(`_log_poisson_partial_sum`). The reweighting exponent, every ratio observable, `p_N`,
+and `N_eff` are unchanged — the reference mass is a global constant that cancels from
+all of them — so a bounded run reduced with the default `n_max=nothing` differs ONLY in
+`logXi`, shifted up by exactly `-log P(Poisson(z0V) <= n_max)` (the surplus reference
+mass above the cap). Ledger or live-tail entries
+with `N > n_max` are rejected: they cannot have come from the claimed bounded run.
 
 Three conventions are fixed by measurement and documented here:
 - Shell weights follow the log-compression convention of `ωᵢ(log_compression; ω0=1.0)`,
@@ -768,6 +793,8 @@ follow-up item and out of scope here.
 - `live_observables=nothing`: Required whenever `observable_cols` is non-empty and a
   live-set tail is supplied; same contract as the lattice method above.
 - `kb::Float64`: Boltzmann constant (default: eV/K).
+- `n_max::Union{Nothing,Int}=nothing`: The run's particle-number cap, for bounded
+  constructions. `nothing` (the default) selects the unbounded `e^{z0V}` normalization.
 
 # Returns
 A `NamedTuple` with the same shape as the lattice method: `logXi`, `mean_N`, `var_N`,
@@ -791,9 +818,18 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
                                           live_numbers::Union{Nothing,Vector{Int}}=nothing,
                                           observable_cols::AbstractVector{Symbol}=Symbol[],
                                           live_observables::Union{Nothing,AbstractDict{Symbol}}=nothing,
-                                          kb::Float64=8.617333262e-5)
+                                          kb::Float64=8.617333262e-5,
+                                          n_max::Union{Nothing,Int}=nothing)
     if reference_activity <= 0.0u"Å^-3"
         throw(ArgumentError("reference_activity must be positive"))
+    end
+    if n_max !== nothing && n_max < 0
+        throw(ArgumentError("n_max must be non-negative"))
+    end
+    if n_max !== nothing && n_max > 10^9
+        throw(ArgumentError(
+            "n_max = $n_max looks like an unbounded-run sentinel (typemax); " *
+            "pass n_max=nothing to reduce an unbounded run"))
     end
     if V <= 0.0u"Å^3"
         throw(ArgumentError("V must be positive"))
@@ -876,6 +912,12 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
         Ns = vcat(Ns, Float64.(live_numbers))
     end
 
+    if n_max !== nothing && !isempty(Ns) && maximum(Ns) > n_max
+        throw(ArgumentError(
+            "the ledger or live tail contains a particle count above n_max = $n_max; " *
+            "such samples cannot have come from the claimed bounded run"))
+    end
+
     As = Dict{Symbol,Vector{Float64}}()
     for col in observable_cols
         A = n_dead > 0 ? Vector{Float64}(df[!, col]) : Float64[]
@@ -897,6 +939,9 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
 
     z0V = ustrip(Unitful.NoUnits, reference_activity * V)
     log_z0 = log(ustrip(u"Å^-3", reference_activity))
+    # The log reference mass: e^{z0V} for the unbounded measure, the truncated
+    # partial sum for a bounded run (a global constant entering logXi alone)
+    log_ref = n_max === nothing ? z0V : _log_poisson_partial_sum(z0V, n_max)
 
     n_mu = length(μ_grid)
     n_T = length(T_grid)
@@ -922,7 +967,7 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
             max_log = maximum(log_w)
             ws = exp.(log_w .- max_log)
             sum_w = sum(ws)
-            logXi[i, j] = z0V + max_log + log(sum_w)
+            logXi[i, j] = log_ref + max_log + log(sum_w)
             n_avg = sum(ws .* Ns) / sum_w
             mean_N[i, j] = n_avg
             var_N[i, j] = sum(ws .* Ns .^ 2) / sum_w - n_avg^2

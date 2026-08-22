@@ -2482,15 +2482,25 @@ enter a run; both enter only in the post-run reduction to Ξ(μ, T).
 - `move_stats::Dict{Symbol,Int}`: Run-total per-move-type attempt/accept counters
   accumulated from every ordinary-cull decorrelation walk (cleared once at run
   start; plateau-refill walks are not accumulated).
+- `n_max::Int64`: Upper bound on the particle count, for BOUNDED constructions. The
+  default `typemax(Int64)` keeps the historical unbounded reference measure
+  draw-for-draw (initialization consumes the identical RNG stream and the kernel
+  guard never fires). A finite `n_max` defines a different, truncated reference
+  measure — the conditional Poisson on `0:n_max` — and is exact for that measure
+  only when all three legs move together: initialization draws the truncated law,
+  the kernel guard-skips insertions above the cap (a null proposal, Metropolis-
+  correct on the truncated measure), and the post-run reduction is normalized by
+  the truncated reference mass. A finite `n_max` therefore OBLIGATES passing the
+  same `n_max` to `gc_thermodynamic_stats_ideal_ref`; mixing a capped run with the
+  unbounded `e^{z0V}` normalization overstates logXi by exactly
+  `-log P(Poisson(z0V) <= n_max)` (the surplus reference mass above the cap).
 
-Three fields carried by sibling parameter structs are deliberately absent. No `n_max`:
-the reference measure has unbounded particle-number support, and a cap silently
-truncates its mass and biases the evidence (the kernel's keyword exists for bounded
-constructions only; this sampler never sets it). No `energy_perturbation`: exact energy
-ties are handled by the plateau-aware eviction machinery, and perturbing recorded
-energies would break the exactly-zero closed-form checks this construction is validated
-against. No `random_seed`: the lattice ideal-gas-referenced sibling documents its field
-as not consumed by the sampling loop; seed the global RNG before the run instead.
+Two fields carried by sibling parameter structs are deliberately absent. No
+`energy_perturbation`: exact energy ties are handled by the plateau-aware eviction
+machinery, and perturbing recorded energies would break the exactly-zero closed-form
+checks this construction is validated against. No `random_seed`: the lattice
+ideal-gas-referenced sibling documents its field as not consumed by the sampling loop;
+seed the global RNG before the run instead.
 """
 mutable struct AtomisticIGRefGCNSParameters <: SamplingParameters
     mc_steps::Int64
@@ -2506,6 +2516,7 @@ mutable struct AtomisticIGRefGCNSParameters <: SamplingParameters
     plateau_refill_target::Int64
     refill_fail_budget::Int64
     move_stats::Dict{Symbol,Int}
+    n_max::Int64
 end
 
 """
@@ -2513,12 +2524,15 @@ end
         mc_steps=100, reference_activity=0.01u"Å^-3", species=:H,
         initial_step_size=0.5, step_size=0.5, step_size_lo=0.01, step_size_up=2.0,
         accept_range=(0.25, 0.75), fail_count=0, allowed_fail_count=100,
-        plateau_refill_target=0, refill_fail_budget=0, move_stats=Dict{Symbol,Int}())
+        plateau_refill_target=0, refill_fail_budget=0, move_stats=Dict{Symbol,Int}(),
+        n_max=typemax(Int64))
 
 Convenience constructor for `AtomisticIGRefGCNSParameters`. `reference_activity` (z0)
 must be positive; choose it so z0V sits near the particle-number range of interest, as
 post-run reweighting to a target (μ, T) carries a factor `(z/z0)^N` per sample whose
-effective sample size degrades away from the reference.
+effective sample size degrades away from the reference. A finite `n_max` selects the
+bounded construction (see the field docstring); it must be at least 1, and the same
+`n_max` must be passed to `gc_thermodynamic_stats_ideal_ref`.
 """
 function AtomisticIGRefGCNSParameters(;
     mc_steps::Int64=100,
@@ -2534,6 +2548,7 @@ function AtomisticIGRefGCNSParameters(;
     plateau_refill_target::Int64=0,
     refill_fail_budget::Int64=0,
     move_stats::Dict{Symbol,Int}=Dict{Symbol,Int}(),
+    n_max::Int64=typemax(Int64),
 )
     if reference_activity <= 0.0u"Å^-3"
         throw(ArgumentError("reference_activity must be positive"))
@@ -2541,10 +2556,14 @@ function AtomisticIGRefGCNSParameters(;
     if refill_fail_budget < 0
         throw(ArgumentError("refill_fail_budget must be non-negative (0 charges refill failures against allowed_fail_count)"))
     end
+    if n_max < 1
+        throw(ArgumentError("n_max must be at least 1 (typemax(Int64) selects the unbounded construction)"))
+    end
     AtomisticIGRefGCNSParameters(
         mc_steps, reference_activity, species,
         initial_step_size, step_size, step_size_lo, step_size_up, accept_range,
         fail_count, allowed_fail_count, plateau_refill_target, refill_fail_budget, move_stats,
+        n_max,
     )
 end
 
@@ -2639,7 +2658,17 @@ function _atomistic_igref_z0V(liveset::AtomWalkers, params::AtomisticIGRefGCNSPa
         cell_vectors(walker.configuration) == cellv || throw(ArgumentError("all walkers must share one cell"))
     end
     V = cellv[1][1] * cellv[2][2] * cellv[3][3]
-    return ustrip(Unitful.NoUnits, params.reference_activity * V)
+    z0V = ustrip(Unitful.NoUnits, params.reference_activity * V)
+    if params.n_max != typemax(Int64)
+        # Bounded construction: the truncated reference must retain workable
+        # mass, or the conditional-Poisson rejection sampler at initialization
+        # degenerates into a near-endless loop
+        trunc_mass = cdf(Poisson(z0V), params.n_max)
+        if trunc_mass < 1e-8
+            throw(ArgumentError("the truncated reference mass P(Poisson(z0V) <= n_max) = $trunc_mass is below 1e-8 at z0V = $z0V, n_max = $(params.n_max); lower reference_activity so the reference law overlaps the bounded support"))
+        end
+    end
+    return z0V
 end
 
 """
@@ -2649,7 +2678,11 @@ end
 
 Initialize walkers as exact i.i.d. draws from the continuous ideal-gas prior at the
 reference activity: each walker's particle count is Poisson(z0V) and its positions are
-uniform in the cell.
+uniform in the cell. Under a finite `params.n_max` the count is drawn from the exact
+conditional Poisson on `0:n_max` by rejection — chosen over inverse-CDF sampling
+because it consumes the identical RNG stream whenever no draw exceeds the cap, which is
+what makes the bounded and unbounded constructions digit-identical away from the cap
+(the workable-mass guard in `_atomistic_igref_z0V` bounds the rejection loop).
 """
 function _init_atomistic_igref_walkers!(liveset::AtomWalkers,
                                         params::AtomisticIGRefGCNSParameters,
@@ -2662,6 +2695,9 @@ function _init_atomistic_igref_walkers!(liveset::AtomWalkers,
             remove_particle!(walker, walker.list_num_par[1])
         end
         n = rand(Poisson(z0V))
+        while n > params.n_max
+            n = rand(Poisson(z0V))
+        end
         for _ in 1:n
             pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
             insert_particle!(walker, pos, params.species)
@@ -2739,7 +2775,7 @@ function nested_sampling_step!(liveset::AtomWalkers,
                     _gc_walk_length(params, mc_routine, at_r.list_num_par[1]), at_r, pot, emax;
                     z0V=z0V, species=params.species,
                     p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
-                    step_size=params.step_size,
+                    step_size=params.step_size, n_max=params.n_max,
                     p_bias=mc_routine.p_bias, bias_radius=mc_routine.bias_radius,
                     bias_grid=mc_routine.bias_grid)
                 if accept_r && mc_routine.galilean_steps > 0 && at_r.list_num_par[1] > 0
@@ -2781,7 +2817,7 @@ function nested_sampling_step!(liveset::AtomWalkers,
         _gc_walk_length(params, mc_routine, to_walk.list_num_par[1]), to_walk, pot, emax;
         z0V=z0V, species=params.species,
         p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
-        step_size=params.step_size,
+        step_size=params.step_size, n_max=params.n_max,
         p_bias=mc_routine.p_bias, bias_radius=mc_routine.bias_radius,
         bias_grid=mc_routine.bias_grid)
     if accept && mc_routine.galilean_steps > 0 && to_walk.list_num_par[1] > 0

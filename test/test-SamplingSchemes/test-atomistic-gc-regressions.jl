@@ -127,10 +127,13 @@
         @test length(w.configuration) == w.list_num_par[1]
     end
 
-    @testset "particle-number cap stays structurally inactive" begin
-        # the sampler's parameter struct carries no cap at all: a cap would
-        # silently truncate the reference measure's unbounded support
-        @test !hasfield(AtomisticIGRefGCNSParameters, :n_max)
+    @testset "particle-number cap stays inactive by default" begin
+        # DISCLOSURE (rescoped in the bounded-support Add commit): the struct
+        # now carries `n_max` for the bounded construction, but the DEFAULT is
+        # `typemax(Int64)` — draw-for-draw the historical unbounded reference
+        # measure. The default-run behavior below is unchanged.
+        @test hasfield(AtomisticIGRefGCNSParameters, :n_max)
+        @test AtomisticIGRefGCNSParameters().n_max == typemax(Int64)
         Random.seed!(81813)
         ls = GenericAtomWalkers([AtomWalker{1}(mkempty()) for _ in 1:16],
                                 LJParameters(epsilon=0.01, sigma=2.5, cutoff=2.5))

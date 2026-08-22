@@ -24,6 +24,8 @@ include("test-atomistic-gc-interacting-regressions.jl")
     include("test-atomistic-igref-driver-pins.jl")
     # test the atomistic ideal-gas-referenced ledger assembly
     include("test-atomistic-igref-stats.jl")
+    # test the surface-aware ideal-gas-referenced route
+    include("test-atomistic-igref-surface.jl")
     # test the ideal-gas-referenced effective-sample-size reductions
     include("test-igref-ess.jl")
     # regression coverage for the continuous-space grand-canonical route

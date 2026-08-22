@@ -20,6 +20,8 @@ include("test-atomistic-gc-interacting-regressions.jl")
     include("test-lattice-gc-scaling-regressions.jl")
     # test atomistic ideal-gas-referenced grand-canonical nested sampling
     include("test-atomistic-igref-gcns.jl")
+    # absolute seeded pins for the atomistic ideal-gas-referenced driver
+    include("test-atomistic-igref-driver-pins.jl")
     # test the atomistic ideal-gas-referenced ledger assembly
     include("test-atomistic-igref-stats.jl")
     # test the ideal-gas-referenced effective-sample-size reductions

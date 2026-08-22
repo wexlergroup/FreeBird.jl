@@ -753,3 +753,97 @@ end
         @test length(fls.walkers) >= 2
     end
 end
+
+@testset "bounded-support construction (n_max)" begin
+    using Random
+    # Calibration ledger:
+    # - Truncated initializer moments at K = 200, z0V = 3, n_max = 2, seeds
+    #   {1,2,3,52551}: exact conditional-Poisson mean 24/17 = 1.41176 and
+    #   variance 138/289 = 0.47751; max devs mean 0.0732, var 0.0657 (both at
+    #   the shipped seed); gates ship at >= 3x (0.22 and 0.20).
+    # - The stream-identity and guard testsets are deterministic contracts and
+    #   need no calibration.
+    bb_box = [[12.0, 0.0, 0.0], [0.0, 12.0, 0.0], [0.0, 0.0, 12.0]]u"Å"
+    bb_pbc = (true, true, true)
+    bb_seed_at = FastSystem(atomic_system([:Ar => [1.0, 1.0, 1.0]u"Å"], bb_box, bb_pbc))
+    bb_mkempty() = FastSystem(cell_vectors(bb_seed_at), periodicity(bb_seed_at),
+                              empty(position(bb_seed_at, :)), empty(species(bb_seed_at, :)),
+                              empty(mass(bb_seed_at, :)))
+    bb_V = 1728.0
+    bb_lj = LJParameters(epsilon=0.01, sigma=2.5, cutoff=2.5)
+    bb_save(tag) = SaveEveryN(df_filename="_igref_bb_$(tag).csv",
+                              wk_filename="_igref_bb_$(tag).traj.extxyz",
+                              ls_filename="_igref_bb_$(tag).ls.extxyz",
+                              n_traj=10^7, n_snap=10^7, n_info=10^7)
+    bb_clean(tag) = for f in ["_igref_bb_$(tag).csv", "_igref_bb_$(tag).traj.extxyz",
+                              "_igref_bb_$(tag).ls.extxyz"]
+        rm(f, force=true)
+    end
+    function bb_run(seed, n_max; n_steps=120)
+        Random.seed!(seed)
+        ls = GenericAtomWalkers([AtomWalker{1}(bb_mkempty()) for _ in 1:16], bb_lj)
+        params = AtomisticIGRefGCNSParameters(mc_steps=60,
+            reference_activity=(6.0 / bb_V)u"Å^-3", species=:Ar,
+            allowed_fail_count=100_000, n_max=n_max)
+        df, lso, pout = ideal_gas_referenced_nested_sampling(
+            ls, params, n_steps, MCAtomGrandCanonicalMoves(), bb_save("r"))
+        bb_clean("r")
+        live_e = [ustrip(u"eV", w.energy) for w in lso.walkers]
+        live_n = [w.list_num_par[1] for w in lso.walkers]
+        return df, live_e, live_n, pout
+    end
+
+    @testset "constructor validation and default" begin
+        @test_throws ArgumentError AtomisticIGRefGCNSParameters(n_max=0)
+        @test_throws ArgumentError AtomisticIGRefGCNSParameters(n_max=-3)
+        @test AtomisticIGRefGCNSParameters(n_max=5).n_max == 5
+        @test AtomisticIGRefGCNSParameters().n_max == typemax(Int64)
+    end
+
+    @testset "workable-mass guard on the truncated reference" begin
+        # P(Poisson(60) <= 1) ~ 5e-25: the conditional-Poisson rejection
+        # sampler would loop essentially forever, so validation rejects it
+        params = AtomisticIGRefGCNSParameters(reference_activity=(60.0 / bb_V)u"Å^-3",
+                                              species=:Ar, n_max=1)
+        ls = GenericAtomWalkers([AtomWalker{1}(bb_mkempty())], bb_lj)
+        @test_throws ArgumentError FreeBird.SamplingSchemes._atomistic_igref_z0V(ls, params)
+        # a workable truncation at the same cap passes validation
+        params_ok = AtomisticIGRefGCNSParameters(reference_activity=(1.0 / bb_V)u"Å^-3",
+                                                 species=:Ar, n_max=1)
+        @test FreeBird.SamplingSchemes._atomistic_igref_z0V(ls, params_ok) ≈ 1.0 atol=1e-12
+    end
+
+    @testset "truncated initializer law (seeded, calibrated)" begin
+        Random.seed!(52551)
+        ls = GenericAtomWalkers([AtomWalker{1}(bb_mkempty()) for _ in 1:200],
+                                LJParameters(epsilon=0.0))
+        params = AtomisticIGRefGCNSParameters(reference_activity=(3.0 / bb_V)u"Å^-3",
+                                              species=:Ar, n_max=2)
+        z0V = FreeBird.SamplingSchemes._atomistic_igref_z0V(ls, params)
+        FreeBird.SamplingSchemes._init_atomistic_igref_walkers!(ls, params, z0V)
+        ns = [w.list_num_par[1] for w in ls.walkers]
+        # conditional Poisson(3) on {0, 1, 2}: masses prop. to (1, 3, 4.5),
+        # mean 24/17, variance 0.477508...
+        @test all(0 .<= ns .<= 2)
+        @test abs(mean(ns) - 24 / 17) < 0.22
+        @test abs(var(ns) - (42 / 17 - (24 / 17)^2)) < 0.20
+        @test all(length(w.configuration) == w.list_num_par[1] for w in ls.walkers)
+    end
+
+    @testset "bounded-vs-unbounded stream identity when the cap is unhit" begin
+        df_u, live_eu, live_nu, _ = bb_run(52552, typemax(Int64))
+        df_b, live_eb, live_nb, _ = bb_run(52552, 10^6)
+        @test df_u == df_b
+        @test live_eu == live_eb
+        @test live_nu == live_nb
+    end
+
+    @testset "binding cap: the ledger and live set respect n_max end to end" begin
+        df, live_e, live_n, pout = bb_run(52553, 4)
+        @test maximum(df.num_particles) <= 4
+        @test maximum(live_n) <= 4
+        @test nrow(df) > 0
+        @test issorted(df.emax, rev=true)
+        @test pout.n_max == 4
+    end
+end

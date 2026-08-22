@@ -1551,6 +1551,166 @@ function MC_grand_canonical_walk!(n_steps::Int,
             insert_biased_accepted=insert_biased_accepted,
             delete_attempted=delete_attempted, delete_accepted=delete_accepted)
 end
+
+"""
+    MC_grand_canonical_walk!(n_steps::Int, at::AtomWalker{1},
+                             cps::CompositeParameterSets{C,P}, emax::typeof(0.0u"eV"),
+                             surface::AtomWalker{CS};
+                             z0V::Float64, species, p_move::Float64=0.5,
+                             p_insert::Float64=0.25, step_size::Float64=0.5,
+                             n_max::Int=typemax(Int))
+
+Surface-aware method of the continuous grand-canonical kernel: identical moves,
+acceptance ratios, and random-number stream contract as the plain method above, with
+every single-site energy evaluated against the frozen external `surface` as the
+appended LAST component of the composite parameter set (the `LJSurfaceWalkers`
+convention, `CP = C + 1` with `C = 2` here: adsorbate first, surface last). Insertion
+and deletion energy differences therefore include the adsorbate-surface term
+automatically. Insertions propose uniformly in the FULL cell, keeping the library's
+reference-measure convention: the substrate region is excluded by the energy ceiling,
+never by the proposal support, so `z0V` folds the full cell volume. The walker's
+`energy` carries `energy_frozen_part` as a constant offset, exactly as in the
+surface method of `MC_random_walk!`; incremental updates are unaffected by it.
+
+The cavity-biased insertion channel and the Galilean burst are not surface-aware, so
+this method takes no `p_bias`/`bias_radius`/`bias_grid` kwargs — passing one is a loud
+kwarg `MethodError` rather than a silently wrong answer.
+
+Requirements, validated on entry: a single unfrozen adsorbate component; a
+two-component parameter set (`C == 2`); an orthorhombic cell (consistent with
+`pbc_dist`); and the surface sharing the walker's cell.
+
+# Returns
+The same 4-tuple as the plain method; the biased-insertion counters are present in the
+stats NamedTuple and always zero (the channel does not exist here).
+"""
+function MC_grand_canonical_walk!(n_steps::Int,
+                                  at::AtomWalker{1},
+                                  cps::CompositeParameterSets{C,P},
+                                  emax::typeof(0.0u"eV"),
+                                  surface::AtomWalker{CS};
+                                  z0V::Float64,
+                                  species::Union{Symbol, ChemicalSpecies},
+                                  p_move::Float64=0.5,
+                                  p_insert::Float64=0.25,
+                                  step_size::Float64=0.5,
+                                  n_max::Int=typemax(Int)
+                                  ) where {C, CS, P<:SingleComponentPotential{Pairwise}}
+    if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
+        throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
+    end
+    if z0V <= 0.0
+        throw(ArgumentError("z0V must be positive"))
+    end
+    if C != 2
+        throw(ArgumentError("the surface-aware grand-canonical kernel requires a two-component parameter set (adsorbate first, surface last); got $C components"))
+    end
+    if any(at.frozen)
+        throw(ArgumentError("the continuous grand-canonical kernel requires an unfrozen single-component walker"))
+    end
+    config = at.configuration
+    cellv = cell_vectors(config)
+    for i in 1:3, j in 1:3
+        if i != j && !iszero(ustrip(cellv[i][j]))
+            throw(ArgumentError("the continuous grand-canonical kernel assumes an orthorhombic cell (consistent with pbc_dist); found a nonzero off-diagonal cell component"))
+        end
+    end
+    if cell_vectors(surface.configuration) != cellv
+        throw(ArgumentError("the surface must share the walker's cell: pbc_dist evaluates adsorbate-surface distances in the walker's cell"))
+    end
+    box = (cellv[1][1], cellv[2][2], cellv[3][3])
+
+    n_accept = 0
+    accept_this_walker = false
+    p_delete = 1.0 - p_move - p_insert
+    move_attempted = 0
+    move_accepted = 0
+    insert_attempted = 0
+    insert_accepted = 0
+    delete_attempted = 0
+    delete_accepted = 0
+
+    for _ in 1:n_steps
+        r = rand()
+        n = at.list_num_par[1]
+        if r < p_move
+            # Displacement: ceiling check only (nested-sampling walk, no Metropolis)
+            n == 0 && continue          # guard skip: nothing to move
+            move_attempted += 1
+            i_at = rand(1:n)
+            prewalk_energy = single_site_energy(i_at, config, cps, at.list_num_par, surface.configuration)
+            orig_pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
+            pos = single_atom_random_walk!(orig_pos, step_size)
+            pos = periodic_boundary_wrap!(pos, config)
+            config.position[i_at] = pos
+            postwalk_energy = single_site_energy(i_at, config, cps, at.list_num_par, surface.configuration)
+            proposed_energy = at.energy + (postwalk_energy - prewalk_energy)
+            if proposed_energy >= emax
+                config.position[i_at] = orig_pos
+            else
+                at.energy = proposed_energy
+                n_accept += 1
+                move_accepted += 1
+                accept_this_walker = true
+            end
+        elseif r < p_move + p_insert
+            # Insertion: uniform in the full cell, insert-evaluate-revert
+            (n + 1 > n_max || p_insert <= 0.0) && continue   # guard skip
+            insert_attempted += 1
+            pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
+            insert_particle!(at, pos, species)
+            e_site = single_site_energy(n + 1, config, cps, at.list_num_par, surface.configuration)
+            proposed_energy = at.energy + e_site
+            accept = true
+            if proposed_energy >= emax
+                accept = false
+            else
+                ratio = gc_insert_acceptance_ratio(z0V, n, p_insert, p_delete)
+                if ratio < 1.0 && rand() >= ratio
+                    accept = false
+                end
+            end
+            if accept
+                at.energy = proposed_energy
+                n_accept += 1
+                insert_accepted += 1
+                accept_this_walker = true
+            else
+                remove_particle!(at, n + 1)
+            end
+        else
+            # Deletion: uniform among particles; nothing mutates until acceptance
+            (n == 0 || p_delete <= 0.0) && continue          # guard skip
+            delete_attempted += 1
+            i_at = rand(1:n)
+            e_site = single_site_energy(i_at, config, cps, at.list_num_par, surface.configuration)
+            proposed_energy = at.energy - e_site
+            accept = true
+            if proposed_energy >= emax
+                accept = false
+            else
+                ratio = gc_delete_acceptance_ratio(z0V, n, p_insert, p_delete)
+                if ratio < 1.0 && rand() >= ratio
+                    accept = false
+                end
+            end
+            if accept
+                remove_particle!(at, i_at)
+                at.energy = proposed_energy
+                n_accept += 1
+                delete_accepted += 1
+                accept_this_walker = true
+            end
+        end
+    end
+
+    return accept_this_walker, n_accept / max(n_steps, 1), at,
+           (move_attempted=move_attempted, move_accepted=move_accepted,
+            insert_attempted=insert_attempted, insert_accepted=insert_accepted,
+            insert_biased_attempted=0,
+            insert_biased_accepted=0,
+            delete_attempted=delete_attempted, delete_accepted=delete_accepted)
+end
 """
     MC_muVT_walk!(n_steps::Int, at::AtomWalker{1}, pot::SingleComponentPotential{Pairwise},
                   temperature::Float64;

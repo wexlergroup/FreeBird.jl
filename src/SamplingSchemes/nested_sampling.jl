@@ -2672,6 +2672,44 @@ function _atomistic_igref_z0V(liveset::AtomWalkers, params::AtomisticIGRefGCNSPa
 end
 
 """
+    _atomistic_igref_z0V(liveset::LJSurfaceWalkers, params::AtomisticIGRefGCNSParameters)
+
+Surface-aware method: the same walker checks as the base (single-component,
+unfrozen ADSORBATE walkers, one shared orthorhombic cell), accepting the frozen
+external surface and requiring it to share the walkers' cell. Returns z0V folded
+from the FULL cell, unconditionally: the reference ideal gas lives in the whole
+box, and the substrate region is excluded by the energy ceiling, not by the
+reference measure (consistent with the fixed-N stitch's full-prior-volume
+convention in `AnalysisTools`).
+"""
+function _atomistic_igref_z0V(liveset::LJSurfaceWalkers, params::AtomisticIGRefGCNSParameters)
+    isempty(liveset.walkers) && throw(ArgumentError("the liveset carries no walkers"))
+    cellv = cell_vectors(liveset.walkers[1].configuration)
+    for i in 1:3, j in 1:3
+        if i != j && !iszero(ustrip(cellv[i][j]))
+            throw(ArgumentError("the atomistic ideal-gas-referenced construction assumes an orthorhombic cell (consistent with pbc_dist); found a nonzero off-diagonal cell component"))
+        end
+    end
+    for walker in liveset.walkers
+        walker isa AtomWalker{1} || throw(ArgumentError("every walker must be a single-component AtomWalker{1}"))
+        any(walker.frozen) && throw(ArgumentError("the atomistic ideal-gas-referenced construction requires unfrozen adsorbate walkers (the surface is the frozen component)"))
+        cell_vectors(walker.configuration) == cellv || throw(ArgumentError("all walkers must share one cell"))
+    end
+    all(liveset.surface.frozen) || throw(ArgumentError("the surface must be fully frozen"))
+    cell_vectors(liveset.surface.configuration) == cellv || throw(ArgumentError("the surface must share the walkers' cell: pbc_dist evaluates adsorbate-surface distances in the walker's cell"))
+    V = cellv[1][1] * cellv[2][2] * cellv[3][3]
+    z0V = ustrip(Unitful.NoUnits, params.reference_activity * V)
+    if params.n_max != typemax(Int64)
+        # Bounded construction: see the base method
+        trunc_mass = cdf(Poisson(z0V), params.n_max)
+        if trunc_mass < 1e-8
+            throw(ArgumentError("the truncated reference mass P(Poisson(z0V) <= n_max) = $trunc_mass is below 1e-8 at z0V = $z0V, n_max = $(params.n_max); lower reference_activity so the reference law overlaps the bounded support"))
+        end
+    end
+    return z0V
+end
+
+"""
     _init_atomistic_igref_walkers!(liveset::AtomWalkers,
                                    params::AtomisticIGRefGCNSParameters,
                                    z0V::Float64)
@@ -2704,6 +2742,46 @@ function _init_atomistic_igref_walkers!(liveset::AtomWalkers,
         end
         AbstractLiveSets.assign_frozen_energy!(walker, pot)
         assign_energy!(walker, pot)
+        # Reset the iteration counter: a stale counter from a reused liveset
+        # corrupts the prior-volume bookkeeping
+        walker.iter = 0
+    end
+    return liveset
+end
+
+"""
+    _init_atomistic_igref_walkers!(liveset::LJSurfaceWalkers,
+                                   params::AtomisticIGRefGCNSParameters,
+                                   z0V::Float64)
+
+Surface-aware method: identical reference-law draws (Poisson counts, truncated
+under a finite `n_max`; positions uniform in the FULL cell — the substrate is
+excluded by the energy ceiling, not the reference measure), with energies
+assigned against the frozen surface. Each walker inherits the surface's
+`energy_frozen_part` (the read-not-compute convention of `LJSurfaceWalkers`)
+before the surface-aware `assign_energy!`.
+"""
+function _init_atomistic_igref_walkers!(liveset::LJSurfaceWalkers,
+                                        params::AtomisticIGRefGCNSParameters,
+                                        z0V::Float64)
+    pot = liveset.potential
+    surface = liveset.surface
+    cellv = cell_vectors(liveset.walkers[1].configuration)
+    box = (cellv[1][1], cellv[2][2], cellv[3][3])
+    for walker in liveset.walkers
+        while walker.list_num_par[1] > 0
+            remove_particle!(walker, walker.list_num_par[1])
+        end
+        n = rand(Poisson(z0V))
+        while n > params.n_max
+            n = rand(Poisson(z0V))
+        end
+        for _ in 1:n
+            pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
+            insert_particle!(walker, pos, params.species)
+        end
+        walker.energy_frozen_part = surface.energy_frozen_part
+        assign_energy!(walker, pot, surface)
         # Reset the iteration counter: a stale counter from a reused liveset
         # corrupts the prior-volume bookkeeping
         walker.iter = 0
@@ -2866,6 +2944,157 @@ function nested_sampling_step!(liveset::AtomWalkers,
 end
 
 """
+    nested_sampling_step!(liveset::LJSurfaceWalkers,
+                          params::AtomisticIGRefGCNSParameters,
+                          mc_routine::MCAtomGrandCanonicalMoves;
+                          ns_iteration::Int=0, z0V::Union{Nothing,Float64}=nothing)
+
+Surface-aware method of the atomistic ideal-gas-referenced step: identical to the
+`AtomWalkers` method except every decorrelation and refill walk runs the
+surface-aware grand-canonical kernel against the liveset's frozen surface, and
+every energy re-anchor recomputes against the surface. The cavity-biased
+insertion channel and the Galilean burst are not surface-aware, so a routine
+with `p_bias > 0` or `galilean_steps > 0` is rejected at step entry (a loud
+`ArgumentError` before any walker is touched, mirroring the canonical surface
+step's routine validation).
+"""
+function nested_sampling_step!(liveset::LJSurfaceWalkers,
+                               params::AtomisticIGRefGCNSParameters,
+                               mc_routine::MCAtomGrandCanonicalMoves;
+                               ns_iteration::Int=0,
+                               z0V::Union{Nothing,Float64}=nothing)
+    mc_routine.p_bias > 0 && throw(ArgumentError("the cavity-biased insertion channel is not surface-aware; use p_bias = 0 with LJSurfaceWalkers"))
+    mc_routine.galilean_steps > 0 && throw(ArgumentError("the Galilean burst is not surface-aware; use galilean_steps = 0 with LJSurfaceWalkers"))
+    z0V === nothing && (z0V = _atomistic_igref_z0V(liveset, params))
+    sort_by_energy!(liveset)
+    ats = liveset.walkers
+    pot = liveset.potential
+    surface = liveset.surface
+    iter::Union{Missing,Int} = missing
+    emax::Union{Missing,typeof(0.0u"eV")} = ats[1].energy
+    num_particles::Union{Missing,Int} = ats[1].list_num_par[1]
+    log_t::Union{Missing,Float64} = missing
+    n_live = length(ats)
+    n_tied = _tie_block_length(ats)
+    if (n_tied >= 2 || params.plateau_refill_target != 0) && n_tied < n_live
+        # Plateau block: evict the worst tied walker without replacement
+        # (Fowlie-Handley-Su), charging (n_live - 1)/n_live with the shrinking
+        # live count; see the canonical atomistic step for the full contract.
+        if params.plateau_refill_target == 0
+            params.plateau_refill_target = n_live
+        end
+        popfirst!(ats)
+        update_iter!(liveset)
+        iter = liveset.walkers[1].iter
+        log_t = log((n_live - 1) / n_live)
+        if n_tied == 1
+            # The plateau is exhausted: refill by cloning survivors and
+            # decorrelating strictly below the plateau energy with the
+            # surface-aware grand-canonical kernel (volume-neutral; no ledger row).
+            refill_fails = 0
+            refill_budget = params.refill_fail_budget > 0 ? params.refill_fail_budget : params.allowed_fail_count
+            while length(ats) < params.plateau_refill_target && refill_fails < refill_budget
+                at_r = deepcopy(rand(ats))
+                accept_r, _, at_r, _ = MC_grand_canonical_walk!(
+                    _gc_walk_length(params, mc_routine, at_r.list_num_par[1]), at_r, pot, emax, surface;
+                    z0V=z0V, species=params.species,
+                    p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
+                    step_size=params.step_size, n_max=params.n_max)
+                if accept_r
+                    # Re-anchor the clone's energy from scratch (see the
+                    # AtomWalkers method), against the surface
+                    at_r.energy = interacting_energy(at_r.configuration, pot,
+                        at_r.list_num_par, at_r.frozen, surface.configuration) + at_r.energy_frozen_part
+                    accept_r = at_r.energy < emax
+                end
+                if accept_r
+                    push!(ats, at_r)
+                else
+                    refill_fails += 1
+                end
+            end
+            length(ats) < params.plateau_refill_target && @warn "Plateau refill left the live set at $(length(ats)) of $(params.plateau_refill_target) walkers after $(refill_fails) failed decorrelation attempts; subsequent culls are charged with the actual live count."
+            params.plateau_refill_target = 0
+        end
+        # Step-size adaptation and move-stats accumulation stay off inside
+        # plateau blocks by design: refill walks run under a fixed plateau
+        # ceiling, and their acceptance is not representative of ordinary culls
+        return iter, emax, num_particles, liveset, params, log_t
+    end
+    # Ordinary cull: strictly-below-ceiling parent selection, mirroring the
+    # lattice ideal-gas-referenced step
+    eligible = [k for k in 2:n_live if ats[k].energy < emax]
+    parent_idx = isempty(eligible) ? rand(2:n_live) : rand(eligible)
+    to_walk = deepcopy(ats[parent_idx])
+    accept, rate, to_walk, move_stats = MC_grand_canonical_walk!(
+        _gc_walk_length(params, mc_routine, to_walk.list_num_par[1]), to_walk, pot, emax, surface;
+        z0V=z0V, species=params.species,
+        p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
+        step_size=params.step_size, n_max=params.n_max)
+    if accept
+        # Re-anchor the clone's energy from scratch (see the AtomWalkers
+        # method), against the surface
+        to_walk.energy = interacting_energy(to_walk.configuration, pot,
+            to_walk.list_num_par, to_walk.frozen, surface.configuration) + to_walk.energy_frozen_part
+        accept = to_walk.energy < emax
+    end
+    if accept
+        push!(ats, to_walk)
+        popfirst!(ats)
+        update_iter!(liveset)
+        params.fail_count = 0
+        iter = liveset.walkers[1].iter
+        log_t = log(n_live / (n_live + 1))
+    else
+        emax = missing
+        num_particles = missing
+        params.fail_count += 1
+    end
+    _accumulate_move_stats!(params, move_stats)
+    if mc_routine.step_rate_source === :move
+        # Displacement-only adaptation: skip when the walk attempted no
+        # displacement (nothing to adapt on)
+        if move_stats.move_attempted > 0
+            adjust_step_size(params, move_stats.move_accepted / move_stats.move_attempted;
+                             range=params.accept_range)
+        end
+    else
+        adjust_step_size(params, rate; range=params.accept_range)
+    end
+    return iter, emax, num_particles, liveset, params, log_t
+end
+
+"""
+    _reanchor_igref_energies!(liveset)
+
+Recompute every walker's energy from scratch (the surface-aware method evaluates
+against the liveset's frozen surface). Used by the driver's `initialize=false`
+path so a restored live set enters the loop with energies consistent with the
+run's potential, whatever precision its serialized positions carried.
+"""
+function _reanchor_igref_energies!(liveset::AtomWalkers)
+    for w in liveset.walkers
+        w.energy = interacting_energy(w.configuration, liveset.potential,
+            w.list_num_par, w.frozen) + w.energy_frozen_part
+    end
+    return liveset
+end
+
+function _reanchor_igref_energies!(liveset::LJSurfaceWalkers)
+    for w in liveset.walkers
+        # Inherit the surface's frozen-part energy before re-anchoring (the
+        # LJSurfaceWalkers convention): a live set rebuilt from serialized
+        # positions with assign_energy=false, or hand-built walkers at the
+        # field's 0.0 default, would otherwise re-enter the ladder in a
+        # different energy convention than the first block's ledger
+        w.energy_frozen_part = liveset.surface.energy_frozen_part
+        w.energy = interacting_energy(w.configuration, liveset.potential,
+            w.list_num_par, w.frozen, liveset.surface.configuration) + w.energy_frozen_part
+    end
+    return liveset
+end
+
+"""
     ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
                                          params::AtomisticIGRefGCNSParameters,
                                          n_steps::Int64,
@@ -2873,7 +3102,9 @@ end
                                          save_strategy::DataSavingStrategy;
                                          observables=nothing,
                                          dead_point_callback=nothing,
-                                         stop_on_stall::Bool=true)
+                                         stop_on_stall::Bool=true,
+                                         record_move_rates::Bool=false,
+                                         initialize::Bool=true)
 
 Run the atomistic energy-sorted ideal-gas-referenced grand-canonical nested sampling
 loop. Walkers are initialized as exact i.i.d. draws from the continuous ideal-gas prior
@@ -2917,6 +3148,30 @@ observable names.
 Observable callbacks must handle empty configurations: under this construction a
 walker's particle count may be zero.
 
+An `LJSurfaceWalkers` liveset dispatches the surface-aware path: initialization
+inherits the surface's `energy_frozen_part` and assigns energies against the frozen
+surface, and every decorrelation and refill walk runs the surface-aware kernel. The
+cavity-biased insertion channel and the Galilean burst are not surface-aware and are
+rejected at step entry. The reference measure is unchanged: Poisson counts (truncated
+under a finite `n_max`), positions uniform in the FULL cell, z0V folded from the full
+cell — the substrate excludes volume through the energy ceiling, not the measure.
+
+With `initialize=false` the driver trusts the supplied live set instead of drawing a
+fresh one: particle counts, positions, and the walkers' `iter` counters continue a
+previous run (the ledger's `iter` keying stays consistent when every walker carries
+the same `iter`, which a continued live set does). Walker energies are re-anchored
+from scratch on entry (surface livesets also re-inherit the surface's
+`energy_frozen_part`), so a live set restored from serialized positions enters the
+loop consistent with the run's potential. Under a finite `n_max` the restored counts
+must respect the cap; a violating walker is rejected with an `ArgumentError`. The
+continuation contract the caller owns: the same `reference_activity`, potential,
+`species`, and `n_max` as the first block (none of these can be validated against a
+bare live set, and a mismatch produces a chimera ledger whose blocks sample different
+constrained reference measures); and a run stopped mid-plateau-eviction resumes with
+its refill target re-derived from the current, possibly reduced, live count (the
+compression bookkeeping stays exact either way, since every charge uses the actual
+live count).
+
 # Returns
 - `df::DataFrame`: Columns `[:iter, :emax, :num_particles, :log_compression]`, plus the
   acceptance columns when requested, plus one column per requested observable.
@@ -2932,10 +3187,19 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
                                               observables::Union{Nothing,AbstractVector{<:Pair{Symbol,<:Any}}}=nothing,
                                               dead_point_callback::Union{Nothing,Function}=nothing,
                                               stop_on_stall::Bool=true,
-                                              record_move_rates::Bool=false)
+                                              record_move_rates::Bool=false,
+                                              initialize::Bool=true)
     z0V = _atomistic_igref_z0V(liveset, params)
     _warn_min_image_cutoff(liveset.potential, liveset.walkers[1].configuration)
-    _init_atomistic_igref_walkers!(liveset, params, z0V)
+    if initialize
+        _init_atomistic_igref_walkers!(liveset, params, z0V)
+    else
+        if params.n_max != typemax(Int64) &&
+           any(w.list_num_par[1] > params.n_max for w in liveset.walkers)
+            throw(ArgumentError("initialize=false: a supplied walker exceeds the bounded construction's n_max = $(params.n_max)"))
+        end
+        _reanchor_igref_energies!(liveset)
+    end
 
     # Parameter-reuse hazards: runtime state never leaks between runs
     params.plateau_refill_target = 0

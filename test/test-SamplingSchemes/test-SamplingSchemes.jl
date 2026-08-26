@@ -22,6 +22,8 @@ include("test-atomistic-gc-interacting-regressions.jl")
     include("test-atomistic-igref-gcns.jl")
     # absolute seeded pins for the atomistic ideal-gas-referenced driver
     include("test-atomistic-igref-driver-pins.jl")
+    # absolute seeded pins for the surface, Galilean, and driver paths of the same route
+    include("test-atomistic-igref-path-pins.jl")
     # test the atomistic ideal-gas-referenced ledger assembly
     include("test-atomistic-igref-stats.jl")
     # test the surface-aware ideal-gas-referenced route

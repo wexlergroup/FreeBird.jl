@@ -18,6 +18,7 @@ export transition_convergence
 export gc_thermodynamic_stats_ideal_ref
 export kish_effective_sample_size
 export gc_effective_sample_size_ideal_ref
+export reference_activity_temperature
 
 """
     read_output(filename::String)
@@ -1259,6 +1260,33 @@ Internal helper for `gc_thermodynamic_stats_fixed_N`.
 """
 function _thermal_wavelength(atomic_mass::typeof(1.0u"u"), T::Unitful.Temperature)
     return uconvert(u"Å", Unitful.h / sqrt(2π * atomic_mass * Unitful.k * T))
+end
+
+"""
+    reference_activity_temperature(reference_activity::typeof(1.0u"Å^-3"),
+                                   atomic_mass::typeof(1.0u"u")) -> typeof(1.0u"K")
+
+The temperature at which the reference activity equals the inverse cubed thermal de
+Broglie wavelength, `z0 Λ(T)^3 = 1`, that is `k_B T = h^2 z0^(2/3) / (2π m)`. It is the
+zero of the ideal-gas-referenced window centre `μ_ref(T) = k_B T ln(z0 Λ(T)^3)` and, for
+a run ordered by Ω = E − μN at its own μ (the `chemical_potential` field of
+`AtomisticIGRefGCNSParameters`), the temperature at which the reweighting factor of
+`gc_thermodynamic_stats_ideal_ref` depends on a shell through Ω alone, the residual
+`(z0 Λ(T)^3)^{-N}` being identically one, so that pooling the particle-number sectors
+is exact there. For any target temperature T the factor is a function of Ω alone along
+the line `μ' = μ + k_B T ln(z0 Λ(T)^3)`; at fixed μ' = μ the residual is
+`(z0 Λ(T)^3)^{-N}` per shell, of order `(1e5)^N` for argon-mass particles at z0V of order
+unity and room temperature, where this temperature itself is sub-kelvin. Report it
+alongside every such run. Evaluated through `_thermal_wavelength`, so it shares the
+reductions' constants digit for digit.
+"""
+function reference_activity_temperature(reference_activity::typeof(1.0u"Å^-3"),
+                                        atomic_mass::typeof(1.0u"u"))
+    reference_activity > 0.0u"Å^-3" || throw(ArgumentError("reference_activity must be positive"))
+    T0 = 1.0u"K"
+    r = ustrip(Unitful.NoUnits, reference_activity * _thermal_wavelength(atomic_mass, T0)^3)
+    # Λ(T)^3 scales as T^(-3/2): z0 Λ(T)^3 = r (T0/T)^(3/2) equals one at T = T0 r^(2/3)
+    return T0 * r^(2 / 3)
 end
 
 """

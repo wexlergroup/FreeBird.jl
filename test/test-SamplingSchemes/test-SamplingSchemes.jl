@@ -30,6 +30,8 @@ include("test-atomistic-gc-interacting-regressions.jl")
     include("test-atomistic-igref-surface.jl")
     # test the chemical-potential ordering of the atomistic ideal-gas-referenced route
     include("test-atomistic-igref-omega.jl")
+    # cross-construction regressions for the chemical-potential-ordered route
+    include("test-atomistic-igref-omega-regressions.jl")
     # test the ideal-gas-referenced effective-sample-size reductions
     include("test-igref-ess.jl")
     # regression coverage for the continuous-space grand-canonical route

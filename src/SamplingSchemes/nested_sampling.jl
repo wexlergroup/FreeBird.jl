@@ -2448,11 +2448,52 @@ function _gc_walk_length(params::SamplingParameters, mc_routine::MCAtomGrandCano
 end
 
 """
+    _grand_potential(walker::AtomWalker{1}, mu::typeof(0.0u"eV")) -> typeof(0.0u"eV")
+
+Compute the ordering scalar Ω = E − μN of an atomistic walker, the continuous
+counterpart of the lattice method (`N = walker.list_num_par[1]`). At
+`mu = 0.0u"eV"` the product `mu * N` is an exact `+0.0 eV` and the subtraction
+returns `walker.energy` bit-for-bit, for every finite energy including `-0.0`.
+"""
+function _grand_potential(walker::AtomWalker{1}, mu::typeof(0.0u"eV"))
+    return walker.energy - mu * walker.list_num_par[1]
+end
+
+"""
+    _sort_by_grand_potential!(liveset::AtomWalkers, mu::typeof(0.0u"eV"))
+
+Sort the walkers by Ω = E − μN in descending order through the same `sort!` call,
+algorithm, and stability as `sort_by_energy!`, so at `mu = 0.0u"eV"` the comparator
+values, the resulting order, and the tie order are identical.
+"""
+function _sort_by_grand_potential!(liveset::AtomWalkers, mu::typeof(0.0u"eV"))
+    sort!(liveset.walkers, by = w -> _grand_potential(w, mu), rev=true)
+    return liveset
+end
+
+"""
+    _tie_block_length(walkers, mu::typeof(0.0u"eV"))
+
+Length of the leading block of walkers whose Ω = E − μN equals the first walker's
+bit-exactly (the sorted-by-Ω analogue of the one-argument method).
+"""
+function _tie_block_length(walkers, mu::typeof(0.0u"eV"))
+    k1 = _grand_potential(walkers[1], mu)
+    n = 1
+    while n < length(walkers) && _grand_potential(walkers[n+1], mu) == k1
+        n += 1
+    end
+    return n
+end
+
+"""
     mutable struct AtomisticIGRefGCNSParameters <: SamplingParameters
 
-Parameters for atomistic energy-sorted ideal-gas-referenced grand-canonical nested
-sampling. The sampler is athermal: the chemical potential and the temperature never
-enter a run; both enter only in the post-run reduction to Ξ(μ, T).
+Parameters for atomistic ideal-gas-referenced grand-canonical nested sampling. The
+sampler is athermal: the temperature never enters a run, and the chemical potential
+enters only through the ordering scalar when `chemical_potential` is nonzero (the
+default keeps the energy-sorted construction); both enter the post-run reduction to
+Ξ(μ, T), which reweights the recorded (E, N) record to any target.
 
 # Fields
 - `mc_steps::Int64`: MCMC steps per replacement walker.
@@ -2473,7 +2514,9 @@ enter a run; both enter only in the post-run reduction to Ξ(μ, T).
   matching the canonical atomistic loop) suits interacting descents, where a run of
   failed replacements is an ordinary sampling hiccup rather than a terminal state.
 - `plateau_refill_target::Int64`: Live-set size to restore after a plateau eviction
-  block (mutable runtime state; reset at driver entry).
+  block (mutable runtime state; reset at driver entry when `initialize=true` and
+  carried across `initialize=false` continuations, which own it: a chunked driver
+  restores it from its own checkpoint).
 - `refill_fail_budget::Int64`: Failure budget for one plateau-refill loop. The default
   0 keeps the historical behavior of charging refill failures against
   `allowed_fail_count` cumulatively; a positive value gives each refill loop its own
@@ -2494,6 +2537,32 @@ enter a run; both enter only in the post-run reduction to Ξ(μ, T).
   same `n_max` to `gc_thermodynamic_stats_ideal_ref`; mixing a capped run with the
   unbounded `e^{z0V}` normalization overstates logXi by exactly
   `-log P(Poisson(z0V) <= n_max)` (the surplus reference mass above the cap).
+- `chemical_potential::typeof(0.0u"eV")`: Chemical potential of the ORDERING scalar.
+  The step sorts, detects plateaus, selects parents, and accepts on
+  Ω = E − μN (the grand potential of the lattice grand-canonical construction,
+  `GrandCanonicalNestedSamplingParameters`), never through the acceptance ratios or
+  the reference measure: insertions and deletions keep the z0-weighted Metropolis
+  factors, and the ceiling indicator is evaluated on the proposal's own Ω, so a
+  particle-number move faces the per-sector energy ceiling Ω* + μ N_after. The
+  default `0.0u"eV"` keeps the energy-sorted construction bit-for-bit: every added
+  term is an exact zero addend, no random draw is added or reordered, and the ledger
+  schema is unchanged. A nonzero μ orders the descent toward the grand ground state of
+  that μ and adds an `:omega` column recording the culled walker's Ω; `:emax` still
+  records its energy, so `gc_thermodynamic_stats_ideal_ref` consumes the ledger
+  unchanged (its reweighting factor is a function of the recorded (E, N) alone and it
+  never assumes `:emax` is monotone) and any target (μ', T') remains reachable by the
+  same post-run reweighting. The reweighting exponent is `-β(E - μ'N) - N ln(z0 Λ(T)^3)`,
+  so for a target temperature T the factor depends on a shell through Ω alone along the
+  line `μ' = μ + k_B T ln(z0 Λ(T)^3)`, and at the run's own μ exactly where
+  `z0 Λ(T)^3 = 1` (`reference_activity_temperature` in `AnalysisTools`), the situation
+  in which pooling the particle-number sectors is exact; at the run's own μ elsewhere
+  the residual `(z0 Λ(T)^3)^{-N}` is carried per recorded shell at a weight-concentration
+  cost measured by the returned `N_eff` (of order `(1e5)^N` per shell for argon-mass
+  particles at z0V of order unity and room temperature, where that temperature is
+  sub-kelvin). A continued block (`initialize=false`) must use the same μ as its
+  predecessor. Under a nonzero μ the descent may end at an atom of the ordering
+  scalar's law rather than at the ground-state sector; see the stall contract of
+  `ideal_gas_referenced_nested_sampling`.
 
 Two fields carried by sibling parameter structs are deliberately absent. No
 `energy_perturbation`: exact energy ties are handled by the plateau-aware eviction
@@ -2517,6 +2586,7 @@ mutable struct AtomisticIGRefGCNSParameters <: SamplingParameters
     refill_fail_budget::Int64
     move_stats::Dict{Symbol,Int}
     n_max::Int64
+    chemical_potential::typeof(0.0u"eV")
 end
 
 """
@@ -2525,14 +2595,16 @@ end
         initial_step_size=0.5, step_size=0.5, step_size_lo=0.01, step_size_up=2.0,
         accept_range=(0.25, 0.75), fail_count=0, allowed_fail_count=100,
         plateau_refill_target=0, refill_fail_budget=0, move_stats=Dict{Symbol,Int}(),
-        n_max=typemax(Int64))
+        n_max=typemax(Int64), chemical_potential=0.0u"eV")
 
 Convenience constructor for `AtomisticIGRefGCNSParameters`. `reference_activity` (z0)
 must be positive; choose it so z0V sits near the particle-number range of interest, as
 post-run reweighting to a target (μ, T) carries a factor `(z/z0)^N` per sample whose
 effective sample size degrades away from the reference. A finite `n_max` selects the
 bounded construction (see the field docstring); it must be at least 1, and the same
-`n_max` must be passed to `gc_thermodynamic_stats_ideal_ref`.
+`n_max` must be passed to `gc_thermodynamic_stats_ideal_ref`. `chemical_potential`
+selects the ordering scalar Ω = E − μN (Unitful, eV; see the field docstring); the
+default keeps the energy ordering bit-for-bit.
 """
 function AtomisticIGRefGCNSParameters(;
     mc_steps::Int64=100,
@@ -2549,6 +2621,7 @@ function AtomisticIGRefGCNSParameters(;
     refill_fail_budget::Int64=0,
     move_stats::Dict{Symbol,Int}=Dict{Symbol,Int}(),
     n_max::Int64=typemax(Int64),
+    chemical_potential::typeof(0.0u"eV")=0.0u"eV",
 )
     if reference_activity <= 0.0u"Å^-3"
         throw(ArgumentError("reference_activity must be positive"))
@@ -2559,11 +2632,16 @@ function AtomisticIGRefGCNSParameters(;
     if n_max < 1
         throw(ArgumentError("n_max must be at least 1 (typemax(Int64) selects the unbounded construction)"))
     end
+    isfinite(ustrip(chemical_potential)) ||
+        throw(ArgumentError("chemical_potential must be finite (a NaN makes every ceiling comparison false)"))
+    # a negative zero would map -0.0 energies to +0.0 inside the Ω arithmetic:
+    # normalize it to the default's exact +0.0 so the default path is unique
+    chemical_potential = iszero(chemical_potential) ? zero(chemical_potential) : chemical_potential
     AtomisticIGRefGCNSParameters(
         mc_steps, reference_activity, species,
         initial_step_size, step_size, step_size_lo, step_size_up, accept_range,
         fail_count, allowed_fail_count, plateau_refill_target, refill_fail_budget, move_stats,
-        n_max,
+        n_max, chemical_potential,
     )
 end
 
@@ -2795,8 +2873,9 @@ end
                           mc_routine::MCAtomGrandCanonicalMoves;
                           ns_iteration::Int=0, z0V::Union{Nothing,Float64}=nothing)
 
-Perform one step of atomistic energy-sorted ideal-gas-referenced grand-canonical nested
-sampling: sort by energy (descending), handle exact ceiling ties with the plateau-aware
+Perform one step of atomistic ideal-gas-referenced grand-canonical nested sampling: sort
+by the ordering scalar Ω = E − μN (descending; the energy at the default
+`chemical_potential = 0.0u"eV"`), handle exact ceiling ties with the plateau-aware
 eviction machinery of the canonical atomistic steps (refill walks run the grand-canonical
 kernel, so refilled clones may re-enter at a different particle count; the compression
 bookkeeping counts walkers, not particle-number sectors), otherwise cull the worst walker
@@ -2809,7 +2888,9 @@ sub-levels and admit clones whose true energy sits on, not below, the ceiling.
 
 # Returns
 - `iter`: Iteration number (or `missing` if the step failed).
-- `emax`: The energy of the culled walker (with units; `missing` on failure).
+- `emax`: The energy of the culled walker (with units; `missing` on failure). Under a
+  nonzero μ the ceiling the step enforced is the walker's Ω = emax − μ num_particles,
+  not this energy.
 - `num_particles`: The particle count of the culled walker (`missing` on failure).
 - `liveset`: The updated liveset.
 - `params`: The updated parameters.
@@ -2821,15 +2902,19 @@ function nested_sampling_step!(liveset::AtomWalkers,
                                ns_iteration::Int=0,
                                z0V::Union{Nothing,Float64}=nothing)
     z0V === nothing && (z0V = _atomistic_igref_z0V(liveset, params))
-    sort_by_energy!(liveset)
+    mu = params.chemical_potential
+    _sort_by_grand_potential!(liveset, mu)
     ats = liveset.walkers
     pot = liveset.potential
     iter::Union{Missing,Int} = missing
+    # The record is (E, N) of the culled walker; the ceiling the step enforces is
+    # its Ω = E − μN (the energy at the default mu = 0)
     emax::Union{Missing,typeof(0.0u"eV")} = ats[1].energy
     num_particles::Union{Missing,Int} = ats[1].list_num_par[1]
+    omega_max::typeof(0.0u"eV") = _grand_potential(ats[1], mu)
     log_t::Union{Missing,Float64} = missing
     n_live = length(ats)
-    n_tied = _tie_block_length(ats)
+    n_tied = _tie_block_length(ats, mu)
     if (n_tied >= 2 || params.plateau_refill_target != 0) && n_tied < n_live
         # Plateau block: evict the worst tied walker without replacement
         # (Fowlie-Handley-Su), charging (n_live - 1)/n_live with the shrinking
@@ -2850,17 +2935,22 @@ function nested_sampling_step!(liveset::AtomWalkers,
             while length(ats) < params.plateau_refill_target && refill_fails < refill_budget
                 at_r = deepcopy(rand(ats))
                 accept_r, _, at_r, _ = MC_grand_canonical_walk!(
-                    _gc_walk_length(params, mc_routine, at_r.list_num_par[1]), at_r, pot, emax;
+                    _gc_walk_length(params, mc_routine, at_r.list_num_par[1]), at_r, pot, omega_max;
                     z0V=z0V, species=params.species,
                     p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
                     step_size=params.step_size, n_max=params.n_max,
                     p_bias=mc_routine.p_bias, bias_radius=mc_routine.bias_radius,
-                    bias_grid=mc_routine.bias_grid)
+                    bias_grid=mc_routine.bias_grid, mu=mu)
                 if accept_r && mc_routine.galilean_steps > 0 && at_r.list_num_par[1] > 0
                     # Optional reflective decorrelation burst at the clone's
                     # current particle count; measure-preserving at fixed N, so
                     # the composition preserves the constrained reference
-                    MC_galilean_walk!(mc_routine.galilean_steps, at_r, pot, emax;
+                    # N is fixed inside a burst, so the Ω ceiling is the per-sector
+                    # energy ceiling Ω* + μN (an exact zero addend at mu = 0; the sum
+                    # can sit an ulp from the culled energy, and the re-anchor check
+                    # on Ω below remains the authoritative gate)
+                    MC_galilean_walk!(mc_routine.galilean_steps, at_r, pot,
+                                      omega_max + mu * at_r.list_num_par[1];
                                       step_size=mc_routine.galilean_step_size,
                                       n_refresh=mc_routine.galilean_n_refresh)
                 end
@@ -2870,7 +2960,7 @@ function nested_sampling_step!(liveset::AtomWalkers,
                     # bit-exact plateaus and admit sub-ceiling dust crossings
                     at_r.energy = interacting_energy(at_r.configuration, pot,
                         at_r.list_num_par, at_r.frozen) + at_r.energy_frozen_part
-                    accept_r = at_r.energy < emax
+                    accept_r = _grand_potential(at_r, mu) < omega_max
                 end
                 if accept_r
                     push!(ats, at_r)
@@ -2887,17 +2977,31 @@ function nested_sampling_step!(liveset::AtomWalkers,
         return iter, emax, num_particles, liveset, params, log_t
     end
     # Ordinary cull: strictly-below-ceiling parent selection, mirroring the
-    # lattice ideal-gas-referenced step
-    eligible = [k for k in 2:n_live if ats[k].energy < emax]
+    # lattice ideal-gas-referenced step. Two terminal shapes count a failed
+    # replacement without a walk, so the stall contract fires: a live set
+    # reduced to one walker by refill failures has no parent to clone (the
+    # shipped code drew a parent from an empty range); and, under a nonzero
+    # chemical potential, a live set tied in its entirety on one Ω (an atom of
+    # the ordering scalar's law, the empty configuration over a substrate),
+    # whose interior below carries at most a fraction of order 1/K of the
+    # atom's mass. Ordinary culls through such an atom would charge K/(K+1)
+    # per empty and misstate the mass below by up to a factor of order K; the
+    # mass is charged to the atom instead (the reduction's live tail). At the
+    # default mu = 0 the branch is off and the shipped walk is attempted.
+    if n_live < 2 || (n_tied == n_live && !iszero(mu))
+        params.fail_count += 1
+        return iter, missing, missing, liveset, params, log_t
+    end
+    eligible = [k for k in 2:n_live if _grand_potential(ats[k], mu) < omega_max]
     parent_idx = isempty(eligible) ? rand(2:n_live) : rand(eligible)
     to_walk = deepcopy(ats[parent_idx])
     accept, rate, to_walk, move_stats = MC_grand_canonical_walk!(
-        _gc_walk_length(params, mc_routine, to_walk.list_num_par[1]), to_walk, pot, emax;
+        _gc_walk_length(params, mc_routine, to_walk.list_num_par[1]), to_walk, pot, omega_max;
         z0V=z0V, species=params.species,
         p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
         step_size=params.step_size, n_max=params.n_max,
         p_bias=mc_routine.p_bias, bias_radius=mc_routine.bias_radius,
-        bias_grid=mc_routine.bias_grid)
+        bias_grid=mc_routine.bias_grid, mu=mu)
     if accept && mc_routine.galilean_steps > 0 && to_walk.list_num_par[1] > 0
         # Optional reflective decorrelation burst (see the refill branch).
         # Its counters accumulate immediately, unconditionally on the
@@ -2905,8 +3009,9 @@ function nested_sampling_step!(liveset::AtomWalkers,
         # and the delta ledger's fold-forward semantics keep the per-column
         # closure against the run totals exact. Refill-branch bursts stay
         # unaccumulated, per the plateau contract.
+        # per-sector energy ceiling Ω* + μN (see the refill branch)
         _, _, _, gal_stats = MC_galilean_walk!(mc_routine.galilean_steps,
-                          to_walk, pot, emax;
+                          to_walk, pot, omega_max + mu * to_walk.list_num_par[1];
                           step_size=mc_routine.galilean_step_size,
                           n_refresh=mc_routine.galilean_n_refresh)
         _accumulate_move_stats!(params, gal_stats)
@@ -2915,7 +3020,7 @@ function nested_sampling_step!(liveset::AtomWalkers,
         # Re-anchor the clone's energy from scratch (see the refill branch)
         to_walk.energy = interacting_energy(to_walk.configuration, pot,
             to_walk.list_num_par, to_walk.frozen) + to_walk.energy_frozen_part
-        accept = to_walk.energy < emax
+        accept = _grand_potential(to_walk, mu) < omega_max
     end
     if accept
         push!(ats, to_walk)
@@ -2966,16 +3071,20 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers,
     mc_routine.p_bias > 0 && throw(ArgumentError("the cavity-biased insertion channel is not surface-aware; use p_bias = 0 with LJSurfaceWalkers"))
     mc_routine.galilean_steps > 0 && throw(ArgumentError("the Galilean burst is not surface-aware; use galilean_steps = 0 with LJSurfaceWalkers"))
     z0V === nothing && (z0V = _atomistic_igref_z0V(liveset, params))
-    sort_by_energy!(liveset)
+    mu = params.chemical_potential
+    _sort_by_grand_potential!(liveset, mu)
     ats = liveset.walkers
     pot = liveset.potential
     surface = liveset.surface
     iter::Union{Missing,Int} = missing
+    # The record is (E, N) of the culled walker; the ceiling the step enforces is
+    # its Ω = E − μN (the energy at the default mu = 0)
     emax::Union{Missing,typeof(0.0u"eV")} = ats[1].energy
     num_particles::Union{Missing,Int} = ats[1].list_num_par[1]
+    omega_max::typeof(0.0u"eV") = _grand_potential(ats[1], mu)
     log_t::Union{Missing,Float64} = missing
     n_live = length(ats)
-    n_tied = _tie_block_length(ats)
+    n_tied = _tie_block_length(ats, mu)
     if (n_tied >= 2 || params.plateau_refill_target != 0) && n_tied < n_live
         # Plateau block: evict the worst tied walker without replacement
         # (Fowlie-Handley-Su), charging (n_live - 1)/n_live with the shrinking
@@ -2996,16 +3105,16 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers,
             while length(ats) < params.plateau_refill_target && refill_fails < refill_budget
                 at_r = deepcopy(rand(ats))
                 accept_r, _, at_r, _ = MC_grand_canonical_walk!(
-                    _gc_walk_length(params, mc_routine, at_r.list_num_par[1]), at_r, pot, emax, surface;
+                    _gc_walk_length(params, mc_routine, at_r.list_num_par[1]), at_r, pot, omega_max, surface;
                     z0V=z0V, species=params.species,
                     p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
-                    step_size=params.step_size, n_max=params.n_max)
+                    step_size=params.step_size, n_max=params.n_max, mu=mu)
                 if accept_r
                     # Re-anchor the clone's energy from scratch (see the
                     # AtomWalkers method), against the surface
                     at_r.energy = interacting_energy(at_r.configuration, pot,
                         at_r.list_num_par, at_r.frozen, surface.configuration) + at_r.energy_frozen_part
-                    accept_r = at_r.energy < emax
+                    accept_r = _grand_potential(at_r, mu) < omega_max
                 end
                 if accept_r
                     push!(ats, at_r)
@@ -3022,21 +3131,35 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers,
         return iter, emax, num_particles, liveset, params, log_t
     end
     # Ordinary cull: strictly-below-ceiling parent selection, mirroring the
-    # lattice ideal-gas-referenced step
-    eligible = [k for k in 2:n_live if ats[k].energy < emax]
+    # lattice ideal-gas-referenced step. Two terminal shapes count a failed
+    # replacement without a walk, so the stall contract fires: a live set
+    # reduced to one walker by refill failures has no parent to clone (the
+    # shipped code drew a parent from an empty range); and, under a nonzero
+    # chemical potential, a live set tied in its entirety on one Ω (an atom of
+    # the ordering scalar's law, the empty configuration over a substrate),
+    # whose interior below carries at most a fraction of order 1/K of the
+    # atom's mass. Ordinary culls through such an atom would charge K/(K+1)
+    # per empty and misstate the mass below by up to a factor of order K; the
+    # mass is charged to the atom instead (the reduction's live tail). At the
+    # default mu = 0 the branch is off and the shipped walk is attempted.
+    if n_live < 2 || (n_tied == n_live && !iszero(mu))
+        params.fail_count += 1
+        return iter, missing, missing, liveset, params, log_t
+    end
+    eligible = [k for k in 2:n_live if _grand_potential(ats[k], mu) < omega_max]
     parent_idx = isempty(eligible) ? rand(2:n_live) : rand(eligible)
     to_walk = deepcopy(ats[parent_idx])
     accept, rate, to_walk, move_stats = MC_grand_canonical_walk!(
-        _gc_walk_length(params, mc_routine, to_walk.list_num_par[1]), to_walk, pot, emax, surface;
+        _gc_walk_length(params, mc_routine, to_walk.list_num_par[1]), to_walk, pot, omega_max, surface;
         z0V=z0V, species=params.species,
         p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
-        step_size=params.step_size, n_max=params.n_max)
+        step_size=params.step_size, n_max=params.n_max, mu=mu)
     if accept
         # Re-anchor the clone's energy from scratch (see the AtomWalkers
         # method), against the surface
         to_walk.energy = interacting_energy(to_walk.configuration, pot,
             to_walk.list_num_par, to_walk.frozen, surface.configuration) + to_walk.energy_frozen_part
-        accept = to_walk.energy < emax
+        accept = _grand_potential(to_walk, mu) < omega_max
     end
     if accept
         push!(ats, to_walk)
@@ -3106,21 +3229,48 @@ end
                                          record_move_rates::Bool=false,
                                          initialize::Bool=true)
 
-Run the atomistic energy-sorted ideal-gas-referenced grand-canonical nested sampling
-loop. Walkers are initialized as exact i.i.d. draws from the continuous ideal-gas prior
-at the reference activity (particle counts Poisson(z0V), positions uniform in the cell),
-then the loop iterates: remove the highest-energy walker, record (E, N, log-compression),
-replace with a strictly-below-ceiling clone decorrelated by the grand-canonical kernel
-under the z0-weighted prior. Exact ceiling ties are handled by the plateau-aware
-eviction machinery. Neither the chemical potential nor the temperature enters the run.
+Run the atomistic ideal-gas-referenced grand-canonical nested sampling loop. Walkers
+are initialized as exact i.i.d. draws from the continuous ideal-gas prior at the
+reference activity (particle counts Poisson(z0V), positions uniform in the cell), then
+the loop iterates: remove the walker of highest ordering scalar Ω = E − μN (the energy
+at the default `chemical_potential = 0.0u"eV"`), record (E, N, log-compression) and,
+under a nonzero μ, Ω, replace with a strictly-below-ceiling clone decorrelated by the
+grand-canonical kernel under the z0-weighted prior. Exact ceiling ties are handled by
+the plateau-aware eviction machinery. The temperature never enters the run; the
+chemical potential enters only the ordering scalar, never the acceptance ratios or the
+reference measure, so the recorded (E, N) ledger reduces with
+`gc_thermodynamic_stats_ideal_ref` to any target (μ', T') exactly as an energy-sorted
+ledger does (see the `chemical_potential` field docstring of
+`AtomisticIGRefGCNSParameters`).
 
 Stall contract: when `params.fail_count` reaches `params.allowed_fail_count`, the driver
 warns once and, with `stop_on_stall=true` (the default), returns the partial ledger and
 the intact live set instead of consuming the remaining iteration budget on proposals
 that cannot be accepted. A fully degenerate live set (every configuration at exactly one
 energy, the zero-interaction limit) is a legitimate terminal state whose entire prior
-mass sits in the live set; the subsequent ledger reduction is then exact. With
-`stop_on_stall=false` the driver keeps the warn-and-continue contract of the sibling
+mass sits in the live set; the subsequent ledger reduction is then exact. Under a
+nonzero `chemical_potential` the descent ends either in the ground-state sector of that
+μ or at an atom of the ordering scalar's law, most commonly the empty configuration
+over a frozen substrate (every empty walker carries the identical Ω, its
+`energy_frozen_part`): once every walker sits on that atom no proposal can go strictly
+below it, the stall fires, and the returned record is complete with the atom's
+reference mass in the live tail. That stall does not certify that the ground-state
+sector of that μ was reached: when the region below the atom carries far less prior
+mass than the atom itself, the live set reaches the atom before any walker lands in
+that region, and its mass is charged to the atom: under a nonzero μ a live set tied in
+its entirety on one Ω never attempts a replacement walk (the interior below such an
+atom carries at most a fraction of order 1/K of its mass, which ordinary culls charging
+K/(K+1) per walker would misstate by up to a factor of order K), so the stall fires
+after `allowed_fail_count` counted failures. A plateau whose survivors all sit on
+such an atom cannot be refilled (isolated particles of a truncated pair potential share
+one exact energy, so at a nonzero μ every N = 1 walker sits on one Ω, and the refill
+clones the survivors below it, which are the empties): such a clone stays strictly below
+the plateau only by accepting no move, which the refill counts as a failure, whatever
+bound clusters of negligible prior mass also lie below; the refill exhausts its budget,
+the live set shrinks to the survivors, and a live set reduced to a single walker counts
+every subsequent replacement as failed rather than drawing a parent from an empty range,
+so the stall contract fires there too.
+With `stop_on_stall=false` the driver keeps the warn-and-continue contract of the sibling
 loops (the failure counter is reset, the step size is reset to
 `params.initial_step_size` following the canonical loop's contract, and the loop
 continues).
@@ -3165,16 +3315,22 @@ from scratch on entry (surface livesets also re-inherit the surface's
 loop consistent with the run's potential. Under a finite `n_max` the restored counts
 must respect the cap; a violating walker is rejected with an `ArgumentError`. The
 continuation contract the caller owns: the same `reference_activity`, potential,
-`species`, and `n_max` as the first block (none of these can be validated against a
-bare live set, and a mismatch produces a chimera ledger whose blocks sample different
-constrained reference measures); and a run stopped mid-plateau-eviction resumes with
-its refill target re-derived from the current, possibly reduced, live count (the
+`species`, `n_max`, and `chemical_potential` as the first block (none of these can be
+validated against a bare live set, and a mismatch produces a chimera ledger whose
+blocks sample different constrained reference measures, or, for μ, the same measure
+under two different ceilings); and a run stopped mid-plateau-eviction resumes the
+eviction with the refill target the parameters carry (`plateau_refill_target` is kept
+on entry when `initialize=false`; a driver that rebuilds its parameters from a
+checkpoint must restore it there), so the walkers evicted before the boundary are
+refilled once the plateau is exhausted; a continuation entered with a zero target
+re-derives it from the current, reduced live count and never refills them (the
 compression bookkeeping stays exact either way, since every charge uses the actual
 live count).
 
 # Returns
-- `df::DataFrame`: Columns `[:iter, :emax, :num_particles, :log_compression]`, plus the
-  acceptance columns when requested, plus one column per requested observable.
+- `df::DataFrame`: Columns `[:iter, :emax, :num_particles, :log_compression]`, plus
+  `:omega` (the culled walker's Ω = E − μN) under a nonzero `chemical_potential`, plus
+  the acceptance columns when requested, plus one column per requested observable.
   Zero-accept runs return the schema with no rows.
 - `liveset::AtomWalkers`: The final liveset (surviving walkers).
 - `params::AtomisticIGRefGCNSParameters`: Updated parameters.
@@ -3201,12 +3357,22 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
         _reanchor_igref_energies!(liveset)
     end
 
-    # Parameter-reuse hazards: runtime state never leaks between runs
-    params.plateau_refill_target = 0
+    # Parameter-reuse hazards: runtime state never leaks between runs. The
+    # plateau refill target is the one runtime field a CONTINUATION owns: a
+    # chunked driver that re-enters mid-eviction (initialize=false) must carry
+    # it, or the target is re-derived from the reduced live count and the
+    # walkers evicted before the boundary are never refilled (a permanent
+    # shrink of the live set with exact but coarser compression)
+    initialize && (params.plateau_refill_target = 0)
     params.fail_count = 0
     empty!(params.move_stats)
 
+    mu = params.chemical_potential
+    # A nonzero chemical potential adds the :omega column (the culled walker's
+    # Ω = E − μN, the ordering scalar); the default schema is unchanged
+    omega_active = !iszero(mu)
     df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[], log_compression=Float64[])
+    omega_active && (df[!, :omega] = Float64[])
     rate_cols = _move_rate_columns(mc_routine)
     if record_move_rates
         for name in rate_cols
@@ -3237,9 +3403,10 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
         end
 
         if observables !== nothing || dead_point_callback !== nothing
-            # Pre-sort with the step's own comparator (energy, descending)
-            # and hold the walker the step will cull; see `nested_sampling`.
-            sort_by_energy!(liveset)
+            # Pre-sort with the step's own comparator (Ω = E − μN, descending;
+            # the energy at mu = 0) and hold the walker the step will cull;
+            # see `nested_sampling`.
+            _sort_by_grand_potential!(liveset, mu)
             culled = liveset.walkers[1]
         end
 
@@ -3261,10 +3428,11 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
 
         if !(iter isa typeof(missing))
             if culled !== nothing
-                emax == culled.energy || error(
+                (emax == culled.energy && n_par == culled.list_num_par[1]) || error(
                     "Atomistic IG-ref GC-NS observable recording: dead-point/observable " *
-                    "pairing lost (step culled a walker with energy $emax, " *
-                    "but the pre-sorted worst walker had $(culled.energy))")
+                    "pairing lost (step culled a walker with energy $emax and " *
+                    "N = $n_par, but the pre-sorted worst walker had $(culled.energy) " *
+                    "and N = $(culled.list_num_par[1]))")
             end
             if record_move_rates
                 snap = _move_stats_snapshot(params, rate_cols)
@@ -3275,10 +3443,13 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
             else
                 rate_row = ()
             end
+            # The recorded Ω is formed by the step's own expression on the same
+            # values, so it equals the ceiling the step enforced bit-for-bit
+            omega_row = omega_active ? ((emax - mu * n_par).val,) : ()
             if observables === nothing
-                push!(df, (iter, emax.val, n_par, log_t, rate_row...))
+                push!(df, (iter, emax.val, n_par, log_t, omega_row..., rate_row...))
             else
-                push!(df, (iter, emax.val, n_par, log_t, rate_row...,
+                push!(df, (iter, emax.val, n_par, log_t, omega_row..., rate_row...,
                            (Float64(f(culled.configuration)) for (_, f) in observables)...))
             end
             dead_point_callback === nothing || dead_point_callback(iter, culled)

@@ -1331,10 +1331,12 @@ gc_delete_acceptance_ratio(z0V::Float64, n::Int, p_insert::Float64, p_delete::Fl
 """
     MC_grand_canonical_walk!(n_steps::Int, at::AtomWalker{1}, pot::SingleComponentPotential{Pairwise}, emax::typeof(0.0u"eV");
                              z0V::Float64, species, p_move::Float64=0.5, p_insert::Float64=0.25,
-                             step_size::Float64=0.5, n_max::Int=typemax(Int))
+                             step_size::Float64=0.5, n_max::Int=typemax(Int),
+                             mu::typeof(0.0u"eV")=0.0u"eV")
 
 Perform a grand-canonical Monte Carlo walk on a continuous-space `AtomWalker{1}` below a
-nested-sampling energy ceiling: single-atom displacements mixed with uniform-in-cell
+nested-sampling ceiling on the ordering scalar `E - mu*N` (the energy ceiling at the
+default `mu = 0`): single-atom displacements mixed with uniform-in-cell
 insertions and uniform-among-particles deletions, under the Metropolis corrections that
 preserve the activity-z0-weighted reference measure. The continuous counterpart
 of the lattice `MC_grand_canonical_walk!` above; the site-counting acceptance ratios of the
@@ -1349,8 +1351,8 @@ draws one particle index and the three walk displacements; an insertion draws th
 uniforms (x, y, z) plus the Metropolis uniform only when its ratio is below one; a deletion
 draws one particle index plus the conditional Metropolis uniform. Guard skips (a
 displacement or deletion proposed at N = 0, an insertion proposed above `n_max`) consume
-only the channel draw and are not counted as attempts. The energy ceiling is checked before
-the Metropolis ratio, so ceiling rejections draw no Metropolis uniform. Energies are updated
+only the channel draw and are not counted as attempts. The ceiling is checked before the
+Metropolis ratio, so ceiling rejections draw no Metropolis uniform. Energies are updated
 incrementally through `single_site_energy` on the same audited path the displacement walks
 use, with insertions evaluated by insert-then-revert.
 
@@ -1358,7 +1360,8 @@ use, with insertions evaluated by insert-then-revert.
 - `n_steps::Int`: The number of Monte Carlo steps to perform.
 - `at::AtomWalker{1}`: The walker to evolve; a single unfrozen component.
 - `pot::SingleComponentPotential{Pairwise}`: The pairwise potential.
-- `emax::typeof(0.0u"eV")`: The nested-sampling energy ceiling (strict-below acceptance).
+- `emax::typeof(0.0u"eV")`: The nested-sampling ceiling on the ordering scalar `E - mu*N`
+  (strict-below acceptance); the energy ceiling at the default `mu = 0`.
 - `z0V::Float64`: Dimensionless product of the reference activity and the cell volume.
 - `species`: Chemical identity (a `Symbol` or `ChemicalSpecies`) of inserted particles;
   passed explicitly because the configuration may be empty.
@@ -1368,6 +1371,10 @@ use, with insertions evaluated by insert-then-revert.
 - `n_max::Int=typemax(Int)`: Upper bound on the particle count, for bounded constructions
   only. A finite cap truncates the unbounded particle-number support of the reference
   measure and biases the evidence; production callers must leave it inactive.
+- `mu::typeof(0.0u"eV")=0.0u"eV"`: Chemical potential of the ordering scalar. It enters
+  only the ceiling indicator, evaluated on the proposal's own particle count (`n`,
+  `n + 1`, `n - 1` per channel), never the acceptance ratios; at the default the added
+  term is an exact zero and the random-number stream is unchanged.
 
 # Returns
 - `accept_this_walker::Bool`: Whether at least one move was accepted.
@@ -1389,7 +1396,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                   n_max::Int=typemax(Int),
                                   p_bias::Float64=0.0,
                                   bias_radius::Float64=0.0,
-                                  bias_grid::Int=0)
+                                  bias_grid::Int=0,
+                                  mu::typeof(0.0u"eV")=0.0u"eV")
     if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
         throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
     end
@@ -1444,7 +1452,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             config.position[i_at] = pos
             postwalk_energy = single_site_energy(i_at, config, pot, at.list_num_par)
             proposed_energy = at.energy + (postwalk_energy - prewalk_energy)
-            if proposed_energy >= emax
+            if proposed_energy - mu * n >= emax
                 config.position[i_at] = orig_pos
             else
                 at.energy = proposed_energy
@@ -1481,7 +1489,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             e_site = single_site_energy(n + 1, config, pot, at.list_num_par)
             proposed_energy = at.energy + e_site
             accept = true
-            if proposed_energy >= emax
+            if proposed_energy - mu * (n + 1) >= emax
                 accept = false
             else
                 if p_bias > 0.0
@@ -1510,7 +1518,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             e_site = single_site_energy(i_at, config, pot, at.list_num_par)
             proposed_energy = at.energy - e_site
             accept = true
-            if proposed_energy >= emax
+            if proposed_energy - mu * (n - 1) >= emax
                 accept = false
             else
                 if p_bias > 0.0
@@ -1558,7 +1566,7 @@ end
                              surface::AtomWalker{CS};
                              z0V::Float64, species, p_move::Float64=0.5,
                              p_insert::Float64=0.25, step_size::Float64=0.5,
-                             n_max::Int=typemax(Int))
+                             n_max::Int=typemax(Int), mu::typeof(0.0u"eV")=0.0u"eV")
 
 Surface-aware method of the continuous grand-canonical kernel: identical moves,
 acceptance ratios, and random-number stream contract as the plain method above, with
@@ -1570,7 +1578,9 @@ automatically. Insertions propose uniformly in the FULL cell, keeping the librar
 reference-measure convention: the substrate region is excluded by the energy ceiling,
 never by the proposal support, so `z0V` folds the full cell volume. The walker's
 `energy` carries `energy_frozen_part` as a constant offset, exactly as in the
-surface method of `MC_random_walk!`; incremental updates are unaffected by it.
+surface method of `MC_random_walk!`; incremental updates are unaffected by it. The
+`mu` keyword has the plain method's meaning: `emax` is the ceiling on `E - mu*N`,
+evaluated on the proposal's own particle count, the energy ceiling at the default.
 
 The cavity-biased insertion channel and the Galilean burst are not surface-aware, so
 this method takes no `p_bias`/`bias_radius`/`bias_grid` kwargs — passing one is a loud
@@ -1594,7 +1604,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                   p_move::Float64=0.5,
                                   p_insert::Float64=0.25,
                                   step_size::Float64=0.5,
-                                  n_max::Int=typemax(Int)
+                                  n_max::Int=typemax(Int),
+                                  mu::typeof(0.0u"eV")=0.0u"eV"
                                   ) where {C, CS, P<:SingleComponentPotential{Pairwise}}
     if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
         throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
@@ -1645,7 +1656,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             config.position[i_at] = pos
             postwalk_energy = single_site_energy(i_at, config, cps, at.list_num_par, surface.configuration)
             proposed_energy = at.energy + (postwalk_energy - prewalk_energy)
-            if proposed_energy >= emax
+            if proposed_energy - mu * n >= emax
                 config.position[i_at] = orig_pos
             else
                 at.energy = proposed_energy
@@ -1662,7 +1673,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             e_site = single_site_energy(n + 1, config, cps, at.list_num_par, surface.configuration)
             proposed_energy = at.energy + e_site
             accept = true
-            if proposed_energy >= emax
+            if proposed_energy - mu * (n + 1) >= emax
                 accept = false
             else
                 ratio = gc_insert_acceptance_ratio(z0V, n, p_insert, p_delete)
@@ -1686,7 +1697,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             e_site = single_site_energy(i_at, config, cps, at.list_num_par, surface.configuration)
             proposed_energy = at.energy - e_site
             accept = true
-            if proposed_energy >= emax
+            if proposed_energy - mu * (n - 1) >= emax
                 accept = false
             else
                 ratio = gc_delete_acceptance_ratio(z0V, n, p_insert, p_delete)

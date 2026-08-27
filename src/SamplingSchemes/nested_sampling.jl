@@ -1215,6 +1215,66 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
 end
 
 """
+    _gcns_should_stop(liveset, consecutive_fails, max_consecutive_fails,
+                      degeneracy_tol, step, df, label) -> Bool
+
+Termination tests shared by the two grand-canonical nested sampling drivers.
+
+Neither is a convergence criterion — both detect a run that cannot make further
+progress, so that it stops rather than spending its remaining step budget
+producing nothing. Because a failed step records no row, stopping cannot change
+the samples a run returns; it only changes how long it takes to return them.
+
+`(a)` **Live-set degeneracy** (opt-in via `degeneracy_tol`): every walker sits
+at the same energy, so no strictly-lower cull exists and no further attempt can
+succeed. `(b)` **Stall**: `max_consecutive_fails` consecutive steps recorded
+nothing.
+
+In the prototype scripts these two together caught collapsed dilute-μ runs that
+had burned roughly 4700 failed attempts past the point of no return.
+"""
+function _gcns_should_stop(liveset::AbstractLiveSet,
+                           consecutive_fails::Int,
+                           max_consecutive_fails::Int,
+                           degeneracy_tol::Union{Nothing,Real},
+                           step::Int,
+                           df::DataFrame,
+                           label::AbstractString)
+    if degeneracy_tol !== nothing
+        es = [w.energy.val for w in liveset.walkers]
+        spread = maximum(es) - minimum(es)
+        if spread < degeneracy_tol
+            @info "$label: live set energy-degenerate (spread = $spread) after $step steps " *
+                  "($(isempty(df) ? 0 : maximum(df.iter)) accepted) — stopping."
+            return true
+        end
+    end
+    if consecutive_fails >= max_consecutive_fails
+        @info "$label: no accepted walk in $max_consecutive_fails consecutive attempts " *
+              "after $step steps ($(isempty(df) ? 0 : maximum(df.iter)) accepted) — stopping."
+        return true
+    end
+    return false
+end
+
+"""
+    _gcns_final_flush(df, liveset, save_strategy)
+
+Write the DataFrame and live set once more after the sampling loop, so a run
+that stops early — or simply ends between save intervals — never leaves a
+truncated file behind. `write_df` is unconditional; the live set goes through
+`write_ls_every_n` with `step = n_snap` so that the correct method is chosen for
+whichever `DataSavingStrategy` is in use.
+"""
+function _gcns_final_flush(df::DataFrame,
+                           liveset::AbstractLiveSet,
+                           save_strategy::DataSavingStrategy)
+    write_df(save_strategy.df_filename, df)
+    write_ls_every_n(liveset, save_strategy.n_snap, save_strategy)
+    return nothing
+end
+
+"""
     grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
                                     gc_params::GrandCanonicalNestedSamplingParameters,
                                     n_steps::Int64,
@@ -1233,6 +1293,25 @@ highest-Ω walker, record (Ω, E, N), replace with a decorrelated clone.
 - `mc_routine::MCGrandCanonicalMoves`: The GC move routine.
 - `save_strategy::DataSavingStrategy`: Strategy for periodic output.
 
+# Termination beyond `n_steps`
+- `max_consecutive_fails::Int=1000`: stop after this many consecutive steps in
+  which the MC move failed and nothing was recorded. Such a run has stopped
+  producing samples entirely, so stopping cannot change what it returns — only
+  how long it takes. The default sits far above normal operation: the
+  `allowed_fail_count` warning fires routinely on small or nearly-saturated
+  lattices and is not by itself a sign of trouble. Pass `typemax(Int)` for an
+  unbounded loop.
+- `degeneracy_tol::Union{Nothing,Real}=nothing`: **opt-in.** When set, stop once
+  the live-set energy spread falls below it — every walker at the same energy
+  means no strictly-lower cull exists and no further attempt can succeed. Off by
+  default because a lattice model with a discrete spectrum can have a genuinely
+  degenerate live set while still making progress.
+
+Both tests come from the prototype scripts, where collapsed dilute-μ runs burned
+roughly 4700 failed attempts past the point of no return before anyone noticed.
+Whichever way the loop exits, the DataFrame and live set are flushed once more on
+the way out, so an early stop never leaves a truncated file on disk.
+
 # Returns
 - `df::DataFrame`: Columns `[:iter, :omega, :energy, :num_particles]`.
 - `liveset::LatticeGasWalkers`: The final liveset (surviving walkers).
@@ -1242,7 +1321,9 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
                                          gc_params::GrandCanonicalNestedSamplingParameters,
                                          n_steps::Int64,
                                          mc_routine::MCGrandCanonicalMoves,
-                                         save_strategy::DataSavingStrategy)
+                                         save_strategy::DataSavingStrategy;
+                                         max_consecutive_fails::Int=1000,
+                                         degeneracy_tol::Union{Nothing,Real}=nothing)
     # Initialize walkers with random microstates
     _init_gc_walkers!(liveset, gc_params)
 
@@ -1258,12 +1339,18 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
 
     df = DataFrame(iter=Int[], omega=Float64[], energy=Float64[], num_particles=Int[])
 
+    consecutive_fails = 0
+
     for i in 1:n_steps
         print_info = i % save_strategy.n_info == 0
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
 
         iter, omega, energy, n_par, liveset, gc_params = nested_sampling_step!(
             liveset, gc_params, mc_routine; ns_iteration=i)
+
+        # Tracked separately from gc_params.fail_count, which is reset to zero
+        # every time the warning below fires and so never measures a streak.
+        consecutive_fails = iter isa typeof(missing) ? consecutive_fails + 1 : 0
 
         @debug "GC-NS step $i, iter: $iter, omega: $omega, energy: $energy, N: $n_par"
 
@@ -1284,7 +1371,14 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
 
         write_df_every_n(df, i, save_strategy)
         write_ls_every_n(liveset, i, save_strategy)
+
+        if _gcns_should_stop(liveset, consecutive_fails, max_consecutive_fails,
+                             degeneracy_tol, i, df, "GC-NS")
+            break
+        end
     end
+
+    _gcns_final_flush(df, liveset, save_strategy)
 
     return df, liveset, gc_params
 end
@@ -1526,6 +1620,25 @@ extract them from the returned liveset.
 - `mc_routine::MCGrandCanonicalMoves`: The GC move routine (reused from the Ω-sorted construction).
 - `save_strategy::DataSavingStrategy`: Strategy for periodic output.
 
+# Termination beyond `n_steps`
+- `max_consecutive_fails::Int=1000`: stop after this many consecutive steps in
+  which the MC move failed and nothing was recorded. Such a run has stopped
+  producing samples entirely, so stopping cannot change what it returns — only
+  how long it takes. The default sits far above normal operation: the
+  `allowed_fail_count` warning fires routinely on small or nearly-saturated
+  lattices and is not by itself a sign of trouble. Pass `typemax(Int)` for an
+  unbounded loop.
+- `degeneracy_tol::Union{Nothing,Real}=nothing`: **opt-in.** When set, stop once
+  the live-set energy spread falls below it — every walker at the same energy
+  means no strictly-lower cull exists and no further attempt can succeed. Off by
+  default because a lattice model with a discrete spectrum can have a genuinely
+  degenerate live set while still making progress.
+
+Both tests come from the prototype scripts, where collapsed dilute-μ runs burned
+roughly 4700 failed attempts past the point of no return before anyone noticed.
+Whichever way the loop exits, the DataFrame and live set are flushed once more on
+the way out, so an early stop never leaves a truncated file on disk.
+
 # Returns
 - `df::DataFrame`: Columns `[:iter, :emax, :num_particles]`.
 - `liveset::LatticeGasWalkers`: The final liveset (surviving walkers).
@@ -1535,7 +1648,9 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
                                               params::IdealGasReferencedGCNSParameters,
                                               n_steps::Int64,
                                               mc_routine::MCGrandCanonicalMoves,
-                                              save_strategy::DataSavingStrategy)
+                                              save_strategy::DataSavingStrategy;
+                                              max_consecutive_fails::Int=1000,
+                                              degeneracy_tol::Union{Nothing,Real}=nothing)
     # Initialize walkers as i.i.d. draws from the Bernoulli(z0/(1+z0)) prior
     _init_ideal_gas_ref_walkers!(liveset, params)
 
@@ -1551,12 +1666,18 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
 
     df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[])
 
+    consecutive_fails = 0
+
     for i in 1:n_steps
         print_info = i % save_strategy.n_info == 0
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
 
         iter, emax, n_par, liveset, params = nested_sampling_step!(
             liveset, params, mc_routine; ns_iteration=i)
+
+        # See the note in grand_canonical_nested_sampling: params.fail_count is
+        # reset by the warning below and never measures a streak.
+        consecutive_fails = iter isa typeof(missing) ? consecutive_fails + 1 : 0
 
         @debug "IG-ref GC-NS step $i, iter: $iter, emax: $emax, N: $n_par"
 
@@ -1577,7 +1698,14 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
 
         write_df_every_n(df, i, save_strategy)
         write_ls_every_n(liveset, i, save_strategy)
+
+        if _gcns_should_stop(liveset, consecutive_fails, max_consecutive_fails,
+                             degeneracy_tol, i, df, "IG-ref GC-NS")
+            break
+        end
     end
+
+    _gcns_final_flush(df, liveset, save_strategy)
 
     return df, liveset, params
 end

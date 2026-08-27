@@ -426,21 +426,29 @@
         # sign test also accepts a value wrong by any factor.
         #
         # Both are now compared numerically against the exact enumeration.
-        # rtol=0.5 rather than the 0.3 used for the first moments above:
-        # these are second moments and converge more slowly. It is a bound
-        # that can be justified, not a tight one — the run is seeded, so the
-        # observed errors reported below are reproducible and a later commit
-        # can tighten against them rather than by guessing.
+        # rtol=0.15 is measured, not guessed: with the chain pinned by
+        # random_seed the observed errors are reproducible, and they are 5.0%
+        # for C_E and 6.4% for C_Ω (logged below). 0.15 leaves roughly 3x and
+        # 2.3x headroom — loose enough that a legitimate change to the sampler
+        # does not trip it, tight enough to catch an estimator that has lost a
+        # term or a factor. The first moments keep rtol=0.3 pending the same
+        # treatment; their errors are logged below for that purpose.
         #
         # This is what pins MERGE_PLAN §1.3(a) — that C_Ω and C_E are
         # different quantities — in a test rather than in a docstring.
         @test isfinite(Cv_ns[1])
         @test isfinite(r.c_omega[1])
         @test Cv_ns[1] > 0
-        @test Cv_ns[1] ≈ exact_Cv rtol=0.5
-        @test r.c_omega[1] ≈ exact_c_omega rtol=0.5
+        @test Cv_ns[1] ≈ exact_Cv rtol=0.15
+        @test r.c_omega[1] ≈ exact_c_omega rtol=0.15
 
-        @info "G3 heat-capacity accuracy (seeded, so reproducible)" rel_err_C_E=abs(Cv_ns[1] - exact_Cv) / abs(exact_Cv) rel_err_C_omega=abs(r.c_omega[1] - exact_c_omega) / abs(exact_c_omega) ratio_C_E_to_C_omega=exact_Cv / exact_c_omega
+        # And that the difference is not a subtlety. At this μ the exact
+        # enumeration puts C_E at 2.90x C_Ω, so quoting one where the other is
+        # meant is a factor-of-three error, not a rounding one. Asserted on the
+        # exact values, which carry no sampling noise at all.
+        @test exact_Cv / exact_c_omega > 2.0
+
+        @info "G3 accuracy vs exact enumeration (seeded, so reproducible)" rel_err_mean_E=abs(mean_E_ns[1] - exact_mean_E) / abs(exact_mean_E) rel_err_mean_N=abs(mean_N_ns[1] - exact_mean_N) / abs(exact_mean_N) rel_err_C_E=abs(Cv_ns[1] - exact_Cv) / abs(exact_Cv) rel_err_C_omega=abs(r.c_omega[1] - exact_c_omega) / abs(exact_c_omega) ratio_C_E_to_C_omega=exact_Cv / exact_c_omega
  
         rm("test_val.csv", force=true)
         rm("test_val.traj", force=true)

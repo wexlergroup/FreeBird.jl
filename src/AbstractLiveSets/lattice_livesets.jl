@@ -81,7 +81,15 @@ function print_lattice_walker_in_walkers(io::IO, walker::LatticeWalker{C}) where
             println(io, "          ", component)
         end
     else
-        AbstractWalkers.print_lattice(io, walker.configuration, walker.configuration.occupations)
+        # This branch was unreachable until AtomicLattice became a usable walker
+        # configuration, and it called `AbstractWalkers.print_lattice`, which
+        # does not exist anywhere in the package — so the moment it became
+        # reachable it would have thrown UndefVarError. MERGE_PLAN C4 flagged
+        # exactly this, on the grounds that W11 would give AtomicLattice an
+        # `occupations` field and make the dereference start resolving.
+        print(io, "      ")
+        AbstractWalkers.print_occupation(io, walker.configuration)
+        println(io)
     end
 end
 

@@ -297,6 +297,79 @@
             end
         end
 
+        @testset "compute_neighbors_banded function tests" begin
+
+            # compute_neighbors_banded is the AtomicLattice neighbour builder. It
+            # used to be a second method named `compute_neighbors` with identical
+            # argument types, which made the package unprecompilable on Julia 1.12
+            # ("Method overwriting is not permitted during Module precompilation").
+            #
+            # These tests pin the claim that motivated renaming rather than
+            # deleting it: for cutoff radii in increasing order — the only kind
+            # `find_n_cutoff_radii` produces, and the only kind either call site
+            # passes — banded assignment and `compute_neighbors`' first-cutoff-wins
+            # assignment partition the pairs identically. If that holds, the two
+            # implementations should be collapsed into one (MERGE_PLAN W10).
+
+            lattice_vectors = [
+                2.0 0.0 0.0;
+                0.0 2.0 0.0;
+                0.0 0.0 2.0
+            ]
+
+            @testset "agrees with compute_neighbors, non-periodic" begin
+                positions = [
+                    0.0 0.0 0.0;
+                    1.0 0.0 0.0;
+                    0.0 1.0 0.0;
+                    1.0 1.0 0.0;
+                    0.0 0.0 1.0;
+                    1.0 0.0 1.0;
+                    0.0 1.0 1.0;
+                    1.0 1.0 1.0
+                    ]
+
+                periodicity = (false, false, false)
+                cutoff_radii = [1.1, 1.8]
+
+                banded = AbstractWalkers.compute_neighbors_banded(lattice_vectors, positions, periodicity, cutoff_radii)
+                plain  = AbstractWalkers.compute_neighbors(lattice_vectors, positions, periodicity, cutoff_radii)
+
+                @test length(banded) == length(plain)
+                for i in eachindex(plain)
+                    @test sort.(banded[i]) == sort.(plain[i])
+                end
+
+                # and independently, against the same expectations the
+                # compute_neighbors tests above assert
+                @test sort(banded[1][1]) == [2, 3, 5]
+                @test sort(banded[1][2]) == [4, 6, 7, 8]
+                @test sort(banded[8][1]) == [4, 6, 7]
+                @test sort(banded[8][2]) == [1, 2, 3, 5]
+            end
+
+            @testset "agrees with compute_neighbors, fully periodic" begin
+                positions = [
+                    0.0 0.0 0.0;
+                    1.0 1.0 0.0;
+                    1.0 0.0 1.0;
+                    0.0 1.0 1.0;
+                    1.0 1.0 1.0
+                    ]
+
+                periodicity = (true, true, true)
+                cutoff_radii = [1.1, 1.5, 1.8]
+
+                banded = AbstractWalkers.compute_neighbors_banded(lattice_vectors, positions, periodicity, cutoff_radii)
+                plain  = AbstractWalkers.compute_neighbors(lattice_vectors, positions, periodicity, cutoff_radii)
+
+                @test length(banded) == length(plain)
+                for i in eachindex(plain)
+                    @test sort.(banded[i]) == sort.(plain[i])
+                end
+            end
+        end
+
 
         @testset "lattice_positions function tests" begin  
             @testset "Simple cubic lattice" begin
@@ -1092,4 +1165,105 @@
         end
     end
     
+
+    @testset "AtomicLattice basics" begin
+        # feature/AtomicLattice shipped with no tests at all; this is the first.
+        # Construction reaches ASE through ASEconvert, so a failure here is
+        # either the type or the Python environment, not the assertions.
+        lat = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"]
+        )
+
+        @test lat isa AtomicLattice{1,SquareLattice}
+        @test num_lattice_components(lat) == 1
+
+        # num_sites counts adsorption sites, not the substrate grid. The
+        # generic AbstractLattice method would reach for `basis`, which this
+        # type does not have.
+        @test num_sites(lat) == length(lat.all_sites)
+        @test num_sites(lat) > 0
+        @test !hasproperty(lat, :basis)
+
+        # The point of the shim: every LatticeWalker(::AtomicLattice) was a
+        # MethodError until num_lattice_components had a method here, because
+        # LatticeWalker's inner constructor calls it to fix its own type
+        # parameter.
+        w = LatticeWalker(lat)
+        @test w isa LatticeWalker{1}
+        @test w.configuration === lat
+        @test w.iter == 0
+        @test w.energy == 0.0u"eV"
+    end
+
+    @testset "AtomicLattice occupancy is index-keyed" begin
+        lat = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"]
+        )
+        n_ase_adsorbates(l) =
+            length(FreeBird.AbstractWalkers.get_adsorbate_indicies(l.ase_lattice))
+
+        # Occupancy is a mask over all_sites, not an ordering of it.
+        @test length(lat.occupations) == length(lat.all_sites)
+        @test sum(lat.occupations) == round(Int, 0.25 * length(lat.all_sites))
+        @test coverage(lat) ≈ sum(lat.occupations) / length(lat.all_sites)
+
+        # The site list is geometry: every site distinct, so nothing has been
+        # overwritten. The old walk assigned adsorbate positions into all_sites
+        # and would eventually violate this.
+        @test length(unique(lat.all_sites)) == length(lat.all_sites)
+
+        # The ASE frame is a cache, and starts in agreement.
+        @test lat.ase_dirty == false
+        @test n_ase_adsorbates(lat) == sum(lat.occupations)
+
+        # A move changes occupancy, conserves the adsorbate count, leaves the
+        # geometry alone, and flags the cache rather than paying a Python round
+        # trip on every proposal.
+        before = copy(lat.occupations)
+        sites_before = copy(lat.all_sites)
+        lattice_random_walk!(lat)
+        @test sum(lat.occupations) == sum(before)
+        @test count(lat.occupations .!= before) == 2   # one vacated, one filled
+        @test lat.all_sites == sites_before
+        @test lat.ase_dirty == true
+
+        # ... and the cache is brought back into agreement on demand.
+        sync_ase_lattice!(lat)
+        @test lat.ase_dirty == false
+        @test n_ase_adsorbates(lat) == sum(lat.occupations)
+
+        # Syncing twice is a no-op rather than a second round of adsorbates.
+        sync_ase_lattice!(lat)
+        @test n_ase_adsorbates(lat) == sum(lat.occupations)
+
+        # MERGE_PLAN C4. The show path for a walker holding a non-MLattice
+        # configuration called `AbstractWalkers.print_lattice`, which does not
+        # exist anywhere in the package. It was unreachable while AtomicLattice
+        # could not be a walker configuration, and became reachable the moment
+        # it could — so displaying a walker or a live set would have thrown
+        # UndefVarError. Both show paths are exercised here.
+        w = LatticeWalker(lat)
+        @test !isempty(sprint(show, w))
+        @test !isempty(sprint(show, [w]))
+
+        ham_show = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+        ls_show = LatticeGasWalkers([w], ham_show; assign_energy=false)
+        out = sprint(show, ls_show)
+        @test !isempty(out)
+        @test occursin("occupations", out)
+    end
 end

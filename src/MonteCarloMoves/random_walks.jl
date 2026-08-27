@@ -539,6 +539,47 @@ function lattice_random_walk!(lattice::SLattice)
 end
 
 """
+    lattice_random_walk!(lattice::AtomicLattice)
+
+Move one adsorbate to a randomly chosen empty site. Occupancy-conserving.
+
+The previous implementation is worth recording, because its failure was quiet.
+It picked an adsorbate by ASE index, wrote a new position into the ASE frame,
+and then **assigned the adsorbate's old position into `all_sites[hop_to]`** —
+overwriting an entry of the *site geometry* as though `all_sites` were a list of
+free positions. It also drew `hop_to` from all sites including occupied ones, so
+at t = 0 it could "move" an adsorbate onto an already-occupied site. Both bugs
+are invisible in an energy trace: the lattice quietly stops being the lattice it
+was constructed as.
+
+Neither is expressible now. Occupancy is a mask over `all_sites`, the geometry
+is never written, and the destination is drawn from the empty sites only. The
+ASE frame is left stale and flagged rather than updated — see
+[`sync_ase_lattice!`](@ref) — which also removes the Python round trip this move
+used to make on every proposal.
+
+# Arguments
+- `lattice::AtomicLattice`: The lattice to move an adsorbate on. Mutated.
+
+# Returns
+- `lattice::AtomicLattice`: The same lattice, after the move. Returned unchanged
+  if there is nothing to move or nowhere to move it.
+"""
+function lattice_random_walk!(lattice::AtomicLattice)
+    occupied = findall(lattice.occupations)
+    empty_sites = findall(.!lattice.occupations)
+    (isempty(occupied) || isempty(empty_sites)) && return lattice
+
+    hop_from = rand(occupied)
+    hop_to = rand(empty_sites)
+    lattice.occupations[hop_from] = false
+    lattice.occupations[hop_to] = true
+    lattice.ase_dirty = true
+
+    return lattice
+end
+
+"""
     lattice_random_walk!(lattice::MLattice{C,G}) where {C,G}
 
 Perform a Monte Carlo random walk on the multi-component lattice system.
@@ -572,6 +613,8 @@ function lattice_random_walk!(lattice::MLattice{C,G}) where {C,G}
     # case 3: both sites unoccupied, do nothing
     return lattice
 end
+
+
 
 """
     swap_empty_occupied_sites!(lattice::MLattice{C,G}, hop_from::Int, hop_to::Int) where {C,G}

@@ -14,6 +14,29 @@
         @test all(result .> 0)        # All positive
     end
 
+    @testset "log_ωᵢ function tests" begin
+        # Agrees with log.(ωᵢ(...)) everywhere ωᵢ has not underflowed
+        @test log_ωᵢ([1], 4) ≈ log.(ωᵢ([1], 4))
+        @test log_ωᵢ([0], 4) ≈ [log(1/5)]
+        @test log_ωᵢ(collect(0:200), 4) ≈ log.(ωᵢ(collect(0:200), 4))
+        @test log_ωᵢ([1, 2, 3], 4; ω0=2.5) ≈ log.(ωᵢ([1, 2, 3], 4; ω0=2.5))
+        @test log_ωᵢ([5], 7; n_cull=3) ≈ log.(ωᵢ([5], 7; n_cull=3))
+
+        # ... and stays finite where it has. This is the whole point: ωᵢ is a
+        # factor below one raised to the iteration number, so it reaches exactly
+        # 0.0 and log() of it is -Inf, silently dropping the deepest samples
+        # from any log-sum-exp.
+        @test ωᵢ([100_000], 4)[1] == 0.0
+        @test isinf(log(ωᵢ([100_000], 4)[1]))
+        @test isfinite(log_ωᵢ([100_000], 4)[1])
+        @test log_ωᵢ([100_000], 4)[1] ≈ log(1/5) + 100_000 * log(4/5)
+
+        # Same contracts as ωᵢ
+        @test log_ωᵢ(Int[], 4) == Float64[]
+        @test_throws MethodError log_ωᵢ([1.5], 4)
+        @test all(diff(log_ωᵢ(collect(1:5), 4)) .< 0)  # Monotonic decrease
+    end
+
     @testset "Partition function and internal energy tests" begin
         # Basic functionality
         @test partition_function(1.0, [1.0], [0.0]) ≈ 1.0

@@ -10,7 +10,7 @@ using CSV, Arrow
 using Unitful
 
 export read_output
-export ωᵢ, partition_function, internal_energy, cv
+export ωᵢ, log_ωᵢ, partition_function, internal_energy, cv
 export gc_thermodynamic_stats
 export gc_thermodynamic_stats_fixed_N
 export microcanonical_entropy, caloric_derivatives, inflection_transitions
@@ -57,6 +57,40 @@ and \$i\$ is the iteration number.
 function ωᵢ(iters::AbstractVector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
     ωi = ω0 * (n_cull/(n_walkers+n_cull)) * (n_walkers/(n_walkers+n_cull)).^iters
     return ωi
+end
+
+"""
+    log_ωᵢ(iters::Vector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
+
+Log of [`ωᵢ`](@ref), built directly in log space:
+
+```math
+\\log \\omega_i = \\log \\omega_0 + \\log\\frac{C}{K+C} + i \\log\\frac{K}{K+C}
+```
+
+Use this rather than `log.(ωᵢ(...))` anywhere the weights feed a log-sum-exp.
+`ωᵢ` is a product of a factor slightly below one raised to the iteration
+number, so it underflows to exactly `0.0` for `i ≳ 745·K/n_cull` — and
+`log(0.0)` is `-Inf`, which silently drops those samples from the sum. They are
+the *deepest*, lowest-energy samples, so what is lost is precisely the part that
+dominates at low temperature. The scale is not exotic: at `K = 100` walkers with
+`n_cull = 1` it starts at about 74,500 iterations.
+
+This function is exact for any iteration count, and agrees with `log.(ωᵢ(...))`
+everywhere `ωᵢ` has not underflowed.
+
+# Arguments
+- `iters::Vector{Int}`: The iteration numbers.
+- `n_walkers::Int`: The number of walkers, \$K\$.
+- `n_cull::Int`: The number of culled walkers, \$C\$. Default is 1.
+- `ω0::Float64`: The initial \$\\omega\$ factor. Default is 1.0.
+
+# Returns
+- A vector of \$\\log \\omega\$ factors.
+"""
+function log_ωᵢ(iters::AbstractVector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
+    return (log(ω0) + log(n_cull / (n_walkers + n_cull))) .+
+           iters .* log(n_walkers / (n_walkers + n_cull))
 end
 
 """
@@ -249,7 +283,28 @@ function gc_thermodynamic_stats(β::Float64,
                                  numbers::Vector{Int},
                                  μ::Float64;
                                  kb::Float64=8.617333262e-5)
-    n = length(ωi)
+    # Public signature preserved. Callers holding linear weights get exactly the
+    # behaviour they always did, underflow included — there is nothing to
+    # recover once a weight has already reached 0.0. The DataFrame methods build
+    # their weights with `log_ωᵢ` instead and call `_gc_stats_logw` directly.
+    return _gc_stats_logw(β, log.(ωi), grand_energies, energies, numbers, μ; kb=kb)
+end
+
+"""
+    _gc_stats_logw(β, log_ωi, grand_energies, energies, numbers, μ; kb)
+
+Implementation of [`gc_thermodynamic_stats`](@ref) taking **log** weights, so the
+weights can be constructed in log space by the caller and never round-trip
+through a number that can underflow. Returns `(⟨E⟩, C_{V,μ}, ⟨N⟩)`.
+"""
+function _gc_stats_logw(β::Float64,
+                        log_ωi::Vector{Float64},
+                        grand_energies::Vector{Float64},
+                        energies::Vector{Float64},
+                        numbers::Vector{Int},
+                        μ::Float64;
+                        kb::Float64=8.617333262e-5)
+    n = length(log_ωi)
     if n != length(grand_energies) || n != length(energies) || n != length(numbers)
         throw(DimensionMismatch("All input vectors must have the same length"))
     end
@@ -258,7 +313,7 @@ function gc_thermodynamic_stats(β::Float64,
     end
 
     # Log-sum-exp for numerical stability
-    log_terms = [log(ωi[i]) - β * grand_energies[i] for i in 1:n]
+    log_terms = [log_ωi[i] - β * grand_energies[i] for i in 1:n]
     max_log = maximum(log_terms)
 
     z = 0.0
@@ -324,7 +379,7 @@ function gc_thermodynamic_stats(df::DataFrame,
                                  n_cull::Int=1,
                                  ω0::Float64=1.0,
                                  kb::Float64=8.617333262e-5)
-    ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
+    log_ωi = log_ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
     grand_es = df.omega
     Es = df.energy
     Ns = df.num_particles
@@ -334,8 +389,8 @@ function gc_thermodynamic_stats(df::DataFrame,
     mean_Ns = Vector{Float64}(undef, length(βs))
 
     Threads.@threads for (i, b) in collect(enumerate(βs))
-        mean_Es[i], Cvs[i], mean_Ns[i] = gc_thermodynamic_stats(
-            b, ωi, grand_es, Es, Ns, μ; kb=kb)
+        mean_Es[i], Cvs[i], mean_Ns[i] = _gc_stats_logw(
+            b, log_ωi, grand_es, Es, Ns, μ; kb=kb)
     end
 
     return mean_Es, Cvs, mean_Ns
@@ -629,7 +684,7 @@ function gc_thermodynamic_stats_fixed_N(
             continue
         end
 
-        ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
+        log_ωi = log_ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
         Es = collect(Float64, df.emax)
         n_iters = length(df.iter)
         # Each live walker carries weight ω0 · (K/(K+n_cull))^n_iters / K,
@@ -640,11 +695,11 @@ function gc_thermodynamic_stats_fixed_N(
         for (j, T) in enumerate(T_grid)
             β = 1.0 / (kb * ustrip(u"K", T))
             if live_emax === nothing
-                log_terms = log.(ωi) .- β .* Es
+                log_terms = log_ωi .- β .* Es
                 Es_all = Es
             else
                 Es_live = collect(Float64, live_emax[i])
-                log_terms = vcat(log.(ωi) .- β .* Es,
+                log_terms = vcat(log_ωi .- β .* Es,
                                  log_tail .- β .* Es_live)
                 Es_all = vcat(Es, Es_live)
             end

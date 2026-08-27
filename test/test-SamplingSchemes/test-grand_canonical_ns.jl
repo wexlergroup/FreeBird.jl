@@ -359,6 +359,7 @@
         exact_E = 0.0
         exact_E2 = 0.0
         exact_N = 0.0
+        exact_N2 = 0.0
         exact_EN = 0.0
  
         E_all, N_all = grand_canonical_exact_enumeration(lattice_template, ham_val)
@@ -373,6 +374,7 @@
             exact_E += boltz * E_val
             exact_E2 += boltz * E_val^2
             exact_N += boltz * N_val
+            exact_N2 += boltz * N_val^2
             exact_EN += boltz * E_val * N_val
         end
  
@@ -380,9 +382,16 @@
         exact_mean_N = exact_N / exact_z
         exact_mean_E2 = exact_E2 / exact_z
         exact_mean_EN = exact_EN / exact_z
+        exact_mean_N2 = exact_N2 / exact_z
         exact_var_E = exact_mean_E2 - exact_mean_E^2
+        exact_var_N = exact_mean_N2 - exact_mean_N^2
         exact_cov_EN = exact_mean_EN - exact_mean_E * exact_mean_N
+        # C_E — the thermodynamic heat capacity, and the default `cv`.
         exact_Cv = kb * beta_test^2 * (exact_var_E - mu_val * exact_cov_EN)
+        # C_Ω — the fluctuation of Ω = E − μN. It differs from C_E by
+        # −μ(∂⟨N⟩/∂T)_μ, and it is that difference this test now pins.
+        exact_c_omega = kb * beta_test^2 *
+            (exact_var_E - 2mu_val * exact_cov_EN + mu_val^2 * exact_var_N)
  
         # Run GC-NS with enough walkers and iterations
         n_walkers = 100
@@ -404,16 +413,34 @@
         @test nrow(df) > 0
  
         # Compute NS thermodynamic stats
-        mean_E_ns, Cv_ns, mean_N_ns = gc_thermodynamic_stats(
-            df, [beta_test], n_walkers, mu_val)
- 
+        r = gc_thermodynamic_stats(df, [beta_test], n_walkers, mu_val)
+        mean_E_ns, Cv_ns, mean_N_ns = r.mean_E, r.cv, r.mean_N
+
         # Compare with exact values (generous tolerances for stochastic algorithm)
         @test mean_E_ns[1] ≈ exact_mean_E rtol=0.3
         @test mean_N_ns[1] ≈ exact_mean_N rtol=0.3
-        # Cv is harder to converge; just check it's in the right ballpark
-        if isfinite(Cv_ns[1]) && isfinite(exact_Cv) && exact_Cv > 0
-            @test Cv_ns[1] > 0
-        end
+
+        # The heat capacities were previously checked for sign only — and
+        # inside an `if` that could skip the assertion entirely, so a run
+        # producing a non-finite Cv passed by asserting nothing at all. A
+        # sign test also accepts a value wrong by any factor.
+        #
+        # Both are now compared numerically against the exact enumeration.
+        # rtol=0.5 rather than the 0.3 used for the first moments above:
+        # these are second moments and converge more slowly. It is a bound
+        # that can be justified, not a tight one — the run is seeded, so the
+        # observed errors reported below are reproducible and a later commit
+        # can tighten against them rather than by guessing.
+        #
+        # This is what pins MERGE_PLAN §1.3(a) — that C_Ω and C_E are
+        # different quantities — in a test rather than in a docstring.
+        @test isfinite(Cv_ns[1])
+        @test isfinite(r.c_omega[1])
+        @test Cv_ns[1] > 0
+        @test Cv_ns[1] ≈ exact_Cv rtol=0.5
+        @test r.c_omega[1] ≈ exact_c_omega rtol=0.5
+
+        @info "G3 heat-capacity accuracy (seeded, so reproducible)" rel_err_C_E=abs(Cv_ns[1] - exact_Cv) / abs(exact_Cv) rel_err_C_omega=abs(r.c_omega[1] - exact_c_omega) / abs(exact_c_omega) ratio_C_E_to_C_omega=exact_Cv / exact_c_omega
  
         rm("test_val.csv", force=true)
         rm("test_val.traj", force=true)

@@ -349,6 +349,40 @@ function _gc_stats_logw(β::Float64,
 end
 
 """
+    _warn_if_reweighting(df, Es, Ns, μ)
+
+Warn once if `μ` is not the chemical potential the run was sampled at.
+
+Nothing here is an error: reweighting to a different μ is a supported use of a
+GC-NS run, and is why `(Ω, E, N)` are all recorded rather than Ω alone. But the
+estimator is only efficient near the μ the Ω-ladder was built at, and the
+degradation is silent — the numbers come back looking fine — so it is worth
+saying out loud.
+
+The run's μ is recoverable from the data: `Ω = E − μN` exactly, for every
+recorded row, so any row with `N ≠ 0` inverts to `μ_run = (E − Ω)/N`.
+"""
+function _warn_if_reweighting(df::DataFrame,
+                              Es::Vector{Float64},
+                              Ns::Vector{Int},
+                              μ::Float64)
+    (isempty(Es) || !hasproperty(df, :omega)) && return nothing
+    ω_recorded = collect(Float64, df.omega)
+    length(ω_recorded) == length(Es) || return nothing
+
+    resid = maximum(abs.(ω_recorded .- (Es .- μ .* Ns)); init=0.0)
+    tol = 1e-6 * max(1.0, maximum(abs, Es; init=1.0))
+    resid <= tol && return nothing
+
+    k = findfirst(!=(0), Ns)
+    μ_run = k === nothing ? nothing : (Es[k] - ω_recorded[k]) / Ns[k]
+    @warn "gc_thermodynamic_stats: μ is not the μ this run was sampled at. The result " *
+          "is a post-hoc reweighting, which is supported but loses statistical " *
+          "efficiency as |μ − μ_run| grows." requested_μ=μ μ_run=μ_run maxlog=1
+    return nothing
+end
+
+"""
     gc_thermodynamic_stats(df::DataFrame, βs::Vector{Float64},
                            n_walkers::Int, μ::Float64;
                            n_cull::Int=1, ω0::Float64=1.0,
@@ -378,7 +412,10 @@ its docstring.
 - `df::DataFrame`: GC-NS output with columns `[:iter, :omega, :energy, :num_particles]`.
 - `βs::Vector{Float64}`: Inverse temperatures at which to evaluate.
 - `n_walkers::Int`: Number of walkers used in the NS run, \$K\$.
-- `μ::Float64`: Chemical potential.
+- `μ::Float64`: Chemical potential at which to evaluate. Ω is derived from
+  `energy` and `num_particles` at this μ, so passing a μ other than the run's
+  performs a post-hoc reweighting — supported, and warned about once, because
+  its statistical efficiency degrades as `|μ − μ_run|` grows.
 - `n_cull::Int=1`: Number of walkers culled per iteration, \$C\$.
 - `ω0::Float64=1.0`: Initial phase-space volume.
 - `live_energies=nothing`: Bare energies `E` of the surviving walkers, in the
@@ -404,9 +441,19 @@ function gc_thermodynamic_stats(df::DataFrame,
                                  live_numbers=nothing,
                                  kb::Float64=8.617333262e-5)
     log_ωi = log_ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
-    grand_es = collect(Float64, df.omega)
     Es = collect(Float64, df.energy)
     Ns = collect(Int, df.num_particles)
+
+    # Ω is *derived* at the requested μ rather than read from `df.omega`. At the
+    # run's own μ these are the same numbers — the sampler records
+    # `omega = energy - mu * num_particles` from exactly these columns — so the
+    # ordinary call is unchanged. It matters when μ differs from the run's:
+    # that is the post-hoc reweighting the recorded (Ω, E, N) triple exists to
+    # make possible, and reading `df.omega` there would weight the samples on
+    # the run's Ω-ladder while correcting `Cv` at the requested μ, mixing two
+    # ensembles in one estimate.
+    grand_es = Es .- μ .* Ns
+    _warn_if_reweighting(df, Es, Ns, μ)
 
     if live_energies !== nothing && !isempty(live_energies)
         if live_numbers === nothing

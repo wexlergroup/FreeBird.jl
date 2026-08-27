@@ -103,6 +103,39 @@
                                                               live_numbers=[1])
     end
 
+    @testset "gc_thermodynamic_stats evaluates Ω at the requested μ" begin
+        # (Ω, E, N) are all recorded so a run can be reweighted to a μ it was
+        # not sampled at. That only works if Ω is rebuilt from E and N at the
+        # requested μ; reusing the recorded omega column would weight the
+        # samples on the run's Ω-ladder while correcting Cv at the new μ.
+        K, C = 4, 1
+        iters = [1, 2]
+        μ_run = -0.5
+        Es = [0.0, -1.0]
+        Ns = [0, 1]
+        df = DataFrame(iter = iters,
+                       omega = Es .- μ_run .* Ns,
+                       energy = Es,
+                       num_particles = Ns)
+        β = 2.0
+        w = exp.(log_ωᵢ(iters, K; n_cull=C))
+
+        # At the run's own μ, nothing changes: derived Ω == recorded Ω.
+        _, _, n_run = gc_thermodynamic_stats(df, [β], K, μ_run; n_cull=C)
+        t_run = w .* exp.(-β .* (Es .- μ_run .* Ns))
+        @test n_run[1] ≈ sum(t_run .* Ns) / sum(t_run)
+
+        # At a different μ, Ω is rebuilt ...
+        _, _, n_rw = gc_thermodynamic_stats(df, [β], K, 0.0; n_cull=C)
+        t_rw = w .* exp.(-β .* Es)
+        @test n_rw[1] ≈ sum(t_rw .* Ns) / sum(t_rw)
+
+        # ... and that is a genuinely different answer from reusing df.omega,
+        # so this test would fail if the column were read back.
+        t_stale = w .* exp.(-β .* df.omega)
+        @test !isapprox(n_rw[1], sum(t_stale .* Ns) / sum(t_stale); rtol=1e-3)
+    end
+
     @testset "Partition function and internal energy tests" begin
         # Basic functionality
         @test partition_function(1.0, [1.0], [0.0]) ≈ 1.0

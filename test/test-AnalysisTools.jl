@@ -136,6 +136,59 @@
         @test !isapprox(n_rw[1], sum(t_stale .* Ns) / sum(t_stale); rtol=1e-3)
     end
 
+    @testset "gc_thermodynamic_stats reports C_E, C_Ω and C_N" begin
+        K, C = 4, 1
+        iters = collect(1:6)
+        Es = [0.0, -0.5, -1.0, -1.2, -1.5, -2.0]
+        Ns = [0, 1, 1, 2, 2, 3]
+        β = 3.0
+
+        mkdf(μ) = DataFrame(iter = iters, omega = Es .- μ .* Ns,
+                            energy = Es, num_particles = Ns)
+
+        # The first three fields, in order, are still (mean_E, cv, mean_N), so
+        # positional destructuring keeps working.
+        r = gc_thermodynamic_stats(mkdf(-0.4), [β], K, -0.4; n_cull=C)
+        a, b, c = gc_thermodynamic_stats(mkdf(-0.4), [β], K, -0.4; n_cull=C)
+        @test a == r.mean_E
+        @test b == r.cv
+        @test c == r.mean_N
+        @test all(isfinite, (r.cv[1], r.c_omega[1], r.c_N[1], r.var_N[1]))
+        @test r.var_N[1] >= 0.0
+
+        # C_Ω − C_E = −μ(∂⟨N⟩/∂T)_μ, so the two coincide at μ = 0 and only
+        # there. This is the identity that makes reporting both meaningful
+        # rather than redundant.
+        r0 = gc_thermodynamic_stats(mkdf(0.0), [β], K, 0.0; n_cull=C)
+        @test r0.c_omega[1] ≈ r0.cv[1]
+
+        # And away from μ = 0, C_Ω is checked against a weighted Var(Ω) built
+        # independently here — an exact check, rather than asserting only that
+        # the two definitions happen to differ, which depends on the fixture.
+        μt = -0.4
+        kb = 8.617333262e-5
+        rμ = gc_thermodynamic_stats(mkdf(μt), [β], K, μt; n_cull=C)
+        Ω = Es .- μt .* Ns
+        lt = log_ωᵢ(iters, K; n_cull=C) .- β .* Ω
+        wts = exp.(lt .- maximum(lt))
+        wts ./= sum(wts)
+        varΩ = sum(wts .* Ω .^ 2) - sum(wts .* Ω)^2
+        @test rμ.c_omega[1] ≈ kb * β^2 * varΩ
+
+        # With N pinned, the particle-number projection is undefined rather than
+        # zero, and all three definitions collapse onto k_Bβ²Var(E).
+        df_fixedN = DataFrame(iter = iters, omega = Es .- (-0.4) .* fill(2, 6),
+                              energy = Es, num_particles = fill(2, 6))
+        rf = gc_thermodynamic_stats(df_fixedN, [β], K, -0.4; n_cull=C)
+        @test rf.var_N[1] ≈ 0.0 atol=1e-12
+        @test rf.c_N[1] ≈ rf.cv[1]
+        @test rf.c_omega[1] ≈ rf.cv[1]
+
+        # The empty result carries the same fields rather than a shorter tuple.
+        rn = gc_thermodynamic_stats(1.0, Float64[], Float64[], Float64[], Int[], 0.0)
+        @test all(isnan, (rn.mean_E, rn.cv, rn.mean_N, rn.c_omega, rn.c_N, rn.var_N))
+    end
+
     @testset "Partition function and internal energy tests" begin
         # Basic functionality
         @test partition_function(1.0, [1.0], [0.0]) ≈ 1.0

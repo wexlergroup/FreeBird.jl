@@ -274,7 +274,26 @@ heat capacity at constant μ is:
 - `kb::Float64`: Boltzmann constant (default: eV/K).
 
 # Returns
-- `(⟨E⟩, C_{V,μ}, ⟨N⟩)`: Mean energy, GC heat capacity, mean particle number.
+
+A `NamedTuple`. Its first three fields are `mean_E`, `cv`, `mean_N` in that
+order, so `a, b, c = gc_thermodynamic_stats(...)` keeps working.
+
+- `mean_E`: ⟨E⟩, the mean **bare** energy.
+- `cv`: **`C_E = k_B β² [Var(E) − μ Cov(E,N)]`** — the thermodynamic heat
+  capacity `(∂U/∂T)` at fixed μ and V. This is *the* heat capacity, and the
+  default.
+- `mean_N`: ⟨N⟩.
+- `c_omega`: **`C_Ω = k_B β² Var(Ω)`**, `Ω = E − μN` — the fluctuation of the
+  Hamiltonian actually sampled. Equal to `C_E` only at μ = 0; in general
+  `C_Ω − C_E = −μ(∂⟨N⟩/∂T)_μ`, a difference comparable to the peak height
+  itself near an order–disorder transition of a small adlayer. Reported rather
+  than dropped because its peaks do locate transitions — but it is not
+  `∂U/∂T`, and conflating the two is the reason both are named explicitly here.
+- `c_N`: **`C_N = k_B β² [Var(E) − Cov(E,N)²/Var(N)]`** — the part of the
+  energy fluctuation uncorrelated with particle number. Degenerates to
+  `k_B β² Var(E)` when N does not fluctuate, where the projection is undefined
+  rather than zero.
+- `var_N`: Var(N).
 """
 function gc_thermodynamic_stats(β::Float64,
                                  ωi::Vector{Float64},
@@ -309,7 +328,7 @@ function _gc_stats_logw(β::Float64,
         throw(DimensionMismatch("All input vectors must have the same length"))
     end
     if n == 0
-        return NaN, NaN, NaN
+        return _gc_stats_nan()
     end
 
     # Log-sum-exp for numerical stability
@@ -320,6 +339,7 @@ function _gc_stats_logw(β::Float64,
     u = 0.0   # ⟨E⟩
     u2 = 0.0  # ⟨E²⟩
     n_sum = 0.0  # ⟨N⟩
+    n2_sum = 0.0 # ⟨N²⟩
     en_sum = 0.0 # ⟨EN⟩
 
     for i in 1:n
@@ -328,25 +348,48 @@ function _gc_stats_logw(β::Float64,
         u += w * energies[i]
         u2 += w * energies[i]^2
         n_sum += w * numbers[i]
+        n2_sum += w * numbers[i]^2
         en_sum += w * energies[i] * numbers[i]
     end
 
     if z == 0.0
-        return NaN, NaN, NaN
+        return _gc_stats_nan()
     end
 
     u /= z
     u2 /= z
     n_avg = n_sum / z
+    n2_avg = n2_sum / z
     en_avg = en_sum / z
 
     var_e = u2 - u^2
+    var_n = n2_avg - n_avg^2
     cov_en = en_avg - u * n_avg
 
+    # C_E — the thermodynamic heat capacity (∂U/∂T) at fixed μ and V.
     cv = kb * β^2 * (var_e - μ * cov_en)
 
-    return u, cv, n_avg
+    # C_Ω — the fluctuation of the sampled Hamiltonian Ω = E − μN. Equal to C_E
+    # only at μ = 0; the two differ by −μ(∂⟨N⟩/∂T)_μ, which near an
+    # order–disorder transition of a small adlayer is comparable to the peak
+    # height itself. Its peaks do locate transitions, which is why it is
+    # reported rather than dropped.
+    c_omega = kb * β^2 * (var_e - 2μ * cov_en + μ^2 * var_n)
+
+    # C_N — the heat capacity with particle-number fluctuations projected out,
+    # i.e. the part of Var(E) uncorrelated with N. Degenerates to k_Bβ²Var(E)
+    # when N does not fluctuate, where the projection is undefined rather than
+    # zero.
+    n_scale = max(1.0, abs(n_avg))
+    c_N = var_n > 1e-12 * n_scale^2 ?
+          kb * β^2 * (var_e - cov_en^2 / var_n) :
+          kb * β^2 * var_e
+
+    return (mean_E=u, cv=cv, mean_N=n_avg, c_omega=c_omega, c_N=c_N, var_N=var_n)
 end
+
+"The all-NaN result, with the same fields as a successful one."
+_gc_stats_nan() = (mean_E=NaN, cv=NaN, mean_N=NaN, c_omega=NaN, c_N=NaN, var_N=NaN)
 
 """
     _warn_if_reweighting(df, Es, Ns, μ)
@@ -429,7 +472,26 @@ its docstring.
 - `kb::Float64`: Boltzmann constant (default: eV/K).
 
 # Returns
-- `(mean_E, Cv, mean_N)`: Vectors of ⟨E⟩, C_{V,μ}, and ⟨N⟩ at each β.
+
+A `NamedTuple` of vectors, one entry per β. Its first three fields are `mean_E`, `cv`, `mean_N` in that
+order, so `a, b, c = gc_thermodynamic_stats(...)` keeps working.
+
+- `mean_E`: ⟨E⟩ at each β, the mean **bare** energy.
+- `cv`: **`C_E = k_B β² [Var(E) − μ Cov(E,N)]`** — the thermodynamic heat
+  capacity `(∂U/∂T)` at fixed μ and V. This is *the* heat capacity, and the
+  default.
+- `mean_N`: ⟨N⟩.
+- `c_omega`: **`C_Ω = k_B β² Var(Ω)`**, `Ω = E − μN` — the fluctuation of the
+  Hamiltonian actually sampled. Equal to `C_E` only at μ = 0; in general
+  `C_Ω − C_E = −μ(∂⟨N⟩/∂T)_μ`, a difference comparable to the peak height
+  itself near an order–disorder transition of a small adlayer. Reported rather
+  than dropped because its peaks do locate transitions — but it is not
+  `∂U/∂T`, and conflating the two is the reason both are named explicitly here.
+- `c_N`: **`C_N = k_B β² [Var(E) − Cov(E,N)²/Var(N)]`** — the part of the
+  energy fluctuation uncorrelated with particle number. Degenerates to
+  `k_B β² Var(E)` when N does not fluctuate, where the projection is undefined
+  rather than zero.
+- `var_N`: Var(N).
 """
 function gc_thermodynamic_stats(df::DataFrame,
                                  βs::Vector{Float64},
@@ -479,16 +541,26 @@ function gc_thermodynamic_stats(df::DataFrame,
         Ns = vcat(Ns, Ns_live)
     end
 
-    mean_Es = Vector{Float64}(undef, length(βs))
-    Cvs = Vector{Float64}(undef, length(βs))
-    mean_Ns = Vector{Float64}(undef, length(βs))
+    nβ = length(βs)
+    mean_Es = Vector{Float64}(undef, nβ)
+    Cvs = Vector{Float64}(undef, nβ)
+    mean_Ns = Vector{Float64}(undef, nβ)
+    c_omegas = Vector{Float64}(undef, nβ)
+    c_Ns = Vector{Float64}(undef, nβ)
+    var_Ns = Vector{Float64}(undef, nβ)
 
     Threads.@threads for (i, b) in collect(enumerate(βs))
-        mean_Es[i], Cvs[i], mean_Ns[i] = _gc_stats_logw(
-            b, log_ωi, grand_es, Es, Ns, μ; kb=kb)
+        r = _gc_stats_logw(b, log_ωi, grand_es, Es, Ns, μ; kb=kb)
+        mean_Es[i] = r.mean_E
+        Cvs[i] = r.cv
+        mean_Ns[i] = r.mean_N
+        c_omegas[i] = r.c_omega
+        c_Ns[i] = r.c_N
+        var_Ns[i] = r.var_N
     end
 
-    return mean_Es, Cvs, mean_Ns
+    return (mean_E=mean_Es, cv=Cvs, mean_N=mean_Ns,
+            c_omega=c_omegas, c_N=c_Ns, var_N=var_Ns)
 end
 
 """

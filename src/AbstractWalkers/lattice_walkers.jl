@@ -626,7 +626,8 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
         
         ase_lattice, all_sites, occupations = add_adsorbates!(
             slab, adsorbate_atoms, type_of_sites;
-            height=adsorbate_height, coverage=coverage, nn=2.791, tol=0.1)
+            height=adsorbate_height, coverage=coverage,
+            nn=lattice_constant / sqrt(2), tol=0.1)
 
         lattice_vectors = [lattice_constant 0 0; 0 lattice_constant 0; 0 0 1]
         lattice_positions = get_lattice_positions(lattice_vectors, supercell_dimensions)
@@ -651,6 +652,18 @@ second copy of what `occupations` already says, and the two can disagree — the
 whole point of W11 is that this type has one place where occupancy lives.
 """
 coverage(lattice::AtomicLattice) = sum(lattice.occupations) / length(lattice.occupations)
+
+"""
+    nn_distance(lattice::AtomicLattice)
+
+Surface nearest-neighbour distance, `a / sqrt(2)` for an fcc(100) termination.
+
+The constructor previously passed a hardcoded `nn = 2.791` to `add_adsorbates!`.
+That is `3.947 / sqrt(2)` — the value for palladium — so the site-finding
+geometry was silently correct for exactly one `lattice_constant` and wrong for
+every other, with no error, just a different (or empty) set of adsorption sites.
+"""
+nn_distance(lattice::AtomicLattice) = lattice.lattice_constant / sqrt(2)
 
 """
     sync_ase_lattice!(lattice::AtomicLattice)

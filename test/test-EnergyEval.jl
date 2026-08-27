@@ -348,4 +348,65 @@
         end
     end    
 
+
+    @testset "ICETHamiltonian" begin
+        # ICET is not installed in CI and is not a dependency, so what is
+        # testable here is everything up to the Python call: the type, the fact
+        # that constructing one is the only thing that needs ICET, and the site
+        # mapping, which is pure Julia and is where the real logic lives.
+
+        @test ICETHamiltonian <: ClassicalHamiltonian
+        @test fieldnames(ICETHamiltonian) ==
+              (:calculator, :n_sites, :E_clean, :julia_to_icet)
+
+        lat = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"]
+        )
+
+        # nn_distance replaces a hardcoded 2.791, which was a/sqrt(2) for
+        # palladium specifically.
+        @test nn_distance(lat) ≈ 3.947 / sqrt(2)
+        @test nn_distance(lat) ≈ 2.791 atol=1e-3
+
+        @testset "build_icet_to_julia_map recovers a permutation" begin
+            # ICET orders its sites its own way and can use a translated
+            # coordinate origin. Synthesise exactly that: take the lattice's own
+            # sites, permute them, shift them, and check the map inverts it.
+            n = length(lat.all_sites)
+            # A fixed permutation rather than a random one: the test should say
+            # the same thing every time it runs, and a cyclic shift is a valid
+            # permutation for any n.
+            perm = circshift(collect(1:n), 3)
+            @test perm != collect(1:n)   # so a map that returns the identity fails
+            off_x, off_y = 0.5, -0.3
+            icet_pos = zeros(n, 2)
+            for (icet_idx, julia_idx) in enumerate(perm)
+                icet_pos[icet_idx, 1] = lat.all_sites[julia_idx][1] - off_x
+                icet_pos[icet_idx, 2] = lat.all_sites[julia_idx][2] - off_y
+            end
+
+            m = FreeBird.EnergyEval.build_icet_to_julia_map(lat, icet_pos)
+            @test m == perm
+            @test length(unique(m)) == n        # bijective, as asserted internally
+            @test sort(m) == collect(1:n)
+
+            # A site with no partner is an error rather than a silent zero.
+            bad = copy(icet_pos)
+            bad[1, 1] += 1000.0
+            bad[1, 2] += 1000.0
+            @test_throws Exception FreeBird.EnergyEval.build_icet_to_julia_map(lat, bad)
+        end
+
+        # Constructing one needs ICET; without it this must fail loudly rather
+        # than return a half-built Hamiltonian. (With ICET present it fails on
+        # the missing file instead — either way, it throws.)
+        @test_throws Exception ICETHamiltonian("no_such_cluster_expansion.ce", lat)
+    end
 end

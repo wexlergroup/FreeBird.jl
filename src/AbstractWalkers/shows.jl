@@ -70,8 +70,24 @@ function Base.show(io::IO, lattice::AtomicLattice)
 end
 
 
-function view(lattice::AtomicLattice)
-    ase.visualize.view(lattice.ase_lattice)
+"""
+    view_structure(lattice::AtomicLattice)
+
+Open the lattice in ASE's viewer.
+
+This was `view(lattice::AtomicLattice)`, which defined a function named `view`
+inside `AbstractWalkers` and so shadowed `Base.view` for the whole module. It
+loaded only because nothing in the module happened to call `Base.view` before
+this line — a later `view(A, 1:3)` anywhere in `AbstractWalkers` would have
+resolved here and thrown a `MethodError` about `AtomicLattice`.
+
+`view_structure` already exists for `AbstractSystem` and `AtomWalker`
+(`helpers.jl`) and is already exported, so this is a method on the right
+function rather than a new name. Note it syncs first: `ase_lattice` is a cache
+of `occupations` and may be stale.
+"""
+function view_structure(lattice::AtomicLattice)
+    return ase.visualize.view(sync_ase_lattice!(lattice).ase_lattice)
 end
 
 """

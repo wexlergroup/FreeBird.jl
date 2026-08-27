@@ -750,6 +750,18 @@ const GLattice{C} = MLattice{C,GenericLattice} # alias for generic lattices
 num_lattice_components(lattice::MLattice{C,G}) where {C,G} = C
 
 """
+    num_lattice_components(lattice::AtomicLattice{C,G}) where {C,G}
+
+Number of adsorbate species on an `AtomicLattice`, i.e. its first type parameter.
+
+Small, but it is what makes `AtomicLattice` usable as a walker configuration at
+all: `LatticeWalker`'s inner constructor calls `num_lattice_components` to fix
+its own type parameter, so without a method here every
+`LatticeWalker(::AtomicLattice)` is a `MethodError`.
+"""
+num_lattice_components(lattice::AtomicLattice{C,G}) where {C,G} = C
+
+"""
     num_sites(lattice::AbstractLattice)
 
 Returns the total number of sites in a lattice given a `AbstractLattice` object. Returns the total number of sites.
@@ -757,6 +769,20 @@ Returns the total number of sites in a lattice given a `AbstractLattice` object.
 function num_sites(lattice::AbstractLattice)
     return prod(lattice.supercell_dimensions) * length(lattice.basis)
 end
+
+"""
+    num_sites(lattice::AtomicLattice)
+
+Number of adsorption sites on an `AtomicLattice`: the length of `all_sites`.
+
+The generic `AbstractLattice` method above cannot serve here. It computes
+`prod(supercell_dimensions) * length(basis)` — the substrate grid — and
+`AtomicLattice` has no `basis` field at all, so the generic method is a
+`FieldError` rather than a wrong answer. The two counts are also genuinely
+different: `all_sites` is a union of ontop, bridge and hollow positions selected
+by `type_of_sites`, and is not the substrate grid.
+"""
+num_sites(lattice::AtomicLattice) = length(lattice.all_sites)
 
 """
     occupied_site_count(MLattice::MLattice{C})

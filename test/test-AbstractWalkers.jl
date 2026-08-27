@@ -1165,4 +1165,40 @@
         end
     end
     
+
+    @testset "AtomicLattice basics" begin
+        # feature/AtomicLattice shipped with no tests at all; this is the first.
+        # Construction reaches ASE through ASEconvert, so a failure here is
+        # either the type or the Python environment, not the assertions.
+        lat = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"]
+        )
+
+        @test lat isa AtomicLattice{1,SquareLattice}
+        @test num_lattice_components(lat) == 1
+
+        # num_sites counts adsorption sites, not the substrate grid. The
+        # generic AbstractLattice method would reach for `basis`, which this
+        # type does not have.
+        @test num_sites(lat) == length(lat.all_sites)
+        @test num_sites(lat) > 0
+        @test !hasproperty(lat, :basis)
+
+        # The point of the shim: every LatticeWalker(::AtomicLattice) was a
+        # MethodError until num_lattice_components had a method here, because
+        # LatticeWalker's inner constructor calls it to fix its own type
+        # parameter.
+        w = LatticeWalker(lat)
+        @test w isa LatticeWalker{1}
+        @test w.configuration === lat
+        @test w.iter == 0
+        @test w.energy == 0.0u"eV"
+    end
 end

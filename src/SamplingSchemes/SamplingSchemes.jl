@@ -50,7 +50,7 @@ export IdealGasReferencedGCNSParameters
 export ideal_gas_referenced_nested_sampling
 
 # other sampling schemes
-export exact_enumeration
+export exact_enumeration, grand_canonical_exact_enumeration
 export wang_landau
 export nvt_monte_carlo, monte_carlo_sampling
 

@@ -37,6 +37,72 @@
         @test all(diff(log_ωᵢ(collect(1:5), 4)) .< 0)  # Monotonic decrease
     end
 
+    @testset "gc_thermodynamic_stats live-set tail" begin
+        # Nested sampling stops after finitely many iterations; the prior volume
+        # left over, X_f = (K/(K+C))^{i_f}, is carried by the K survivors. These
+        # tests pin the weight the tail gets, exactly.
+        K, C = 4, 1
+        r = K / (K + C)                      # 4/5
+        n = 3
+        iters = collect(1:n)
+
+        # ω0 = (K+C)/K makes the dead-sample weights sum to 1 − X_f, so with the
+        # tail the weights close to exactly 1. Tag the dead samples with N = 0
+        # and the live ones with N = 1: at β = 0 the returned ⟨N⟩ *is* the
+        # fraction of the total weight carried by the live set, which must be
+        # X_f = r^n. Nothing else in the pipeline can produce that number.
+        ω0 = (K + C) / K
+        df = DataFrame(iter = iters,
+                       omega = fill(1.0, n),
+                       energy = fill(1.0, n),
+                       num_particles = fill(0, n))
+        live_E = fill(1.0, K)
+        live_N = fill(1, K)
+
+        _, _, meanN = gc_thermodynamic_stats(df, [0.0], K, 0.0;
+                                             n_cull=C, ω0=ω0,
+                                             live_energies=live_E,
+                                             live_numbers=live_N)
+        @test meanN[1] ≈ r^n
+
+        # Without the live set the same call returns the truncated estimate,
+        # which sees no particles at all.
+        _, _, meanN_trunc = gc_thermodynamic_stats(df, [0.0], K, 0.0;
+                                                   n_cull=C, ω0=ω0)
+        @test meanN_trunc[1] ≈ 0.0
+
+        # The bias the tail removes is low-temperature-first. Recorded samples
+        # sit at E = 1, survivors at E = 0; as β grows the survivors must take
+        # over, and do not if the tail is dropped.
+        df2 = DataFrame(iter = iters,
+                        omega = fill(1.0, n),
+                        energy = fill(1.0, n),
+                        num_particles = fill(0, n))
+        meanE_tail, = gc_thermodynamic_stats(df2, [50.0], K, 0.0;
+                                             n_cull=C, ω0=ω0,
+                                             live_energies=zeros(K),
+                                             live_numbers=zeros(Int, K))
+        meanE_trunc, = gc_thermodynamic_stats(df2, [50.0], K, 0.0;
+                                              n_cull=C, ω0=ω0)
+        @test meanE_tail[1] ≈ 0.0 atol=1e-8
+        @test meanE_trunc[1] ≈ 1.0
+
+        # Ω for the live set is derived as E − μN, so a live set recorded
+        # without a μ can still be reweighted at any μ.
+        _, _, meanN_mu = gc_thermodynamic_stats(df, [0.0], K, -0.5;
+                                                n_cull=C, ω0=ω0,
+                                                live_energies=live_E,
+                                                live_numbers=live_N)
+        @test meanN_mu[1] ≈ r^n   # β = 0, so μ cannot matter here
+
+        # Argument validation
+        @test_throws ArgumentError gc_thermodynamic_stats(df, [0.0], K, 0.0;
+                                                          live_energies=live_E)
+        @test_throws DimensionMismatch gc_thermodynamic_stats(df, [0.0], K, 0.0;
+                                                              live_energies=live_E,
+                                                              live_numbers=[1])
+    end
+
     @testset "Partition function and internal energy tests" begin
         # Basic functionality
         @test partition_function(1.0, [1.0], [0.0]) ≈ 1.0

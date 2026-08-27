@@ -357,16 +357,38 @@ end
 Compute grand-canonical thermodynamic stats from a GC-NS output DataFrame.
 
 The DataFrame must have columns `:iter`, `:omega`, `:energy`, `:num_particles`.
-Adds the live-walker contribution to the end of the recorded samples for correct
-normalization.
+
+Pass the surviving live set as `live_energies` / `live_numbers` to add the
+live-walker contribution to the end of the recorded samples. Nested sampling
+terminates after a finite number of iterations, and the prior volume left
+unexplored at that point,
+
+```math
+X_f = \\left(\\frac{K}{K+C}\\right)^{i_f}
+```
+
+is carried entirely by the `K` surviving walkers. Omitting them truncates the
+normalization at the deepest recorded sample, which biases ⟨E⟩, ⟨N⟩ and `Cv`
+low-temperature-first — exactly where the live set dominates — and the shorter
+the run, the worse it is. **Without these arguments the result is the truncated
+estimate**, which is what this method returned unconditionally before, despite
+its docstring.
 
 # Arguments
 - `df::DataFrame`: GC-NS output with columns `[:iter, :omega, :energy, :num_particles]`.
 - `βs::Vector{Float64}`: Inverse temperatures at which to evaluate.
-- `n_walkers::Int`: Number of walkers used in the NS run.
+- `n_walkers::Int`: Number of walkers used in the NS run, \$K\$.
 - `μ::Float64`: Chemical potential.
-- `n_cull::Int=1`: Number of walkers culled per iteration.
+- `n_cull::Int=1`: Number of walkers culled per iteration, \$C\$.
 - `ω0::Float64=1.0`: Initial phase-space volume.
+- `live_energies=nothing`: Bare energies `E` of the surviving walkers, in the
+  units of `df.energy`. Named `live_emax` in
+  [`gc_thermodynamic_stats_ideal_ref`](@ref) and
+  [`gc_thermodynamic_stats_fixed_N`](@ref), whose DataFrames call that column
+  `emax`; here the energy column is `energy` and `omega` holds Ω.
+- `live_numbers=nothing`: Particle numbers `N` of the surviving walkers. Their
+  Ω is derived as `E - μN`, so the live set does not need to have been recorded
+  at this μ.
 - `kb::Float64`: Boltzmann constant (default: eV/K).
 
 # Returns
@@ -378,11 +400,37 @@ function gc_thermodynamic_stats(df::DataFrame,
                                  μ::Float64;
                                  n_cull::Int=1,
                                  ω0::Float64=1.0,
+                                 live_energies=nothing,
+                                 live_numbers=nothing,
                                  kb::Float64=8.617333262e-5)
     log_ωi = log_ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
-    grand_es = df.omega
-    Es = df.energy
-    Ns = df.num_particles
+    grand_es = collect(Float64, df.omega)
+    Es = collect(Float64, df.energy)
+    Ns = collect(Int, df.num_particles)
+
+    if live_energies !== nothing && !isempty(live_energies)
+        if live_numbers === nothing
+            throw(ArgumentError("live_energies given without live_numbers"))
+        end
+        if length(live_energies) != length(live_numbers)
+            throw(DimensionMismatch("live_energies and live_numbers must have the same length"))
+        end
+        # Residual prior volume after the last recorded iteration, split
+        # uniformly over the K surviving walkers. No ω0 factor here: ω0 corrects
+        # the dead-sample shell weights, not the residual volume X_f — with
+        # ω0 = (K+C)/K the dead weights sum to 1 − X_f and the tail closes
+        # Σw = 1 exactly. Same construction as gc_thermodynamic_stats_ideal_ref.
+        n_iters = isempty(df.iter) ? 0 : maximum(df.iter)
+        log_tail = n_iters * log(n_walkers / (n_walkers + n_cull)) - log(n_walkers)
+
+        Es_live = collect(Float64, live_energies)
+        Ns_live = collect(Int, live_numbers)
+
+        log_ωi = vcat(log_ωi, fill(log_tail, length(Es_live)))
+        grand_es = vcat(grand_es, Es_live .- μ .* Ns_live)
+        Es = vcat(Es, Es_live)
+        Ns = vcat(Ns, Ns_live)
+    end
 
     mean_Es = Vector{Float64}(undef, length(βs))
     Cvs = Vector{Float64}(undef, length(βs))

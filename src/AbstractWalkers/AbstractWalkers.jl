@@ -10,6 +10,21 @@ using Unitful
 using Random
 using LinearAlgebra
 using Statistics
+
+# AtomicLattice is backed by an ASE Atoms object. `Py` is a *field type* on the
+# struct, so it is resolved when the module is defined, not when a method runs:
+# without this import the package does not load at all, it fails with
+# `UndefVarError: Py not defined in FreeBird.AbstractWalkers`. The other uses
+# (`pyconvert` in get_positions and get_adsorbate_indicies, `ase.build.fcc100`
+# and `ase.build.add_adsorbate` in the constructor and add_adsorbates!,
+# `ase.visualize.view` in shows.jl) sit inside function bodies and would instead
+# have failed at call time.
+#
+# `..AbstractPotentials` imports both of these but does not re-export `Py`, so
+# it cannot supply them. Same pairing as AbstractPotentials.jl:31-32.
+using ASEconvert
+using PythonCall
+
 using ..AbstractPotentials
 using ..AbstractHamiltonians
 

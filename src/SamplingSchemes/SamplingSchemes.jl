@@ -15,6 +15,10 @@ using AtomsBase
 using Distributions
 using StaticArrays
 
+# `pyimport`, for the per-proposal deepcopy of the ASE frame in
+# nvt_monte_carlo(::MCNewSample, ::AtomicLattice, ::PyMLPotential, ...).
+using PythonCall
+
 using Distributed
 
 using ..MonteCarloMoves

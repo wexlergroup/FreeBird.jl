@@ -332,13 +332,11 @@
         exact_N = 0.0
         exact_EN = 0.0
  
-        for mask in 0:(2^n_sites - 1)
-            lattice = deepcopy(lattice_template)
-            for site in 1:n_sites
-                lattice.components[1][site] = ((mask >> (site - 1)) & 1) == 1
-            end
-            E_val = interacting_energy(lattice, ham_val).val
-            N_val = sum(lattice.components[1])
+        E_all, N_all = grand_canonical_exact_enumeration(lattice_template, ham_val)
+
+        for i in eachindex(E_all)
+            E_val = E_all[i].val
+            N_val = N_all[i]
             omega_val = E_val - mu_val * N_val
  
             boltz = exp(-beta_test * omega_val)
@@ -479,13 +477,10 @@
         # Exact enumeration
         exact_z_cl = 0.0
         exact_N_cl = 0.0
-        for mask in 0:(2^n_sites_cl - 1)
-            lat = deepcopy(lattice_template_cl)
-            for site in 1:n_sites_cl
-                lat.components[1][site] = ((mask >> (site - 1)) & 1) == 1
-            end
-            E_v = interacting_energy(lat, ham_cl).val
-            N_v = sum(lat.components[1])
+        E_all_cl, N_all_cl = grand_canonical_exact_enumeration(lattice_template_cl, ham_cl)
+        for i in eachindex(E_all_cl)
+            E_v = E_all_cl[i].val
+            N_v = N_all_cl[i]
             omega_v = E_v - mu_cl * N_v
             boltz = exp(-beta_cl * omega_v)
             exact_z_cl += boltz

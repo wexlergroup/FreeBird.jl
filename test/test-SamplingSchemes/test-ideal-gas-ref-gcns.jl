@@ -184,16 +184,8 @@
         Ts = [300.0, 400.0]
 
         # Exact grand-canonical reference: enumerate all 2^16 microstates once
-        E_vals = Vector{Float64}(undef, 2^igref_n_sites)
-        N_vals = Vector{Int}(undef, 2^igref_n_sites)
-        lattice = deepcopy(igref_template)
-        for mask in 0:(2^igref_n_sites - 1)
-            for site in 1:igref_n_sites
-                lattice.components[1][site] = ((mask >> (site - 1)) & 1) == 1
-            end
-            E_vals[mask+1] = interacting_energy(lattice, ham).val
-            N_vals[mask+1] = sum(lattice.components[1])
-        end
+        E_q, N_vals = grand_canonical_exact_enumeration(igref_template, ham)
+        E_vals = [e.val for e in E_q]
 
         stats = gc_thermodynamic_stats_ideal_ref(
             df, igref_n_sites, z0, μs, Ts, n_walkers;

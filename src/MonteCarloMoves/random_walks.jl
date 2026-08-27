@@ -539,24 +539,43 @@ function lattice_random_walk!(lattice::SLattice)
 end
 
 """
-    lattice_random_walk!(lattice::AtomicLattice{1,SquareLattice})
+    lattice_random_walk!(lattice::AtomicLattice)
 
-Perform a Monte Carlo random walk on the single-component square atomic lattice system.
+Move one adsorbate to a randomly chosen empty site. Occupancy-conserving.
+
+The previous implementation is worth recording, because its failure was quiet.
+It picked an adsorbate by ASE index, wrote a new position into the ASE frame,
+and then **assigned the adsorbate's old position into `all_sites[hop_to]`** —
+overwriting an entry of the *site geometry* as though `all_sites` were a list of
+free positions. It also drew `hop_to` from all sites including occupied ones, so
+at t = 0 it could "move" an adsorbate onto an already-occupied site. Both bugs
+are invisible in an energy trace: the lattice quietly stops being the lattice it
+was constructed as.
+
+Neither is expressible now. Occupancy is a mask over `all_sites`, the geometry
+is never written, and the destination is drawn from the empty sites only. The
+ASE frame is left stale and flagged rather than updated — see
+[`sync_ase_lattice!`](@ref) — which also removes the Python round trip this move
+used to make on every proposal.
 
 # Arguments
-- `lattice::AtomicLattice`: The single-component square atomic lattice system to perform the random walk on.
+- `lattice::AtomicLattice`: The lattice to move an adsorbate on. Mutated.
+
 # Returns
-- `lattice::AtomicLattice`: The proposed lattice after the random walk.
+- `lattice::AtomicLattice`: The same lattice, after the move. Returned unchanged
+  if there is nothing to move or nowhere to move it.
 """
 function lattice_random_walk!(lattice::AtomicLattice)
-    hop_from = rand(lattice.adsorbate_indices)
-    hop_from_pos = pyconvert(Tuple, lattice.ase_lattice[hop_from].position)
-    hop_to = rand(1:size(lattice.all_sites, 1))
-    if (hop_from_pos[1], hop_from_pos[2]) != lattice.all_sites[hop_to]
-        new_ads_pos =  (lattice.all_sites[hop_to][1], lattice.all_sites[hop_to][2], 1.0)
-        new_lattice_site_pos = (hop_from_pos[1], hop_from_pos[2])
-        lattice.ase_lattice[hop_from].position, lattice.all_sites[hop_to] = new_ads_pos, new_lattice_site_pos
-    end
+    occupied = findall(lattice.occupations)
+    empty_sites = findall(.!lattice.occupations)
+    (isempty(occupied) || isempty(empty_sites)) && return lattice
+
+    hop_from = rand(occupied)
+    hop_to = rand(empty_sites)
+    lattice.occupations[hop_from] = false
+    lattice.occupations[hop_to] = true
+    lattice.ase_dirty = true
+
     return lattice
 end
 

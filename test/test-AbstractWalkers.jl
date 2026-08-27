@@ -1201,4 +1201,53 @@
         @test w.iter == 0
         @test w.energy == 0.0u"eV"
     end
+
+    @testset "AtomicLattice occupancy is index-keyed" begin
+        lat = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"]
+        )
+        n_ase_adsorbates(l) =
+            length(FreeBird.AbstractWalkers.get_adsorbate_indicies(l.ase_lattice))
+
+        # Occupancy is a mask over all_sites, not an ordering of it.
+        @test length(lat.occupations) == length(lat.all_sites)
+        @test sum(lat.occupations) == round(Int, 0.25 * length(lat.all_sites))
+        @test coverage(lat) ≈ sum(lat.occupations) / length(lat.all_sites)
+
+        # The site list is geometry: every site distinct, so nothing has been
+        # overwritten. The old walk assigned adsorbate positions into all_sites
+        # and would eventually violate this.
+        @test length(unique(lat.all_sites)) == length(lat.all_sites)
+
+        # The ASE frame is a cache, and starts in agreement.
+        @test lat.ase_dirty == false
+        @test n_ase_adsorbates(lat) == sum(lat.occupations)
+
+        # A move changes occupancy, conserves the adsorbate count, leaves the
+        # geometry alone, and flags the cache rather than paying a Python round
+        # trip on every proposal.
+        before = copy(lat.occupations)
+        sites_before = copy(lat.all_sites)
+        lattice_random_walk!(lat)
+        @test sum(lat.occupations) == sum(before)
+        @test count(lat.occupations .!= before) == 2   # one vacated, one filled
+        @test lat.all_sites == sites_before
+        @test lat.ase_dirty == true
+
+        # ... and the cache is brought back into agreement on demand.
+        sync_ase_lattice!(lat)
+        @test lat.ase_dirty == false
+        @test n_ase_adsorbates(lat) == sum(lat.occupations)
+
+        # Syncing twice is a no-op rather than a second round of adsorbates.
+        sync_ase_lattice!(lat)
+        @test n_ase_adsorbates(lat) == sum(lat.occupations)
+    end
 end

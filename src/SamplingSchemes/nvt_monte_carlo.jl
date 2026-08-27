@@ -168,7 +168,8 @@ function nvt_monte_carlo(
     accepted_steps = 0
     
     current_lattice = deepcopy(lattice)
-    current_energy = interacting_energy(current_lattice.ase_lattice, calc).val
+    # ase_lattice is a cache of `occupations`; sync before anything reads it.
+    current_energy = interacting_energy(sync_ase_lattice!(current_lattice).ase_lattice, calc).val
     
     beta = 1.0 / (kb * temperature)
     for i in 1:num_steps
@@ -177,7 +178,8 @@ function nvt_monte_carlo(
         proposed_lattice.ase_lattice = py_copy.deepcopy(current_lattice.ase_lattice)
         
         lattice_random_walk!(proposed_lattice)
-        proposed_energy = interacting_energy(proposed_lattice.ase_lattice, calc).val
+        # The move updated `occupations` and flagged the frame stale.
+        proposed_energy = interacting_energy(sync_ase_lattice!(proposed_lattice).ase_lattice, calc).val
         
         # Metropolis-Hastings acceptance
         ΔE = proposed_energy - current_energy

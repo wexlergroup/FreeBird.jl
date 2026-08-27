@@ -355,32 +355,57 @@ function get_adsorbate_positions(slab)
     return adsorbate_positions
 end
 
+"""
+    add_adsorbates!(slab, adsorbate_atoms, type_of_sites; height, coverage, nn, tol)
+
+Build the adsorption-site list for `slab` and decorate it to the requested
+`coverage`. Returns `(slab, all_sites, occupations)`.
+
+`occupations` is a `Vector{Bool}` over `all_sites` and is the ground truth for
+which sites are filled. Two things about the previous version made that
+impossible to express:
+
+  * it called `shuffle!(all_sites)` **in place**, so the site list came back in
+    random order with the occupied sites at the front. Occupancy was encoded as
+    "the first `n_ads` entries of a list whose order is meaningless", which
+    nothing downstream could read without knowing that;
+  * it returned `adsorbate_indices` — indices into the *ASE frame* — which bear
+    no relation to positions in `all_sites`. There was no way to ask whether
+    site `i` was occupied.
+
+The shuffle now happens in a permutation of the *indices*, `all_sites` keeps its
+geometric order, and occupancy is a mask over it.
+"""
 function add_adsorbates!(slab, adsorbate_atoms, type_of_sites; height, coverage, nn, tol)
     positions = get_positions(slab)
-    all_sites = []
+    all_sites = Tuple{Float64,Float64}[]
     if "ontop" in type_of_sites
-        ontop = get_ontop_sites(positions)
-        all_sites = vcat(all_sites, ontop)
+        append!(all_sites, get_ontop_sites(positions))
     end
-    
+
     if "bridge" in type_of_sites
-        bridge = get_bridge_sites(positions, nn)
-        all_sites = vcat(all_sites, bridge)
+        append!(all_sites, get_bridge_sites(positions, nn))
     end
-    
+
     if "hollow" in type_of_sites
-        hollow = get_hollow_sites(positions, nn, tol)
-        all_sites = vcat(all_sites, hollow)
+        append!(all_sites, get_hollow_sites(positions, nn, tol))
     end
+
+    isempty(all_sites) && throw(ArgumentError(
+        "no adsorption sites produced for type_of_sites = $type_of_sites; " *
+        "expected some of \"ontop\", \"bridge\", \"hollow\""))
+
     n_ads = round(Int, coverage * length(all_sites))
-    chosen = shuffle!(all_sites)[1:n_ads]
+    occupations = fill(false, length(all_sites))
+    occupations[randperm(length(all_sites))[1:n_ads]] .= true
+
     adsorbate = adsorbate_atoms[1]
-    for (x, y) in chosen
+    for i in findall(occupations)
+        x, y = all_sites[i]
         ase.build.add_adsorbate(slab, adsorbate; height=height, position=(x, y))
     end
 
-    adsorbate_indices = get_adsorbate_indicies(slab)
-    return slab, all_sites, adsorbate_indices
+    return slab, all_sites, occupations
 end
 
 """
@@ -511,7 +536,10 @@ A mutable struct representing an atomic lattice with adsorbates using ASE (Atomi
 # Fields
 - `lattice_atom::String`: The chemical symbol of the lattice substrate atom.
 - `adsorbate_atoms::Vector{String}`: The chemical symbols of the adsorbate species.
-- `coverage::Float64`: The fractional coverage of adsorbates on the surface.
+- `all_sites::Vector{Tuple{Float64, Float64}}`: Coordinates of every adsorption site, in geometric order.
+- `occupations::Vector{Bool}`: **The ground truth.** Indexed over `all_sites`: site `i` is filled iff `occupations[i]`.
+- `adsorbate_height::Float64`: Height at which adsorbates are placed. Stored rather than assumed, so the constructor and `sync_ase_lattice!` cannot disagree about it.
+- `ase_dirty::Bool`: Whether `ase_lattice` is stale with respect to `occupations`.
 - `supercell_dimensions::Tuple{Int64, Int64, Int64}`: The dimensions of the supercell.
 - `lattice_constant::Float64`: The lattice constant of the unit cell.
 - `periodicity::Tuple{Bool, Bool, Bool}`: The periodic boundary conditions in each dimension.
@@ -519,9 +547,7 @@ A mutable struct representing an atomic lattice with adsorbates using ASE (Atomi
 - `num_nearest_neighbors::Int64`: The number of nearest neighbors to consider.
 - `neighbors::Vector{Vector{Vector{Int}}}`: The neighbor lists for each lattice point.
 - `type_of_sites::Vector{String}`: The types of adsorption sites (e.g., "ontop", "bridge", "hollow").
-- `ase_lattice::Py`: The ASE atoms object representing the complete system.
-- `adsorbate_indices::Vector{Int64}`: The indices of adsorbate atoms in the ASE structure.
-- `all_sites::Vector{Tuple{Float64, Float64}}`: The coordinates of all possible adsorption sites.
+- `ase_lattice::Py`: The ASE atoms object. A **derived cache** of `occupations`, not a second source of truth — see `sync_ase_lattice!`.
 
 # Constructor
     AtomicLattice{C,G}(;
@@ -532,7 +558,8 @@ A mutable struct representing an atomic lattice with adsorbates using ASE (Atomi
         adsorbate_atoms::Vector{String}=[""],
         coverage::Float64 = 0.5,
         num_nearest_neighbors::Int64,
-        type_of_sites::Vector{String}
+        type_of_sites::Vector{String},
+        adsorbate_height::Float64 = 1.0
     ) where {C,G}
 
 Creates an `AtomicLattice` instance with the specified parameters. The constructor performs the following steps:
@@ -561,7 +588,6 @@ Throws an `ArgumentError` if the number of adsorbate species does not match `C`.
 mutable struct AtomicLattice{C,G} <: AbstractLattice
     lattice_atom::String
     adsorbate_atoms::Vector{String}
-    coverage::Float64
     supercell_dimensions::Tuple{Int64, Int64, Int64}
     lattice_constant::Float64
     periodicity::Tuple{Bool, Bool, Bool}
@@ -569,9 +595,13 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
     num_nearest_neighbors::Int64
     neighbors::Vector{Vector{Vector{Int}}}
     type_of_sites::Vector{String}
-    ase_lattice::Py
-    adsorbate_indices::Vector{Int64}
     all_sites::Vector{Tuple{Float64, Float64}}
+    # ── ground truth ────────────────────────────────────────────────────────
+    occupations::Vector{Bool}
+    adsorbate_height::Float64
+    # ── derived cache of the above; see sync_ase_lattice! ───────────────────
+    ase_lattice::Py
+    ase_dirty::Bool
 
     function AtomicLattice{C,G}(;
         lattice_atom::String,
@@ -581,7 +611,8 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
         adsorbate_atoms::Vector{String}=[""],
         coverage::Float64 = 0.5,
         num_nearest_neighbors::Int64,
-        type_of_sites::Vector{String}
+        type_of_sites::Vector{String},
+        adsorbate_height::Float64 = 1.0
     ) where {C,G}
 
         num_adsorbates = length(adsorbate_atoms)
@@ -593,17 +624,74 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
         slab = ase.build.fcc100(lattice_atom, supercell_dimensions, a=lattice_constant)
         slab.set_pbc(periodicity)
         
-        if !isempty(adsorbate_atoms)
-            ase_lattice, all_sites, adsorbate_indices = add_adsorbates!(slab, adsorbate_atoms, type_of_sites; height=1.0, coverage=coverage, nn=2.791, tol=0.1)
-        end
+        ase_lattice, all_sites, occupations = add_adsorbates!(
+            slab, adsorbate_atoms, type_of_sites;
+            height=adsorbate_height, coverage=coverage, nn=2.791, tol=0.1)
 
         lattice_vectors = [lattice_constant 0 0; 0 lattice_constant 0; 0 0 1]
         lattice_positions = get_lattice_positions(lattice_vectors, supercell_dimensions)
         cutoff_radii = find_n_cutoff_radii(lattice_positions, num_nearest_neighbors)
         supercell_lattice_vectors = lattice_vectors * Diagonal([supercell_dimensions[1], supercell_dimensions[2], supercell_dimensions[3]])
         neighbors = compute_neighbors_banded(supercell_lattice_vectors, lattice_positions, periodicity, cutoff_radii)
-        return new{C,G}(lattice_atom, adsorbate_atoms, coverage, supercell_dimensions, lattice_constant, periodicity, lattice_positions, num_nearest_neighbors, neighbors, type_of_sites, ase_lattice, adsorbate_indices, all_sites)
+        return new{C,G}(lattice_atom, adsorbate_atoms, supercell_dimensions,
+                        lattice_constant, periodicity, lattice_positions,
+                        num_nearest_neighbors, neighbors, type_of_sites,
+                        all_sites, occupations, adsorbate_height,
+                        ase_lattice, false)
     end
+end
+
+"""
+    coverage(lattice::AtomicLattice)
+
+Fractional coverage, derived from `occupations`.
+
+This was a stored field. It is computed now because a stored coverage is a
+second copy of what `occupations` already says, and the two can disagree — the
+whole point of W11 is that this type has one place where occupancy lives.
+"""
+coverage(lattice::AtomicLattice) = sum(lattice.occupations) / length(lattice.occupations)
+
+"""
+    sync_ase_lattice!(lattice::AtomicLattice)
+
+Rebuild `ase_lattice`'s adsorbates from `occupations`, and clear `ase_dirty`.
+
+`ase_lattice` is a cache. Occupancy moves update `occupations` and set
+`ase_dirty`; the ASE frame is only made to agree when something actually needs
+to look at it — an energy evaluation through a Python calculator, or writing a
+trajectory. Doing it eagerly on every move would put a Python round trip in the
+innermost Monte Carlo loop, which at ~16k proposals per walk is where all the
+time would go.
+
+Which means: **anything that reads `ase_lattice` must call this first.** That is
+the one rule this design imposes, and it is the reason the dirty flag is a field
+rather than a convention.
+
+Adsorbates are identified by ASE tag 0, which is what `ase.build.add_adsorbate`
+assigns and what `get_adsorbate_indicies` already relies on; the substrate keeps
+the layer tags `fcc100` gave it. Deletion goes in reverse index order because
+removing an atom renumbers everything after it.
+"""
+function sync_ase_lattice!(lattice::AtomicLattice)
+    lattice.ase_dirty || return lattice
+
+    slab = lattice.ase_lattice
+    tags = pyconvert(Vector{Int}, slab.get_tags())
+    ads = findall(==(0), tags)
+    if !isempty(ads)
+        slab.__delitem__(pylist([i - 1 for i in reverse(ads)]))
+    end
+
+    adsorbate = lattice.adsorbate_atoms[1]
+    for i in findall(lattice.occupations)
+        x, y = lattice.all_sites[i]
+        ase.build.add_adsorbate(slab, adsorbate;
+                                height=lattice.adsorbate_height, position=(x, y))
+    end
+
+    lattice.ase_dirty = false
+    return lattice
 end
 
 

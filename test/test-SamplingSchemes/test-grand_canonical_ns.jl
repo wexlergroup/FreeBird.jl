@@ -276,6 +276,35 @@
         rm("test_gc.traj", force=true)
         rm("test_gc.ls", force=true)
     end
+
+    # ================================================================
+    @testset "random_seed makes a run reproducible" begin
+        # Before the seed was consumed, two runs of identical parameters were
+        # different Markov chains: the field was stored and never reached an
+        # RNG. This test detects that directly — without seeding, the second
+        # call continues the global stream where the first left off and cannot
+        # reproduce it.
+        function gc_run(seed)
+            walkers = [LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV", iter=0) for _ in 1:10]
+            ls = LatticeGasWalkers(walkers, ham; assign_energy=false)
+            p = GrandCanonicalNestedSamplingParameters(
+                mc_steps=50, chemical_potential=-0.05, random_seed=seed)
+            routine = MCGrandCanonicalMoves()
+            save = SaveEveryN("test_gc_seed.csv", "test_gc_seed.traj", "test_gc_seed.ls",
+                              1000, 1000, 1000)
+            df, _, _ = grand_canonical_nested_sampling(ls, p, Int64(30), routine, save)
+            return df
+        end
+
+        df_a = gc_run(2024)
+        df_b = gc_run(2024)
+        @test nrow(df_a) > 0
+        @test isequal(df_a, df_b)
+
+        rm("test_gc_seed.csv", force=true)
+        rm("test_gc_seed.traj", force=true)
+        rm("test_gc_seed.ls", force=true)
+    end
  
     # ================================================================
     @testset "gc_thermodynamic_stats basic" begin

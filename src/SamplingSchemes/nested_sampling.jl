@@ -15,7 +15,10 @@ e.g. (0.25, 0.75) means that the step size will decrease if the acceptance rate 
 - `fail_count::Int64`: The number of failed MC moves in a row.
 - `allowed_fail_count::Int64`: The maximum number of failed MC moves allowed before resetting the step size.
 - `energy_perturbation::Float64`: The perturbation value used to adjust the energy of the walkers.
-- `random_seed::Int64`: The seed for the random number generator.
+- `random_seed::Int64`: The seed for the random number generator. **Not consumed
+  by `nested_sampling`** — unlike its grand-canonical counterparts, the
+  canonical loop never calls `Random.seed!` with it. Seed the global RNG
+  yourself before calling if you need a reproducible run.
 - `cluster_p::Float64`: Current cluster growth probability for geometric cluster moves (mutable runtime state).
 - `cluster_accepted::Float64`: Accepted cluster moves in the current adjustment window.
 - `cluster_total::Float64`: Total cluster moves attempted in the current adjustment window.
@@ -325,7 +328,9 @@ for thermodynamic reweighting.
 - `mc_steps::Int64`: MCMC steps per replacement walker.
 - `chemical_potential::Float64`: Chemical potential μ (unitless, in energy units of the Hamiltonian).
 - `energy_perturbation::Float64`: Perturbation to break energy degeneracies.
-- `random_seed::Int64`: Seed for the random number generator.
+- `random_seed::Int64`: Seed for the random number generator. Consumed by
+  `grand_canonical_nested_sampling` before the walkers are initialized, so
+  identical parameters give an identical run.
 - `fail_count::Int64`: Consecutive failed replacements.
 - `allowed_fail_count::Int64`: Maximum consecutive failures before warning.
 - `init_occupation_p::Float64`: Per-site occupation probability for initial walkers.
@@ -1324,6 +1329,14 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
                                          save_strategy::DataSavingStrategy;
                                          max_consecutive_fails::Int=1000,
                                          degeneracy_tol::Union{Nothing,Real}=nothing)
+    # Consume the seed. It is carried on the parameter struct and was previously
+    # stored and never used, so two runs of identical parameters were different
+    # Markov chains — visible in the test suite, where the gate whose file calls
+    # Random.seed! reproduced its step-failure counts exactly across runs and
+    # the gate whose file does not varied by ~10%. Wang-Landau and NVT MC have
+    # always seeded from their own parameter structs; this brings GC-NS in line.
+    Random.seed!(gc_params.random_seed)
+
     # Initialize walkers with random microstates
     _init_gc_walkers!(liveset, gc_params)
 
@@ -1421,9 +1434,10 @@ truncate the prior support and bias Ξ.
   ceiling and bias the evidence — enforced by the keyword constructor); must
   remain ≪ k_B·T at the lowest temperature targeted in post-processing, since
   perturbed energies are recorded.
-- `random_seed::Int64`: Kept for parity with `GrandCanonicalNestedSamplingParameters`;
-  **not currently consumed** by the NS loop — call `Random.seed!` before
-  `ideal_gas_referenced_nested_sampling` for reproducible runs.
+- `random_seed::Int64`: Seed for the random number generator. **Consumed** by
+  `ideal_gas_referenced_nested_sampling`, which calls `Random.seed!` with it
+  before initializing the walkers, so identical parameters give an identical
+  run.
 - `fail_count::Int64`: Consecutive failed replacements.
 - `allowed_fail_count::Int64`: Maximum consecutive failures before warning.
 - `cluster_p::Float64`: Current cluster growth probability (mutable runtime state).
@@ -1651,6 +1665,10 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
                                               save_strategy::DataSavingStrategy;
                                               max_consecutive_fails::Int=1000,
                                               degeneracy_tol::Union{Nothing,Real}=nothing)
+    # See grand_canonical_nested_sampling: the seed is consumed here rather than
+    # merely stored.
+    Random.seed!(params.random_seed)
+
     # Initialize walkers as i.i.d. draws from the Bernoulli(z0/(1+z0)) prior
     _init_ideal_gas_ref_walkers!(liveset, params)
 

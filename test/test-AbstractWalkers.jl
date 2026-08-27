@@ -297,6 +297,79 @@
             end
         end
 
+        @testset "compute_neighbors_banded function tests" begin
+
+            # compute_neighbors_banded is the AtomicLattice neighbour builder. It
+            # used to be a second method named `compute_neighbors` with identical
+            # argument types, which made the package unprecompilable on Julia 1.12
+            # ("Method overwriting is not permitted during Module precompilation").
+            #
+            # These tests pin the claim that motivated renaming rather than
+            # deleting it: for cutoff radii in increasing order — the only kind
+            # `find_n_cutoff_radii` produces, and the only kind either call site
+            # passes — banded assignment and `compute_neighbors`' first-cutoff-wins
+            # assignment partition the pairs identically. If that holds, the two
+            # implementations should be collapsed into one (MERGE_PLAN W10).
+
+            lattice_vectors = [
+                2.0 0.0 0.0;
+                0.0 2.0 0.0;
+                0.0 0.0 2.0
+            ]
+
+            @testset "agrees with compute_neighbors, non-periodic" begin
+                positions = [
+                    0.0 0.0 0.0;
+                    1.0 0.0 0.0;
+                    0.0 1.0 0.0;
+                    1.0 1.0 0.0;
+                    0.0 0.0 1.0;
+                    1.0 0.0 1.0;
+                    0.0 1.0 1.0;
+                    1.0 1.0 1.0
+                    ]
+
+                periodicity = (false, false, false)
+                cutoff_radii = [1.1, 1.8]
+
+                banded = AbstractWalkers.compute_neighbors_banded(lattice_vectors, positions, periodicity, cutoff_radii)
+                plain  = AbstractWalkers.compute_neighbors(lattice_vectors, positions, periodicity, cutoff_radii)
+
+                @test length(banded) == length(plain)
+                for i in eachindex(plain)
+                    @test sort.(banded[i]) == sort.(plain[i])
+                end
+
+                # and independently, against the same expectations the
+                # compute_neighbors tests above assert
+                @test sort(banded[1][1]) == [2, 3, 5]
+                @test sort(banded[1][2]) == [4, 6, 7, 8]
+                @test sort(banded[8][1]) == [4, 6, 7]
+                @test sort(banded[8][2]) == [1, 2, 3, 5]
+            end
+
+            @testset "agrees with compute_neighbors, fully periodic" begin
+                positions = [
+                    0.0 0.0 0.0;
+                    1.0 1.0 0.0;
+                    1.0 0.0 1.0;
+                    0.0 1.0 1.0;
+                    1.0 1.0 1.0
+                    ]
+
+                periodicity = (true, true, true)
+                cutoff_radii = [1.1, 1.5, 1.8]
+
+                banded = AbstractWalkers.compute_neighbors_banded(lattice_vectors, positions, periodicity, cutoff_radii)
+                plain  = AbstractWalkers.compute_neighbors(lattice_vectors, positions, periodicity, cutoff_radii)
+
+                @test length(banded) == length(plain)
+                for i in eachindex(plain)
+                    @test sort.(banded[i]) == sort.(plain[i])
+                end
+            end
+        end
+
 
         @testset "lattice_positions function tests" begin  
             @testset "Simple cubic lattice" begin

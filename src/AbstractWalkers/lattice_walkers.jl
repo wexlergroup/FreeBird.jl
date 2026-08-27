@@ -167,7 +167,48 @@ function find_n_cutoff_radii(positions::Matrix{Float64}, num_nearest_neighbors::
     return cutoff_radii
 end
 
-function compute_neighbors(supercell_lattice_vectors::Matrix{Float64}, 
+"""
+    compute_neighbors_banded(supercell_lattice_vectors::Matrix{Float64},
+                             positions::Matrix{Float64},
+                             periodicity::Tuple{Bool, Bool, Bool},
+                             cutoff_radii::Vector{Float64})
+
+Compute neighbour shells for an `AtomicLattice`, assigning each pair to the shell
+whose *band* contains it: shell `k` holds `cutoff_radii[k-1] < d <= cutoff_radii[k]`
+(with a lower bound of `0.0` for the first shell).
+
+Named apart from `compute_neighbors` deliberately. It was introduced with
+the same name **and the same argument types** as `compute_neighbors`, which on
+Julia >= 1.12 is not a shadowing subtlety but a hard failure: precompiling the
+package aborted with
+
+    WARNING: Method definition compute_neighbors(...) in module AbstractWalkers
+             at lattice_walkers.jl:20 overwritten at lattice_walkers.jl:170.
+    ERROR: Method overwriting is not permitted during Module precompilation.
+
+so `using FreeBird` could not load this branch at all.
+
+How it differs from `compute_neighbors`, so the two can be reconciled later on
+evidence rather than guesswork:
+
+  1. Shell assignment. `compute_neighbors` takes the *first* shell whose cutoff
+     the distance clears (`d <= cutoff_radii[i]`, then `break`). For cutoff radii
+     in increasing order — which is what `find_n_cutoff_radii` produces — that is
+     the same partition as the bands here, so on every current call site the two
+     agree. They diverge only for unsorted `cutoff_radii`.
+  2. Singular cells. This version builds a 2x2 reciprocal matrix when
+     `!periodicity[3] && all(a3 .== 0)`, where `inv([a1 a2 a3])` would throw.
+     Note the `AtomicLattice` constructor passes `a3 = [0, 0, 1] * nz`, so that
+     branch is not reached from there today.
+  3. Minimum image. This version applies the convention only when
+     `periodicity[1] || periodicity[2]`, so a z-only-periodic cell would silently
+     skip it; `compute_neighbors` always applies it (a no-op round trip when
+     nothing is periodic). `compute_neighbors` is the more correct of the two here.
+
+Test coverage pins claim 1 in `test/test-AbstractWalkers.jl`. If that equivalence
+holds, the two functions should be collapsed into one — see MERGE_PLAN W10.
+"""
+function compute_neighbors_banded(supercell_lattice_vectors::Matrix{Float64}, 
                            positions::Matrix{Float64}, 
                            periodicity::Tuple{Bool, Bool, Bool}, 
                            cutoff_radii::Vector{Float64})
@@ -560,7 +601,7 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
         lattice_positions = get_lattice_positions(lattice_vectors, supercell_dimensions)
         cutoff_radii = find_n_cutoff_radii(lattice_positions, num_nearest_neighbors)
         supercell_lattice_vectors = lattice_vectors * Diagonal([supercell_dimensions[1], supercell_dimensions[2], supercell_dimensions[3]])
-        neighbors = compute_neighbors(supercell_lattice_vectors, lattice_positions, periodicity, cutoff_radii)
+        neighbors = compute_neighbors_banded(supercell_lattice_vectors, lattice_positions, periodicity, cutoff_radii)
         return new{C,G}(lattice_atom, adsorbate_atoms, coverage, supercell_dimensions, lattice_constant, periodicity, lattice_positions, num_nearest_neighbors, neighbors, type_of_sites, ase_lattice, adsorbate_indices, all_sites)
     end
 end

@@ -191,6 +191,10 @@
             df, igref_n_sites, z0, μs, Ts, n_walkers;
             ω0=(n_walkers + 1) / n_walkers, live_emax=live_E, live_numbers=live_N)
 
+        @test size(stats.cv) == (length(μs), length(Ts))
+        @test size(stats.c_omega) == size(stats.cv)
+        @test size(stats.c_N) == size(stats.cv)
+
         for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
             β = 1 / (kb * T)
             log_w = β .* μ .* N_vals .- β .* E_vals
@@ -210,6 +214,19 @@
             @test isapprox(stats.logXi[i, j], logXi_exact; atol=1.5)
             @test isapprox(stats.mean_N[i, j], meanN_exact; rtol=0.10)
             @test isapprox(stats.mean_U[i, j], meanU_exact; rtol=0.10)
+
+            # The heat capacities are wired through the same
+            # _gc_heat_capacities as the other two estimators, so what is
+            # checked here is the wiring — right moments in, right shape out —
+            # not the definitions. Those are pinned by the ideal-gas closed
+            # form in test-atomistic-gcns-fixed-n.jl, where C_E and C_N vanish
+            # exactly and C_Ω = k_Bβ²μ²Var(N), and by the Var(Ω) comparison in
+            # test-AnalysisTools.jl. Second moments off a reweighted NS run are
+            # far noisier than the means above, so a numeric tolerance here
+            # would have to be so wide it would assert nothing.
+            @test isfinite(stats.cv[i, j])
+            @test isfinite(stats.c_omega[i, j])
+            @test isfinite(stats.c_N[i, j])
             @test isapprox(stats.var_N[i, j], varN_exact; rtol=0.25)
         end
     end

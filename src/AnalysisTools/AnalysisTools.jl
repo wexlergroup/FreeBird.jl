@@ -366,26 +366,39 @@ function _gc_stats_logw(β::Float64,
     var_n = n2_avg - n_avg^2
     cov_en = en_avg - u * n_avg
 
-    # C_E — the thermodynamic heat capacity (∂U/∂T) at fixed μ and V.
+    cv, c_omega, c_N = _gc_heat_capacities(var_e, cov_en, var_n, n_avg, β, μ, kb)
+
+    return (mean_E=u, cv=cv, mean_N=n_avg, c_omega=c_omega, c_N=c_N, var_N=var_n)
+end
+
+"""
+    _gc_heat_capacities(var_e, cov_en, var_n, n_avg, β, μ, kb) -> (cv, c_omega, c_N)
+
+The three grand-canonical heat-capacity definitions, in one place.
+
+Each estimator in this module accumulates its weighted moments differently —
+sequentially over samples, or vectorised over a (μ, T) grid — but they must
+agree on what the *definitions* are. Keeping the formulas here is what stops
+them drifting apart, which is precisely how the two heat capacities came to
+disagree between the package and the prototype scripts in the first place.
+
+- `cv` = `C_E = k_B β² [Var(E) − μ Cov(E,N)]`, the thermodynamic `(∂U/∂T)_{μ,V}`.
+- `c_omega` = `C_Ω = k_B β² Var(Ω)` with `Ω = E − μN`, expanded as
+  `Var(E) − 2μ Cov(E,N) + μ² Var(N)`. Equals `C_E` only at μ = 0.
+- `c_N` = `k_B β² [Var(E) − Cov(E,N)²/Var(N)]`, the energy fluctuation with the
+  part correlated with N projected out. When N does not fluctuate the
+  projection is undefined rather than zero, so it degenerates to `k_B β² Var(E)`
+  rather than dividing by ~0 and returning noise.
+"""
+function _gc_heat_capacities(var_e::Float64, cov_en::Float64, var_n::Float64,
+                             n_avg::Float64, β::Float64, μ::Float64, kb::Float64)
     cv = kb * β^2 * (var_e - μ * cov_en)
-
-    # C_Ω — the fluctuation of the sampled Hamiltonian Ω = E − μN. Equal to C_E
-    # only at μ = 0; the two differ by −μ(∂⟨N⟩/∂T)_μ, which near an
-    # order–disorder transition of a small adlayer is comparable to the peak
-    # height itself. Its peaks do locate transitions, which is why it is
-    # reported rather than dropped.
     c_omega = kb * β^2 * (var_e - 2μ * cov_en + μ^2 * var_n)
-
-    # C_N — the heat capacity with particle-number fluctuations projected out,
-    # i.e. the part of Var(E) uncorrelated with N. Degenerates to k_Bβ²Var(E)
-    # when N does not fluctuate, where the projection is undefined rather than
-    # zero.
     n_scale = max(1.0, abs(n_avg))
     c_N = var_n > 1e-12 * n_scale^2 ?
           kb * β^2 * (var_e - cov_en^2 / var_n) :
           kb * β^2 * var_e
-
-    return (mean_E=u, cv=cv, mean_N=n_avg, c_omega=c_omega, c_N=c_N, var_N=var_n)
+    return cv, c_omega, c_N
 end
 
 "The all-NaN result, with the same fields as a successful one."
@@ -627,6 +640,17 @@ indexed `[i_μ, i_T]`:
 - `mean_N`: Mean particle number ⟨N⟩.
 - `var_N`: Particle-number variance ⟨N²⟩ − ⟨N⟩².
 - `mean_U`: Mean configurational energy ⟨E⟩.
+- `cv`: `C_E = k_B β² [Var(E) − μ Cov(E,N)]`, the thermodynamic heat capacity
+  `(∂U/∂T)_{μ,V}` — the default heat capacity, and the one to quote.
+- `c_omega`: `C_Ω = k_B β² Var(E − μN)`, the fluctuation of the Hamiltonian a
+  fixed-μ run would have sampled. Equals `C_E` only at μ = 0.
+- `c_N`: `k_B β² [Var(E) − Cov(E,N)²/Var(N)]`, the energy fluctuation with the
+  part correlated with particle number projected out.
+
+All three come from `_gc_heat_capacities`, shared with `gc_thermodynamic_stats`
+so the definitions cannot drift between the two estimators. They inherit the
+reweighting caveat above: at grid points where `N_eff` has collapsed they are
+as unreliable as everything else there, and more so, being second moments.
 - `N_eff`: Kish effective sample size of the reweighted estimate.
 """
 function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
@@ -689,6 +713,9 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
     var_N = Matrix{Float64}(undef, n_mu, n_T)
     mean_U = Matrix{Float64}(undef, n_mu, n_T)
     N_eff = Matrix{Float64}(undef, n_mu, n_T)
+    cv = Matrix{Float64}(undef, n_mu, n_T)
+    c_omega = Matrix{Float64}(undef, n_mu, n_T)
+    c_N = Matrix{Float64}(undef, n_mu, n_T)
 
     Threads.@threads for j in 1:n_T
         β = 1.0 / (kb * Ts[j])
@@ -700,14 +727,21 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
             sum_w = sum(ws)
             logXi[i, j] = log_prior_mass + max_log + log(sum_w)
             n_avg = sum(ws .* Ns) / sum_w
+            u = sum(ws .* Es) / sum_w
+            vN = sum(ws .* Ns .^ 2) / sum_w - n_avg^2
+            vE = sum(ws .* Es .^ 2) / sum_w - u^2
+            cEN = sum(ws .* Es .* Ns) / sum_w - u * n_avg
             mean_N[i, j] = n_avg
-            var_N[i, j] = sum(ws .* Ns .^ 2) / sum_w - n_avg^2
-            mean_U[i, j] = sum(ws .* Es) / sum_w
+            var_N[i, j] = vN
+            mean_U[i, j] = u
             N_eff[i, j] = sum_w^2 / sum(abs2, ws)
+            cv[i, j], c_omega[i, j], c_N[i, j] =
+                _gc_heat_capacities(vE, cEN, vN, n_avg, β, μs[i], kb)
         end
     end
 
-    return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U, N_eff=N_eff)
+    return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U, N_eff=N_eff,
+            cv=cv, c_omega=c_omega, c_N=c_N)
 end
 
 
@@ -805,10 +839,17 @@ the resulting bias is small but visible at low T or shallow NS; for the absolute
 - `kb::Float64`: Boltzmann constant in eV/K.
 
 # Returns
-A `NamedTuple` `(Xi, mean_N, var_N, mean_U)`. Each field is a `Matrix{Float64}`
-of size `(length(μ_grid), length(T_grid))` indexed `[i_μ, i_T]`. `Xi` is the
-absolute grand partition function, `mean_N` is `⟨N⟩`, `var_N` is `⟨N²⟩ − ⟨N⟩²`,
-and `mean_U` is `⟨E⟩` (grand-canonical, in eV).
+A `NamedTuple` `(Xi, mean_N, var_N, mean_U, cv, c_omega, c_N)`. Each field is a
+`Matrix{Float64}` of size `(length(μ_grid), length(T_grid))` indexed
+`[i_μ, i_T]`. `Xi` is the absolute grand partition function, `mean_N` is `⟨N⟩`,
+`var_N` is `⟨N²⟩ − ⟨N⟩²`, and `mean_U` is `⟨E⟩` (grand-canonical, in eV).
+
+`cv` (`C_E`, the thermodynamic heat capacity and the one to quote), `c_omega`
+(`C_Ω`) and `c_N` come from `_gc_heat_capacities`, shared with the other two
+estimators so the definitions cannot drift. Their `Var(E)` is assembled across
+the `N` sectors by the law of total variance — the per-sector `⟨E²⟩` is carried
+forward alongside `⟨E⟩`, so the fluctuation *within* each fixed-`N` run is
+included rather than only the spread of the sector means.
 """
 function gc_thermodynamic_stats_fixed_N(
     ns_outputs::AbstractVector{<:DataFrame},
@@ -841,6 +882,10 @@ function gc_thermodynamic_stats_fixed_N(
 
     log_Z_NS = Matrix{Float64}(undef, n_N, n_T)
     mean_E_N = Matrix{Float64}(undef, n_N, n_T)
+    # ⟨E²⟩ within each N sector. Needed for the grand-canonical Var(E), which by
+    # the law of total variance is E_N[Var(E|N)] + Var_N[⟨E|N⟩] — the first term
+    # is invisible if only the per-N means are carried forward.
+    mean_E2_N = Matrix{Float64}(undef, n_N, n_T)
 
     for (i, df) in enumerate(ns_outputs)
         # The N = 0 sector is the empty configuration: Z_NS^{(0)} = 1 by
@@ -848,6 +893,7 @@ function gc_thermodynamic_stats_fixed_N(
         if N_int[i] == 0
             log_Z_NS[i, :] .= 0.0
             mean_E_N[i, :] .= 0.0
+            mean_E2_N[i, :] .= 0.0
             continue
         end
 
@@ -875,6 +921,7 @@ function gc_thermodynamic_stats_fixed_N(
             sum_w = sum(ws)
             log_Z_NS[i, j] = max_log + log(sum_w)
             mean_E_N[i, j] = sum(ws .* Es_all) / sum_w
+            mean_E2_N[i, j] = sum(ws .* Es_all .^ 2) / sum_w
         end
     end
 
@@ -884,6 +931,9 @@ function gc_thermodynamic_stats_fixed_N(
     mean_N = Matrix{Float64}(undef, n_mu, n_T)
     var_N = Matrix{Float64}(undef, n_mu, n_T)
     mean_U = Matrix{Float64}(undef, n_mu, n_T)
+    cv = Matrix{Float64}(undef, n_mu, n_T)
+    c_omega = Matrix{Float64}(undef, n_mu, n_T)
+    c_N = Matrix{Float64}(undef, n_mu, n_T)
 
     for (j, T) in enumerate(T_grid)
         β = 1.0 / (kb * ustrip(u"K", T))
@@ -903,10 +953,22 @@ function gc_thermodynamic_stats_fixed_N(
             mean_N2 = sum(ws .* (N_int .^ 2)) / sum_w
             var_N[k, j] = mean_N2 - mean_N[k, j]^2
             mean_U[k, j] = sum(ws .* view(mean_E_N, :, j)) / sum_w
+
+            # Grand-canonical second moments assembled across the N sectors.
+            # ⟨E²⟩ uses the per-sector ⟨E²⟩ rather than ⟨E⟩², which is what
+            # keeps the within-sector fluctuation in the total.
+            mean_E2 = sum(ws .* view(mean_E2_N, :, j)) / sum_w
+            mean_EN = sum(ws .* N_int .* view(mean_E_N, :, j)) / sum_w
+            var_e = mean_E2 - mean_U[k, j]^2
+            cov_en = mean_EN - mean_U[k, j] * mean_N[k, j]
+            cv[k, j], c_omega[k, j], c_N[k, j] =
+                _gc_heat_capacities(var_e, cov_en, var_N[k, j], mean_N[k, j],
+                                    β, μ_val, kb)
         end
     end
 
-    return (Xi=Xi, mean_N=mean_N, var_N=var_N, mean_U=mean_U)
+    return (Xi=Xi, mean_N=mean_N, var_N=var_N, mean_U=mean_U,
+            cv=cv, c_omega=c_omega, c_N=c_N)
 end
 
 

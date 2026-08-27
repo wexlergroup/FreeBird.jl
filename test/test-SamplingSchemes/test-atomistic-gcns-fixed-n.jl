@@ -75,6 +75,19 @@
             @test isapprox(out.mean_N[k, 1], zV, rtol=1e-3)
             @test isapprox(out.var_N[k, 1], zV, rtol=1e-3)
             @test isapprox(out.mean_U[k, 1], 0.0, atol=1e-12)
+
+            # The heat capacities have a closed form here, and it is a sharp
+            # one: with E ≡ 0 the configurational energy cannot fluctuate, so
+            # Var(E) = Cov(E,N) = 0 and
+            #   C_E = 0,  C_N = 0,  C_Ω = k_B β² μ² Var(N).
+            # C_Ω survives alone because Ω = E − μN still fluctuates through N.
+            # A sign slip or a misplaced factor in any of the three definitions
+            # shows up here rather than as a plausible-looking number.
+            μ_val = ustrip(u"eV", μ_grid[k])
+            @test isapprox(out.cv[k, 1], 0.0, atol=1e-12)
+            @test isapprox(out.c_N[k, 1], 0.0, atol=1e-12)
+            @test isapprox(out.c_omega[k, 1],
+                           kb * β^2 * μ_val^2 * out.var_N[k, 1], rtol=1e-8)
         end
     end
 

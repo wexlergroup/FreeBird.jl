@@ -184,6 +184,33 @@ end
 
 
 """
+    print_lattice_header(io::IO, lattice::AbstractLattice)
+
+Print the geometry summary a live set shows above its walkers.
+
+Dispatched rather than written inline because the two lattice types do not share
+a field set: `MLattice` has `lattice_vectors`, `basis` and `cutoff_radii`;
+`AtomicLattice` has none of them and carries `lattice_atom`, `type_of_sites` and
+a site list instead. The live-set `show` read the `MLattice` names directly,
+which was a `FieldError` the moment an `AtomicLattice` could reach it.
+"""
+function print_lattice_header(io::IO, lattice::MLattice)
+    println(io, "    lattice_vectors:      ", lattice.lattice_vectors)
+    println(io, "    supercell_dimensions: ", lattice.supercell_dimensions)
+    println(io, "    periodicity:          ", lattice.periodicity)
+    println(io, "    basis:                ", lattice.basis)
+end
+
+function print_lattice_header(io::IO, lattice::AtomicLattice)
+    println(io, "    lattice_atom:         ", lattice.lattice_atom)
+    println(io, "    adsorbate_atoms:      ", lattice.adsorbate_atoms)
+    println(io, "    supercell_dimensions: ", lattice.supercell_dimensions)
+    println(io, "    periodicity:          ", lattice.periodicity)
+    println(io, "    type_of_sites:        ", lattice.type_of_sites)
+    println(io, "    sites:                ", num_sites(lattice))
+end
+
+"""
     print_occupation(io::IO, lattice::AtomicLattice)
 
 Print an `AtomicLattice`'s occupancy as a row of 0/1 over `all_sites`.

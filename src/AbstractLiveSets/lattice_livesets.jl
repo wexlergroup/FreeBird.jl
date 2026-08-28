@@ -47,10 +47,7 @@ end
 
 function Base.show(io::IO, ls::LatticeGasWalkers)
     println(io, "LatticeGasWalkers($(eltype(ls.walkers)), $(typeof(ls.hamiltonian))):")
-    println(io, "    lattice_vectors:      ", ls.walkers[1].configuration.lattice_vectors)
-    println(io, "    supercell_dimensions: ", ls.walkers[1].configuration.supercell_dimensions)
-    println(io, "    periodicity:          ", ls.walkers[1].configuration.periodicity)
-    println(io, "    basis:                ", ls.walkers[1].configuration.basis)
+    AbstractWalkers.print_lattice_header(io, ls.walkers[1].configuration)
     if length(ls.walkers) > 10
         for i in 1:5
             println(io, "[$i] ", "energy = ", ls.walkers[i].energy, ", iter = ", ls.walkers[i].iter)

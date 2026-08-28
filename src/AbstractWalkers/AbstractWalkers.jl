@@ -41,6 +41,9 @@ export MLattice, SLattice, GLattice, AtomicLattice
 export update_walker!
 export num_sites, occupied_site_count, num_lattice_components
 export coverage, sync_ase_lattice!, nn_distance
+# the AbstractLattice occupancy interface
+export n_occupied, is_occupied, set_occupied!, occupied_indices, empty_indices
+export swap_sites!, neighbor_shell
 export view_structure
 
 abstract type AbstractWalker end
@@ -52,5 +55,8 @@ include("lattice_walkers.jl")
 include("helpers.jl")
 
 include("shows.jl")
+
+# the accessor contract shared by MLattice and AtomicLattice
+include("lattice_interface.jl")
 
 end # module AbstractWalkers

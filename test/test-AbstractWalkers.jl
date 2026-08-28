@@ -1202,6 +1202,90 @@
         @test w.energy == 0.0u"eV"
     end
 
+    @testset "AbstractLattice occupancy interface" begin
+        # The accessors exist so that sampling code stops reaching into
+        # `lattice.components[1]`. What has to be true for that swap to be safe
+        # is that each accessor returns exactly what the field read it replaces
+        # returned — so that is what these assert, on both lattice types.
+
+        ml = MLattice{1,SquareLattice}(
+            supercell_dimensions=(4, 4, 1),
+            components=[[isodd(i) for i in 1:16]]
+        )
+
+        @test n_occupied(ml) == sum(ml.components[1])
+        @test occupied_indices(ml) == findall(ml.components[1])
+        @test empty_indices(ml) == findall(.!ml.components[1])
+        @test all(is_occupied(ml, i) == ml.components[1][i] for i in 1:16)
+        @test neighbor_shell(ml, 1) == ml.neighbors[1][1]
+        @test neighbor_shell(ml, 1, 2) == ml.neighbors[1][2]
+
+        # Occupied and empty partition the sites, with nothing counted twice.
+        @test sort(vcat(occupied_indices(ml), empty_indices(ml))) == collect(1:16)
+        @test length(occupied_indices(ml)) == n_occupied(ml)
+
+        set_occupied!(ml, 2, true)
+        @test is_occupied(ml, 2)
+        @test ml.components[1][2]          # the accessor really wrote the field
+        set_occupied!(ml, 2, false)
+        @test !is_occupied(ml, 2)
+
+        # swap_sites! exchanges, and is a no-op on a site with itself.
+        a, b = 1, 2
+        oa, ob = is_occupied(ml, a), is_occupied(ml, b)
+        swap_sites!(ml, a, b)
+        @test is_occupied(ml, a) == ob
+        @test is_occupied(ml, b) == oa
+        swap_sites!(ml, a, a)
+        @test is_occupied(ml, a) == ob
+
+        @testset "same contract on AtomicLattice" begin
+            al = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd",
+                supercell_dimensions=(4, 4, 1),
+                lattice_constant=3.947,
+                periodicity=(true, true, false),
+                adsorbate_atoms=["O"],
+                coverage=0.25,
+                num_nearest_neighbors=2,
+                type_of_sites=["hollow"]
+            )
+            n = num_sites(al)
+
+            @test n_occupied(al) == sum(al.occupations)
+            @test occupied_indices(al) == findall(al.occupations)
+            @test empty_indices(al) == findall(.!al.occupations)
+            @test all(is_occupied(al, i) == al.occupations[i] for i in 1:n)
+            @test sort(vcat(occupied_indices(al), empty_indices(al))) == collect(1:n)
+
+            # Writing through the accessor flags the ASE cache, which a direct
+            # field write would not — the reason to go through it at all.
+            sync_ase_lattice!(al)
+            @test al.ase_dirty == false
+            i = first(empty_indices(al))
+            set_occupied!(al, i, true)
+            @test is_occupied(al, i)
+            @test al.ase_dirty == true
+
+            sync_ase_lattice!(al)
+            j, k = first(occupied_indices(al)), first(empty_indices(al))
+            swap_sites!(al, j, k)
+            @test !is_occupied(al, j)
+            @test is_occupied(al, k)
+            @test al.ase_dirty == true
+
+            # One occupancy mask, so a second component is an error rather than
+            # a silent read of the first.
+            @test_throws ArgumentError n_occupied(al, 2)
+            @test_throws ArgumentError is_occupied(al, 1, 2)
+
+            # Refuses rather than returning a neighbour list for the wrong site:
+            # `neighbors` is indexed over the substrate grid, occupancy over
+            # all_sites.
+            @test_throws ArgumentError neighbor_shell(al, 1)
+        end
+    end
+
     @testset "AtomicLattice occupancy is index-keyed" begin
         lat = AtomicLattice{1,SquareLattice}(
             lattice_atom="Pd",

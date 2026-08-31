@@ -289,8 +289,18 @@ order, so `a, b, c = gc_thermodynamic_stats(...)` keeps working.
   itself near an order–disorder transition of a small adlayer. Reported rather
   than dropped because its peaks do locate transitions — but it is not
   `∂U/∂T`, and conflating the two is the reason both are named explicitly here.
+  (For completeness: `C_Ω = T(∂S/∂T)_{μ,V}`, so it *is* a heat capacity of the
+  open system in the `δQ = T dS` sense. Reporting `C_E` as "the" heat capacity
+  is a choice of which response function to privilege, not a uniqueness claim.)
 - `c_N`: **`C_N = k_B β² [Var(E) − Cov(E,N)²/Var(N)]`** — the part of the
-  energy fluctuation uncorrelated with particle number. Degenerates to
+  energy fluctuation uncorrelated with particle number. This is the standard
+  grand-canonical-to-canonical ensemble conversion: applying
+  `(∂U/∂T)_{N,V} = (∂U/∂T)_{μ,V} − (∂U/∂μ)_{T,V}(∂N/∂T)_{μ,V}/(∂N/∂μ)_{T,V}`
+  to the four GC fluctuation identities cancels every μ-term and leaves exactly
+  this expression, so `C_N` **is** the fixed-N heat capacity `C_{V,N}` measured
+  in a variable-N ensemble (cf. Hill, *Statistical Mechanics*; Allen & Tildesley
+  give the same formula for GCMC). It is the residual variance of E after linear
+  regression on N, hence non-negative by Cauchy–Schwarz. Degenerates to
   `k_B β² Var(E)` when N does not fluctuate, where the projection is undefined
   rather than zero.
 - `var_N`: Var(N).
@@ -500,8 +510,18 @@ order, so `a, b, c = gc_thermodynamic_stats(...)` keeps working.
   itself near an order–disorder transition of a small adlayer. Reported rather
   than dropped because its peaks do locate transitions — but it is not
   `∂U/∂T`, and conflating the two is the reason both are named explicitly here.
+  (For completeness: `C_Ω = T(∂S/∂T)_{μ,V}`, so it *is* a heat capacity of the
+  open system in the `δQ = T dS` sense. Reporting `C_E` as "the" heat capacity
+  is a choice of which response function to privilege, not a uniqueness claim.)
 - `c_N`: **`C_N = k_B β² [Var(E) − Cov(E,N)²/Var(N)]`** — the part of the
-  energy fluctuation uncorrelated with particle number. Degenerates to
+  energy fluctuation uncorrelated with particle number. This is the standard
+  grand-canonical-to-canonical ensemble conversion: applying
+  `(∂U/∂T)_{N,V} = (∂U/∂T)_{μ,V} − (∂U/∂μ)_{T,V}(∂N/∂T)_{μ,V}/(∂N/∂μ)_{T,V}`
+  to the four GC fluctuation identities cancels every μ-term and leaves exactly
+  this expression, so `C_N` **is** the fixed-N heat capacity `C_{V,N}` measured
+  in a variable-N ensemble (cf. Hill, *Statistical Mechanics*; Allen & Tildesley
+  give the same formula for GCMC). It is the residual variance of E after linear
+  regression on N, hence non-negative by Cauchy–Schwarz. Degenerates to
   `k_B β² Var(E)` when N does not fluctuate, where the projection is undefined
   rather than zero.
 - `var_N`: Var(N).

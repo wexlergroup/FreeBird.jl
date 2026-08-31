@@ -1191,6 +1191,38 @@
         @test num_sites(lat) > 0
         @test !hasproperty(lat, :basis)
 
+        # A periodic (nx,ny,1) fcc(100) slab has exactly nx*ny four-fold hollow
+        # sites. The two assertions above are both true of the wrong answer:
+        # `num_sites == length(all_sites)` is tautological and `> 0` passes on
+        # anything, which is how the non-periodic hollow finder shipped. It
+        # returned the 3x3 interior — 9 sites — for this very lattice, silently
+        # describing a smaller system, and made ICETHamiltonian's
+        # `length(all_sites) == nx*ny` guard unsatisfiable for the canonical 4x4
+        # Pd/O system that the physics regression is built on.
+        @test num_sites(lat) == 16
+
+        # ... and the finite case must keep the interior-only answer, because a
+        # hollow site needs four surrounding surface atoms and the boundary rows
+        # of a finite slab do not have them.
+        open_lat = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947,
+            periodicity=(false, false, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"]
+        )
+        @test num_sites(open_lat) == 9
+
+        # Sites are distinct and inside the cell.
+        @test length(unique(lat.all_sites)) == 16
+        let cell_x = 4 * 3.947 / sqrt(2), cell_y = 4 * 3.947 / sqrt(2)
+            @test all(0 <= x < cell_x + 1e-8 for (x, _) in lat.all_sites)
+            @test all(0 <= y < cell_y + 1e-8 for (_, y) in lat.all_sites)
+        end
+
         # The point of the shim: every LatticeWalker(::AtomicLattice) was a
         # MethodError until num_lattice_components had a method here, because
         # LatticeWalker's inner constructor calls it to fix its own type

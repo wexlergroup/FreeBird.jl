@@ -303,7 +303,41 @@ function get_bridge_sites(positions::Vector{Vector{Float64}}, cutoff)
     return sites
 end
 
-function get_hollow_sites(positions, nn, tol)
+"""
+    get_hollow_sites(positions, nn, tol, cell, periodicity)
+
+Four-fold hollow sites of the top layer of `positions`.
+
+Two algorithms, selected by `periodicity`, because the right answer genuinely
+differs:
+
+  * **both in-plane directions periodic** — the site list wraps, so a site whose
+    partner atom lies across the cell boundary is still found. A periodic
+    `(nx, ny, 1)` fcc(100) slab has exactly `nx*ny` hollow sites.
+  * **either direction finite** — only interior sites are returned. A hollow site
+    needs four surrounding surface atoms, and on a finite slab the boundary rows
+    do not have them.
+
+The periodic branch is why this takes `cell`. Before it existed, the finite
+branch was applied unconditionally: a periodic 4x4 Pd/O slab reported the **3x3
+interior, 9 sites**, not 16. That silently described a different, smaller system
+than the one intended, and `ICETHamiltonian`'s `length(all_sites) == nx*ny` guard
+would reject the canonical 4x4 hollow-site system outright with no input able to
+satisfy it — (4,4,1) gave 9 sites while nx*ny = 16, and (5,5,1) gave 16 sites
+while nx*ny = 25. No test caught it: the only assertions on `all_sites` were
+`num_sites(lat) == length(lat.all_sites)`, which is tautological, and `> 0`.
+"""
+function get_hollow_sites(positions, nn, tol, cell,
+                          periodicity::Tuple{Bool,Bool,Bool}=(true, true, false))
+    return (periodicity[1] && periodicity[2]) ?
+        _hollow_sites_periodic(positions, nn, tol, cell) :
+        _hollow_sites_finite(positions, nn, tol)
+end
+
+# Finite slab: an interior atom needs an in-cell neighbour to the right and one
+# above; the hollow sits between them. Boundary rows have no such partner and
+# correctly yield nothing.
+function _hollow_sites_finite(positions, nn, tol)
     sites = Vector{NTuple{2,Float64}}()
     for p in positions
         right = nothing
@@ -335,11 +369,56 @@ function get_hollow_sites(positions, nn, tol)
     return sites
 end
 
+# Periodic slab: replicate the top layer over the 8 surrounding images, pair each
+# atom with a neighbour one nn to its right (including across the boundary), and
+# place the two hollows half an nn above and below that bond's midpoint.
+# De-duplication is done in fractional coordinates mod 1, which is what folds the
+# images back onto a single site list.
+function _hollow_sites_periodic(positions, nn, tol, cell)
+    z_top = maximum(p[3] for p in positions)
+    top   = filter(p -> abs(p[3] - z_top) < tol, positions)
+
+    a    = (cell[1, 1], cell[1, 2])
+    b    = (cell[2, 1], cell[2, 2])
+    det  = a[1]*b[2] - a[2]*b[1]
+    half = nn / 2
+
+    extended = NTuple{2,Float64}[]
+    for p in top, da in -1:1, db in -1:1
+        push!(extended, (p[1] + da*a[1] + db*b[1],
+                         p[2] + da*a[2] + db*b[2]))
+    end
+
+    frac = NTuple{2,Float64}[]
+    for p in top
+        for q in extended
+            dx = q[1] - p[1]
+            dy = q[2] - p[2]
+            abs(sqrt(dx*dx + dy*dy) - nn) ≤ tol || continue
+            dx > tol && abs(dy) < tol || continue
+            mx = (p[1] + q[1]) / 2
+            my = (p[2] + q[2]) / 2
+
+            for candidate in ((mx, my + half), (mx, my - half))
+                s = mod(( candidate[1]*b[2] - candidate[2]*b[1]) / det, 1.0)
+                t = mod((-candidate[1]*a[2] + candidate[2]*a[1]) / det, 1.0)
+                if !any(fs -> abs(s - fs[1]) < 1e-6 && abs(t - fs[2]) < 1e-6, frac)
+                    push!(frac, (s, t))
+                end
+            end
+        end
+    end
+
+    return [(s*a[1] + t*b[1], s*a[2] + t*b[2]) for (s, t) in frac]
+end
+
 function find_fcc_lattice_sites(slab, nn, tol)
     positions = get_positions(slab)
+    cell      = pyconvert(Matrix{Float64}, slab.get_cell())
+    pbc       = pyconvert(Vector{Bool}, slab.get_pbc())
     ontop   = get_ontop_sites(positions)
     bridge  = get_bridge_sites(positions, nn)
-    hollow  = get_hollow_sites(positions, nn, tol)
+    hollow  = get_hollow_sites(positions, nn, tol, cell, (pbc[1], pbc[2], pbc[3]))
 
     return vcat(ontop, bridge, hollow)
 end
@@ -388,7 +467,12 @@ function add_adsorbates!(slab, adsorbate_atoms, type_of_sites; height, coverage,
     end
 
     if "hollow" in type_of_sites
-        append!(all_sites, get_hollow_sites(positions, nn, tol))
+        # cell and pbc come off the slab, so the hollow finder wraps exactly when
+        # the slab is periodic — see get_hollow_sites.
+        cell = pyconvert(Matrix{Float64}, slab.get_cell())
+        pbc  = pyconvert(Vector{Bool}, slab.get_pbc())
+        append!(all_sites,
+                get_hollow_sites(positions, nn, tol, cell, (pbc[1], pbc[2], pbc[3])))
     end
 
     isempty(all_sites) && throw(ArgumentError(

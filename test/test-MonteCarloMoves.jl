@@ -148,7 +148,7 @@
                     initial_energy = s_walker.energy
                     
                     # Perform MC walk
-                    accepted, rate, updated_walker = MC_random_walk!(n_steps, s_walker, ham, emax)            # !!!Error: type MLattice has no field occupations
+                    accepted, rate, updated_walker = MC_random_walk!(n_steps, s_walker, ham, emax)
                     
                     # Basic checks
                     @test typeof(accepted) == Bool

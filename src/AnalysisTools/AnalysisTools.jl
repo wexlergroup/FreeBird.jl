@@ -802,11 +802,15 @@ grand sum for numerical stability.
 
 ## Live-set tail correction
 
-After a finite number of NS iterations `n_iters` the recorded weights `ωᵢ` carry
-only `1 − (K/(K+n_cull))^{n_iters}` of the prior volume (times `ω0`); the remainder
-sits in the `K` surviving live walkers. Supplying `live_emax` (one vector of K live
-walker energies per `N`) adds the live-set tail to each per-N evidence: each live
-walker contributes weight `ω0 · (K/(K+n_cull))^{n_iters} / K` at its current energy.
+After a finite number of NS iterations `n_iters` the recorded weights `ωᵢ` sum to
+`ω0 · r · (1 − r^{n_iters})` with `r = K/(K+n_cull)`; the remaining prior volume,
+`X_f = r^{n_iters}`, sits in the `K` surviving live walkers. Supplying `live_emax`
+(one vector of K live walker energies per `N`) adds that tail to each per-N
+evidence: each live walker contributes weight `X_f / K` at its current energy —
+with **no** `ω0` factor, since `ω0` rescales the dead-sample shell weights and not
+the residual volume. At the recommended `ω0 = (K+n_cull)/K` the dead weights sum
+to exactly `1 − X_f` and the tail closes `Σw = 1`.
+
 When omitted, the live-set tail is neglected — for ratio observables (`⟨N⟩`, `⟨U⟩`)
 the resulting bias is small but visible at low T or shallow NS; for the absolute
 `Ξ` it appears as a uniform-in-N prefactor that does not cancel.
@@ -899,12 +903,17 @@ function gc_thermodynamic_stats_fixed_N(
 
         log_ωi = log_ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
         Es = collect(Float64, df.emax)
-        n_iters = length(df.iter)
-        # Each live walker carries weight ω0 · (K/(K+n_cull))^n_iters / K,
-        # accounting for the prior volume that finite termination leaves in
-        # the live set.
-        log_tail = log(ω0) + n_iters * log(n_walkers / (n_walkers + n_cull)) -
-                   log(n_walkers)
+        # Residual prior volume after the last recorded iteration, split
+        # uniformly over the K surviving walkers. No ω0 factor here: ω0 corrects
+        # the dead-sample shell weights, not the residual volume X_f — with
+        # ω0 = (K+C)/K the dead weights sum to 1 − X_f and the tail closes
+        # Σw = 1 exactly. Identical construction to gc_thermodynamic_stats and
+        # gc_thermodynamic_stats_ideal_ref, which is what the docstrings above
+        # claim all three share; this one used to carry a stray log(ω0), which
+        # overweighted the tail by (K+C)/K, and indexed n_iters by `length`
+        # rather than `maximum` of df.iter.
+        n_iters = isempty(df.iter) ? 0 : maximum(df.iter)
+        log_tail = n_iters * log(n_walkers / (n_walkers + n_cull)) - log(n_walkers)
         for (j, T) in enumerate(T_grid)
             β = 1.0 / (kb * ustrip(u"K", T))
             if live_emax === nothing

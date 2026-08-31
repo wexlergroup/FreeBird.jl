@@ -35,6 +35,56 @@
         @test isapprox(ustrip(u"Å", Λ_2T) / ustrip(u"Å", Λ_H), 1 / sqrt(2), rtol=1e-10)
     end
 
+    @testset "shallow-NS live-set tail closes Σw = 1 exactly" begin
+        # The closed-form testset below runs 5000 iterations, where the residual
+        # volume X_f = r^5000 underflows and the tail cannot be measured at all —
+        # it passed with a stray ω0 on the tail for exactly that reason. Here the
+        # NS is deliberately shallow, so X_f is O(1) and the tail dominates.
+        #
+        # K = 4, C = 1, n = 3  ⇒  r = 4/5, X_f = 0.512, dead weights = 0.488.
+        # With ω0 = (K+C)/K the dead weights sum to 1 − X_f and a tail of X_f/K
+        # per survivor closes Z_NS^{(N)} = 1 exactly, making Ξ = exp(zV) to
+        # machine precision. A tail carrying ω0·X_f/K instead gives
+        # Z_NS = 1.128, i.e. Ξ high by 5–12 % over this zV range.
+        K, C, n_iters = 4, 1, 3
+        ω0_test = (K + C) / K
+        N_max = 20
+        N_values = collect(0:N_max)
+
+        ns_outputs = [DataFrame(iter=collect(1:n_iters), emax=zeros(n_iters))
+                      for _ in N_values]
+        live_emax = [zeros(K) for _ in N_values]
+
+        V = 1000.0u"Å^3"
+        m = 40.0u"u"
+        T = 300.0u"K"
+        kb = 8.617333262e-5
+        β = 1.0 / (kb * ustrip(u"K", T))
+        Λ_val = ustrip(u"Å", FreeBird.AnalysisTools._thermal_wavelength(m, T))
+        V_val = ustrip(u"Å^3", V)
+        μ_for_zV(zV) = (log(zV * Λ_val^3 / V_val) / β) * u"eV"
+
+        zV_targets = (0.5, 1.5, 3.0)
+        out = gc_thermodynamic_stats_fixed_N(
+            ns_outputs, N_values, V, m, [μ_for_zV(z) for z in zV_targets], [T];
+            n_walkers=K, n_cull=C, ω0=ω0_test, live_emax=live_emax)
+
+        for (k, zV) in enumerate(zV_targets)
+            # Machine precision, not sampling tolerance: this is an algebraic
+            # identity, and it is what makes the tail construction checkable.
+            @test isapprox(out.Xi[k, 1], exp(zV), rtol=1e-8)
+            @test isapprox(out.mean_N[k, 1], zV, rtol=1e-8)
+            @test isapprox(out.var_N[k, 1], zV, rtol=1e-8)   # Poisson ⇒ Var = ⟨N⟩
+        end
+
+        # Same construction, tail omitted: the dead weights alone carry only
+        # 1 − X_f = 0.488 of the prior volume per sector, so Ξ must fall short.
+        out_trunc = gc_thermodynamic_stats_fixed_N(
+            ns_outputs, N_values, V, m, [μ_for_zV(1.5)], [T];
+            n_walkers=K, n_cull=C, ω0=ω0_test)
+        @test out_trunc.Xi[1, 1] < exp(1.5)
+    end
+
     @testset "ideal-gas closed form: Ξ, ⟨N⟩, Var(N), ⟨U⟩" begin
         # Synthesize per-N canonical NS DataFrames for an ideal gas (E ≡ 0).
         # With ω0 = (K+1)/K and many iterations, sum(ω_i) → 1 exactly,

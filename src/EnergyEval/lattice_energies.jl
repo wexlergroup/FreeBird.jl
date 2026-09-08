@@ -264,6 +264,58 @@ function site_flip_delta(lattice::SLattice, h::SiteFieldLatticeHamiltonian{H,U},
 end
 
 """
+    cluster_flip_count(occupations::Vector{Bool}, c::ClusterInteraction{K,U}, site::Int)
+
+Number of embeddings of one cluster figure that contain `site` and whose
+other `K - 1` sites are all occupied: the embeddings whose occupancy count
+changes when `site` flips, read from the figure's per-site `incidence`
+list. A site beyond the incidence vector (no embedding contains it)
+contributes zero. The per-figure function barrier keeps the scan
+type-stable across the heterogeneous cluster orders of a
+`ClusterLatticeHamiltonian`, as in `cluster_energy`.
+"""
+function cluster_flip_count(occupations::Vector{Bool}, c::ClusterInteraction{K,U},
+                            site::Int) where {K,U}
+    site <= length(c.incidence) || return 0
+    n = 0
+    for idx in c.incidence[site]
+        others_occupied = true
+        for s in c.embeddings[idx]
+            if s != site && !occupations[s]
+                others_occupied = false
+                break
+            end
+        end
+        n += others_occupied ? 1 : 0
+    end
+    return n
+end
+
+"""
+    site_flip_delta(lattice::SLattice, h::ClusterLatticeHamiltonian{N,U}, site::Int) where {N,U}
+
+Exact energy change from flipping the occupancy of `site` under a
+multi-body lattice Hamiltonian: the wrapped pair part's delta (the
+`GenericLatticeHamiltonian` method, with its neighbor-convention rules)
+plus, per cluster figure, the coupling times the number of embeddings
+containing `site` whose other sites are all occupied
+([`cluster_flip_count`](@ref)), with the flip sign (positive when the site
+fills, negative when it empties). Mirrors the `interacting_energy` method
+for the cluster Hamiltonian term by term, so the two agree to the
+single-flip rounding class.
+"""
+function site_flip_delta(lattice::SLattice, h::ClusterLatticeHamiltonian{N,U},
+                         site::Int) where {N,U}
+    occ = lattice.components[1]
+    sgn = occ[site] ? -1 : 1
+    acc::U = zero(U)
+    for c in h.clusters
+        acc += cluster_flip_count(occ, c, site) * c.coupling
+    end
+    return site_flip_delta(lattice, h.pair_ham, site) + sgn * acc
+end
+
+"""
     interacting_energy(lattice::MLattice{C,G}, h::MLatticeHamiltonian{C,N,U})
 
 Compute the interaction energy of a multi-component lattice configuration using the Hamiltonian parameters.

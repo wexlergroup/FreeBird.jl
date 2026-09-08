@@ -311,7 +311,7 @@ function MC_random_walk_2D!(
 end
 
 """
-    MC_random_walk!(n_steps::Int, lattice::LatticeWalker, h::ClassicalHamiltonian, emax::Float64; energy_perturb::Float64=0.0)
+    MC_random_walk!(n_steps::Int, lattice::LatticeWalker, h::ClassicalHamiltonian, emax::Float64; energy_perturb::Float64=0.0, incremental::Bool=false)
 
 Perform a Monte Carlo random walk on the lattice system.
 
@@ -321,6 +321,21 @@ Perform a Monte Carlo random walk on the lattice system.
 - `h::ClassicalHamiltonian`: The lattice gas Hamiltonian.
 - `emax::Float64`: The maximum energy allowed for accepting a move.
 - `energy_perturb::Float64=0.0`: The energy perturbation used to make degenerate configurations distinguishable.
+- `incremental::Bool=false`: Opt-in incremental energy evaluation (default
+  `false` = the shipped full-recompute arithmetic, draw-count and digit
+  identical). When `true`, a single-component walk under a Hamiltonian with
+  `supports_site_deltas` anchors the unperturbed energy once at entry and
+  advances it per proposal by exact O(z) `site_flip_delta` sums: a hop pair
+  is two sequentially composed site flips, the second delta evaluated on the
+  intermediate configuration, and an equal-occupancy pair contributes
+  exactly zero. The pair draws are those of the default path in the same
+  order, the perturbation is added on top as on the default path, and a
+  rejected pair is reverted by the same replay. Multi-component walkers and
+  Hamiltonians without the trait fall back to the full recompute inside the
+  same walk. The delta path accumulates energy in a different floating-point
+  order, so same-seed trajectories are not digit-identical to the default
+  and accept/reject decisions near the ceiling can differ; flipping the
+  default is deliberately out of scope.
 
 # Returns
 - `accept_this_walker::Bool`: Whether the walker is accepted or not.
@@ -333,28 +348,68 @@ function MC_random_walk!(n_steps::Int,
                          h::ClassicalHamiltonian,
                          emax::Float64;
                          energy_perturb::Float64=0.0,
+                         incremental::Bool=false,
                          ) where C
 
     n_accept = 0
     accept_this_walker = false
     emax = emax * unit(lattice.energy)
 
+    # Opt-in incremental energy path (single-component walkers only): anchor
+    # the unperturbed energy once per walk and advance it by exact
+    # site_flip_delta sums, the pattern of MC_grand_canonical_walk!. The
+    # default path below is the shipped arithmetic in the shipped order with
+    # the shipped random draws; the anchor is not evaluated on it.
+    use_deltas = incremental && C == 1 && supports_site_deltas(h)
+    zero_e = 0.0 * unit(lattice.energy)
+    raw = use_deltas ? interacting_energy(lattice.configuration, h) : zero_e
+    step_delta = zero_e
+    hop_from = 0
+    hop_to = 0
+    was_null = false
+
     for i_mc_step in 1:n_steps
         config = lattice.configuration
 
-        # In-place proposal: the hop-pair walk mutates the live configuration
-        # and returns the drawn pair; a rejected proposal is reverted by
-        # replaying the pair (involution). No random draw changes.
-        hop_from, hop_to = _lattice_walk_draw!(config)
+        if use_deltas
+            # Inlined draws in lockstep with _lattice_walk_draw!(::SLattice)
+            # (identical order, identical count). A non-null pair composes
+            # two flips with the second delta evaluated on the intermediate
+            # state; an equal-occupancy pair performs no flips and
+            # contributes exactly zero, as under _lattice_walk_apply!.
+            hop_from = rand(eachindex(config.components[1]))
+            hop_to = rand(eachindex(config.components[1]))
+            was_null = config.components[1][hop_from] == config.components[1][hop_to]
+            if !was_null
+                step_delta = site_flip_delta(config, h, hop_from)
+                config.components[1][hop_from] = !config.components[1][hop_from]
+                step_delta += site_flip_delta(config, h, hop_to)
+                config.components[1][hop_to] = !config.components[1][hop_to]
+            end
+        else
+            # In-place proposal: the hop-pair walk mutates the live configuration
+            # and returns the drawn pair; a rejected proposal is reverted by
+            # replaying the pair (involution). No random draw changes.
+            hop_from, hop_to = _lattice_walk_draw!(config)
+        end
 
         perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
-        proposed_energy = interacting_energy(config, h) + perturbation_energy
+        if use_deltas
+            proposed_raw = was_null ? raw : raw + step_delta
+            proposed_energy = proposed_raw + perturbation_energy
+        else
+            proposed_raw = zero_e
+            proposed_energy = interacting_energy(config, h) + perturbation_energy
+        end
 
         @debug "proposed_energy = $proposed_energy, perturbed_energy = $(perturbation_energy), emax = $(emax)), accept = $(proposed_energy < emax)"
         if proposed_energy >= emax
             _lattice_walk_apply!(config, hop_from, hop_to)
             continue
         else
+            # On accept the anchor advances to the unperturbed proposal and
+            # the stored walker energy keeps the perturbed value, as before
+            raw = proposed_raw
             lattice.energy = proposed_energy
             n_accept += 1
             accept_this_walker = true

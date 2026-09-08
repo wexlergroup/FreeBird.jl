@@ -840,9 +840,16 @@
         @test abs(ustrip(u"eV", null_wk.energy -
                   interacting_energy(null_wk.configuration, inc_ham))) <= 1e-12
 
-        # Trait fallback: an unsupported Hamiltonian under incremental =
-        # true recomputes fully each step and stays digit-identical to the
-        # same-seed default
+        # Cluster Hamiltonian under incremental = true. Originally the trait
+        # fallback fixture (digit identity with the same-seed default);
+        # ClusterLatticeHamiltonian now supports site deltas, so the walk
+        # takes the delta path and the energy agrees with the full recompute
+        # to the accumulation class instead of digit for digit. Every
+        # proposal is accepted under this ceiling, so the configuration
+        # stream, the count, and the rate stay exact. The fallback contract
+        # itself is covered with a trait-less fixture in
+        # test-lattice-site-deltas.jl (a runtests-level file, which can
+        # define the fixture type).
         cl_ham = ClusterLatticeHamiltonian(inc_ham,
             [ClusterInteraction(0.1u"eV", [(1, 2, 5)])])
         function inc_cl(inc)
@@ -859,7 +866,7 @@
         end
         eT, nT, rT = inc_cl(true)
         eF, nF, rF = inc_cl(false)
-        @test eT == eF
+        @test isapprox(eT, eF; rtol=1e-12)
         @test nT == nF
         @test rT == rF
 

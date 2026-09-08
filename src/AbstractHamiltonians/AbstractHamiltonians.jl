@@ -207,10 +207,25 @@ Throws `ArgumentError` on `K < 3`, a non-finite coupling, an embedding that
 is not strictly increasing or contains a non-positive index, or a duplicate
 embedding; warns on an empty embedding list (which contributes exactly
 zero energy).
+
+# Fields
+- `coupling::U`: The figure's coupling (energy per fully occupied embedding).
+- `embeddings::Vector{NTuple{K,Int}}`: The canonical embedding list.
+- `incidence::Vector{Vector{Int}}`: Per-site incidence lists, built once by
+  the constructor: `incidence[s]` holds the indices into `embeddings` of
+  every embedding containing site `s`, in embedding order. The vector is
+  sized to the largest site index present (canonical form makes each
+  tuple's last entry its maximum); an empty embedding list gives an empty
+  vector. The lists make the exact single-site flip delta of
+  `site_flip_delta` a scan over the embeddings incident to the flipped
+  site instead of a sweep over every embedding. They are derived once at
+  construction, so `embeddings` must not be mutated afterwards (the energy
+  and the delta would silently disagree); build a new interaction instead.
 """
 struct ClusterInteraction{K,U}
     coupling::U
     embeddings::Vector{NTuple{K,Int}}
+    incidence::Vector{Vector{Int}}
 
     function ClusterInteraction{K,U}(coupling::U, embeddings::Vector{NTuple{K,Int}}) where {K,U}
         if K < 3
@@ -243,7 +258,16 @@ struct ClusterInteraction{K,U}
             end
             push!(seen, e)
         end
-        return new(coupling, embeddings)
+        # Site-to-embedding incidence, sized to the largest site index
+        # (canonical form: each tuple's last entry is its maximum).
+        max_site = isempty(embeddings) ? 0 : maximum(e[end] for e in embeddings)
+        incidence = [Int[] for _ in 1:max_site]
+        for (idx, e) in enumerate(embeddings)
+            for s in e
+                push!(incidence[s], idx)
+            end
+        end
+        return new(coupling, embeddings, incidence)
     end
 end
 
@@ -472,14 +496,19 @@ Opt-in trait: whether an exact O(z) single-site occupancy-flip energy delta
 
 The `false` fallback is a contract, not a failure: consumers fall back to
 full recomputation instead of silently mis-evaluating. `ClusterLatticeHamiltonian`
-deliberately stays `false` (an exact cluster delta needs precomputed
-site-to-embedding incidence lists that do not exist yet), and the site-field
-wrapper delegates to its base. New `ClassicalHamiltonian` types opt in by
+opts in through the per-site incidence lists its `ClusterInteraction`s
+carry (each figure's delta is a scan over the embeddings incident to the
+flipped site), and the site-field wrapper delegates to its base. The
+grand-canonical lattice kernel reads the same trait behind its own
+`incremental` flag, so an `incremental = true` grand-canonical walk under a
+`ClusterLatticeHamiltonian` takes the delta path too; the default of every
+kernel stays the full recompute. New `ClassicalHamiltonian` types opt in by
 adding a method alongside their `site_flip_delta` method.
 """
 supports_site_deltas(::ClassicalHamiltonian) = false
 supports_site_deltas(::GenericLatticeHamiltonian) = true
 supports_site_deltas(::MLatticeHamiltonian) = true
+supports_site_deltas(::ClusterLatticeHamiltonian) = true
 supports_site_deltas(h::SiteFieldLatticeHamiltonian) = supports_site_deltas(h.base)
 
 end # module Hamiltonians

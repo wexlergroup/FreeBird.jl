@@ -209,6 +209,19 @@ For lattice systems, `walks_freq` and `clusters_freq` control the ratio of local
 - `cluster_adjust_interval::Int`: Number of NS iterations between cluster p adjustments (default 50).
 - `cluster_p_floor::Float64`: Lower bound for adaptive cluster p (default 0.01).
 - `cluster_p_ceiling::Float64`: Upper bound for adaptive cluster p (default 1.0).
+- `incremental::Bool`: Opt-in incremental energy evaluation in the lattice
+  local-swap kernel (default `false` = the shipped full-recompute
+  arithmetic, draw-count and digit identical). When `true`, the lattice
+  mixed step passes it to `MC_random_walk!`, which under a Hamiltonian with
+  `supports_site_deltas` advances a per-walk raw-energy anchor by exact
+  O(z) `site_flip_delta` sums; cluster proposals (`MC_cluster_walk!`),
+  multi-component walkers, and unsupported Hamiltonians keep the full
+  recompute. The delta path accumulates energy in a different
+  floating-point order, so same-seed trajectories are not digit-identical
+  to the default; flipping the default is deliberately out of scope. A
+  swap-only incremental walk is
+  `MCMixedMoves(walks_freq=1, clusters_freq=0, incremental=true)`.
+  Atomistic systems ignore the field.
 """
 mutable struct MCMixedMoves <: MCRoutine
     walks_freq::Int
@@ -219,6 +232,18 @@ mutable struct MCMixedMoves <: MCRoutine
     cluster_adjust_interval::Int
     cluster_p_floor::Float64
     cluster_p_ceiling::Float64
+    incremental::Bool
+end
+
+# Eight-positional constructor (the field set before `incremental` was
+# appended): keeps every shipped positional call working with the default.
+function MCMixedMoves(walks_freq::Int, swaps_freq::Int, clusters_freq::Int,
+                      initial_cluster_p::Float64, target_cluster_accept::Float64,
+                      cluster_adjust_interval::Int, cluster_p_floor::Float64,
+                      cluster_p_ceiling::Float64)
+    MCMixedMoves(walks_freq, swaps_freq, clusters_freq,
+                 initial_cluster_p, target_cluster_accept, cluster_adjust_interval,
+                 cluster_p_floor, cluster_p_ceiling, false)
 end
 
 # Backward-compatible constructor: MCMixedMoves(5, 1)
@@ -236,10 +261,11 @@ function MCMixedMoves(;
     cluster_adjust_interval::Int=50,
     cluster_p_floor::Float64=0.01,
     cluster_p_ceiling::Float64=1.0,
+    incremental::Bool=false,
 )
     MCMixedMoves(walks_freq, swaps_freq, clusters_freq,
                  initial_cluster_p, target_cluster_accept, cluster_adjust_interval,
-                 cluster_p_floor, cluster_p_ceiling)
+                 cluster_p_floor, cluster_p_ceiling, incremental)
 end
 
 """
@@ -1137,7 +1163,8 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     if n_local > 0
         local_accepted, local_rate, to_walk = MC_random_walk!(
             n_local, to_walk, h, emax;
-            energy_perturb=ns_params.energy_perturbation)
+            energy_perturb=ns_params.energy_perturbation,
+            incremental=mc_routine.incremental)
     end
 
     accept = cluster_accepted || local_accepted

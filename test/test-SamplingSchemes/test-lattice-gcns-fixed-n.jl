@@ -186,59 +186,120 @@
             ls_filename="test_lfn.ls.extxyz",
             n_traj=1_000_000, n_snap=1_000_000, n_info=1_000_000)
 
-        dfs = Vector{DataFrame}(undef, M + 1)
-        live = Vector{Vector{Float64}}(undef, M + 1)
-
-        # N = 0: empty lattice, handled internally (DataFrame ignored).
-        dfs[1] = DataFrame(iter=Int[], emax=Float64[])
-        live[1] = Float64[]
-
-        for N in 1:(M - 1)
-            walkers = [
-                begin
-                    lat = lattice_at(N)
-                    generate_random_new_lattice_sample!(lat)
-                    LatticeWalker(lat)
-                end for _ in 1:K]
-            liveset = LatticeGasWalkers(walkers, ham, perturb_energy=1e-12)
-            ns_params = LatticeNestedSamplingParameters(
-                mc_steps=60,
-                allowed_fail_count=100_000)
-            df, final_ls, _ = nested_sampling(
-                liveset, ns_params, n_iters, MCRandomWalkClone(), save_strategy)
-            dfs[N + 1] = df
-            live[N + 1] = [ustrip(u"eV", w.energy) for w in final_ls.walkers]
-        end
-
-        # N = M: a single configuration, so NS cannot progress; the live-set
-        # tail carries the whole sector (empty DataFrame + K copies of E_full).
-        dfs[M + 1] = DataFrame(iter=Int[], emax=Float64[])
-        live[M + 1] = fill(only(exact_E[M]), K)
-
-        rm("test_lfn_df.csv", force=true)
-        rm("test_lfn.traj.extxyz", force=true)
-        rm("test_lfn.ls.extxyz", force=true)
-
         μ_grid = [-0.10, -0.06, -0.03] .* u"eV"
         T_grid = [300.0, 500.0] .* u"K"
 
-        stats = gc_thermodynamic_stats_fixed_N(dfs, collect(0:M), M,
-            μ_grid, T_grid;
-            n_walkers=K, n_cull=1, ω0=(K + 1) / K, live_emax=live)
+        # The ladder as a function of the routine so the incremental swap
+        # walk below runs the identical protocol; the shipped run keeps its
+        # RNG sequence (the function consumes no draws before the loop).
+        function run_ladder(routine)
+            dfs = Vector{DataFrame}(undef, M + 1)
+            live = Vector{Vector{Float64}}(undef, M + 1)
 
-        for (j, T) in enumerate(T_grid), (k, μ) in enumerate(μ_grid)
-            ref_logXi, ref_mean_N, ref_var_N, ref_mean_U = exact_stats(
-                ustrip(u"eV", μ), ustrip(u"K", T))
-            @test isapprox(stats.logXi[k, j], ref_logXi, atol=0.1)
-            @test isapprox(stats.mean_N[k, j], ref_mean_N, rtol=0.05, atol=0.1)
-            @test isapprox(stats.var_N[k, j], ref_var_N, rtol=0.25, atol=0.2)
-            @test isapprox(stats.mean_U[k, j], ref_mean_U, rtol=0.05, atol=0.02)
+            # N = 0: empty lattice, handled internally (DataFrame ignored).
+            dfs[1] = DataFrame(iter=Int[], emax=Float64[])
+            live[1] = Float64[]
+
+            for N in 1:(M - 1)
+                walkers = [
+                    begin
+                        lat = lattice_at(N)
+                        generate_random_new_lattice_sample!(lat)
+                        LatticeWalker(lat)
+                    end for _ in 1:K]
+                liveset = LatticeGasWalkers(walkers, ham, perturb_energy=1e-12)
+                ns_params = LatticeNestedSamplingParameters(
+                    mc_steps=60,
+                    allowed_fail_count=100_000)
+                df, final_ls, _ = nested_sampling(
+                    liveset, ns_params, n_iters, routine, save_strategy)
+                dfs[N + 1] = df
+                live[N + 1] = [ustrip(u"eV", w.energy) for w in final_ls.walkers]
+            end
+
+            # N = M: a single configuration, so NS cannot progress; the live-set
+            # tail carries the whole sector (empty DataFrame + K copies of E_full).
+            dfs[M + 1] = DataFrame(iter=Int[], emax=Float64[])
+            live[M + 1] = fill(only(exact_E[M]), K)
+
+            rm("test_lfn_df.csv", force=true)
+            rm("test_lfn.traj.extxyz", force=true)
+            rm("test_lfn.ls.extxyz", force=true)
+
+            return gc_thermodynamic_stats_fixed_N(dfs, collect(0:M), M,
+                μ_grid, T_grid;
+                n_walkers=K, n_cull=1, ω0=(K + 1) / K, live_emax=live)
         end
 
-        # Monotonicity: ⟨N⟩ increases with μ at fixed T.
-        for j in eachindex(T_grid)
-            @test issorted(stats.mean_N[:, j])
+        function check_stats(stats)
+            for (j, T) in enumerate(T_grid), (k, μ) in enumerate(μ_grid)
+                ref_logXi, ref_mean_N, ref_var_N, ref_mean_U = exact_stats(
+                    ustrip(u"eV", μ), ustrip(u"K", T))
+                @test isapprox(stats.logXi[k, j], ref_logXi, atol=0.1)
+                @test isapprox(stats.mean_N[k, j], ref_mean_N, rtol=0.05, atol=0.1)
+                @test isapprox(stats.var_N[k, j], ref_var_N, rtol=0.25, atol=0.2)
+                @test isapprox(stats.mean_U[k, j], ref_mean_U, rtol=0.05, atol=0.02)
+            end
+
+            # Monotonicity: ⟨N⟩ increases with μ at fixed T.
+            for j in eachindex(T_grid)
+                @test issorted(stats.mean_N[:, j])
+            end
         end
+
+        stats = run_ladder(MCRandomWalkClone())
+        check_stats(stats)
+
+        # The same ladder through the swap-only incremental walk (the
+        # lattice mixed step with no cluster moves, delta-path energies),
+        # against the same exact reference at the same gates
+        Random.seed!(1001)
+        stats_inc = run_ladder(MCMixedMoves(walks_freq=1, clusters_freq=0,
+                                            incremental=true))
+        check_stats(stats_inc)
+    end
+
+    # ================================================================
+    @testset "incremental routine: constructor and default neutrality" begin
+        using Random
+        # The appended field defaults to false through every shipped
+        # constructor form
+        @test MCMixedMoves(5, 1).incremental == false
+        @test MCMixedMoves(1, 0, 0, 0.3, 0.3, 50, 0.01, 1.0).incremental == false
+        @test MCMixedMoves(walks_freq=1, clusters_freq=0, incremental=true).incremental == true
+
+        # Same-seed driver A/B: a routine that never mentions `incremental`
+        # against `incremental = false`, identical ledger and live set
+        ham = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
+        function ab_run(routine, tag)
+            Random.seed!(1002)
+            walkers = [begin
+                lat = MLattice{1,SquareLattice}(lattice_constant=1.0,
+                    basis=[(0.0, 0.0, 0.0)], supercell_dimensions=(4, 4, 1),
+                    periodicity=(true, true, false), cutoff_radii=[1.1],
+                    components=[[false for _ in 1:16]], adsorptions=:full)
+                lat.components[1][1:8] .= true
+                generate_random_new_lattice_sample!(lat)
+                LatticeWalker(lat)
+            end for _ in 1:20]
+            ls = LatticeGasWalkers(walkers, ham, perturb_energy=1e-9)
+            params = LatticeNestedSamplingParameters(mc_steps=30,
+                                                     allowed_fail_count=100_000)
+            save = SaveEveryN("t_ab_$(tag).csv", "t_ab_$(tag).traj",
+                              "t_ab_$(tag).ls", 1000000, 1000000, 1000000)
+            df, lsf, _ = nested_sampling(ls, params, Int64(100), routine, save)
+            rm.(["t_ab_$(tag).csv", "t_ab_$(tag).traj", "t_ab_$(tag).ls"],
+                force=true)
+            return df, lsf
+        end
+        df_a, ls_a = ab_run(MCMixedMoves(walks_freq=1, clusters_freq=0), "a")
+        df_b, ls_b = ab_run(MCMixedMoves(walks_freq=1, clusters_freq=0,
+                                         incremental=false), "b")
+        @test df_a.iter == df_b.iter
+        @test df_a.emax == df_b.emax
+        @test [w.energy for w in ls_a.walkers] == [w.energy for w in ls_b.walkers]
+        @test [w.configuration.components[1] for w in ls_a.walkers] ==
+              [w.configuration.components[1] for w in ls_b.walkers]
     end
 
 end

@@ -265,6 +265,68 @@
     end
 
     # ================================================================
+    @testset "incidence lists" begin
+        # Each site's incidence list indexes exactly the embeddings that
+        # contain it, in embedding order (brute-force cross-check against a
+        # scan of the embedding vector), the vector is sized to the largest
+        # site index, and a figure whose embedding spans layers is reached
+        # from every one of its sites.
+        function check_incidence(c, M)
+            @test length(c.incidence) == M
+            for s in 1:M
+                @test c.incidence[s] == findall(e -> s in e, c.embeddings)
+            end
+        end
+
+        sq4 = cluster_square(4)
+        t_sq = ClusterInteraction(0.1u"eV", enumerate_motif_embeddings(sq4,
+            motif_distances([(0, 0), (1, 0), (0, 1)]); expected_count=64))
+        check_incidence(t_sq, 16)
+        q_sq = ClusterInteraction(-0.1u"eV", enumerate_motif_embeddings(sq4,
+            [(0, 0), (1, 0), (0, 1), (1, 1)]; expected_count=16))
+        check_incidence(q_sq, 16)
+
+        # Offset-stacked three-layer triangular cell (layer k shifted by
+        # k (1/2, sqrt(3)/6) in plane): a trio of two in-plane neighbors
+        # plus the adjacent-layer site above their bond. Three layers under
+        # a periodic third axis are not a faithful quotient for a figure
+        # spanning two layers, so the enumeration warns and follows the
+        # torus convention; 18 embeddings meet every site.
+        h = 1.0
+        M3 = 2 * 4 * 4 * 3
+        tri3 = MLattice{1,TriangularLattice}(
+            [1.0 0.0 0.5; 0.0 sqrt(3) sqrt(3)/6; 0.0 0.0 h],
+            [(0.0, 0.0, 0.0), (0.5, sqrt(3)/2, 0.0)],
+            (4, 4, 3), (true, true, true), [1.05, 1.2],
+            [zeros(Bool, M3)], ones(Bool, M3); image_multiplicity=true)
+        embs3 = @test_logs (:warn, r"faithful quotient") match_mode = :any enumerate_motif_embeddings(
+            tri3, [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.5, sqrt(3)/6, h)];
+            expected_count=576)
+        t_3 = ClusterInteraction(0.02u"eV", embs3)
+        check_incidence(t_3, M3)
+        @test all(==(18), length.(t_3.incidence))
+
+        # Sizing and gaps: sites beyond the largest index have no entry,
+        # sites inside the range with no embedding have an empty list
+        gap = ClusterInteraction(0.1u"eV", [(1, 2, 5)])
+        @test length(gap.incidence) == 5
+        @test gap.incidence[1] == [1]
+        @test gap.incidence[2] == [1]
+        @test gap.incidence[5] == [1]
+        @test all(isempty, gap.incidence[[3, 4]])
+        shared = ClusterInteraction(0.1u"eV", [(1, 2, 3), (2, 3, 4)])
+        @test shared.incidence[1] == [1]
+        @test shared.incidence[2] == [1, 2]
+        @test shared.incidence[3] == [1, 2]
+        @test shared.incidence[4] == [2]
+
+        # An empty embedding list has empty incidence
+        empty_c = @test_logs (:warn, r"empty embedding list") ClusterInteraction(
+            0.1u"eV", NTuple{3,Int}[])
+        @test isempty(empty_c.incidence)
+    end
+
+    # ================================================================
     @testset "Zhang O-Pd(100) m = 9 expansion: counts, adlayers, sampling" begin
         # Figure geometry transcribed from Zhang, Blum & Reuter, PRB 75,
         # 235406 (2007), Fig. 1 (arXiv:cond-mat/0701549). In the paper's own

@@ -865,6 +865,209 @@
                 @test tri.lattice_vectors ≈ [1.0 0.0 0.0; 0.0 sqrt(3) 0.0; 0.0 0.0 1.25]
             end
 
+            @testset "Layer offset and stacking" begin
+                # Offset-stacked layers: interlayer spacing h in units of the
+                # in-plane lattice constant (the c/(3a) ratio of a
+                # representative O3-type layered host) and the triangle-centre
+                # offset Δ = (1/2, √3/6), for which 3Δ = t₁ + t₂ is an
+                # in-plane lattice vector, so three layers close the
+                # periodic repeat
+                h = 4.683 / 2.816
+                S3 = sqrt(3.0)
+                Δ = (0.5, S3 / 6)
+                tri_basis = [(0.0, 0.0, 0.0), (0.5, S3 / 2, 0.0)]
+                # Shipped-geometry reference: the positional inner
+                # constructor with an explicit third lattice vector (dx, dy, c)
+                function inner_tri(dims, dx, dy, c, per3, cutoffs)
+                    lv = [1.0 0.0 dx; 0.0 S3 dy; 0.0 0.0 c]
+                    M = 2 * prod(dims)
+                    MLattice{1,TriangularLattice}(lv, tri_basis, dims,
+                        (true, true, per3), cutoffs,
+                        [[false for _ in 1:M]], ones(Bool, M))
+                end
+                # Per-axis fractional wrap of the separation and its |Δz|:
+                # equal to the minimum image for every pair asserted here
+                # (|Δz| ≤ h dominates any in-plane ambiguity), not a general
+                # minimum-image routine on a skewed cell
+                function minimg(lat, i, j)
+                    dims = lat.supercell_dimensions
+                    scv = hcat([lat.lattice_vectors[:, k] .* dims[k] for k in 1:3]...)
+                    f = inv(scv) * (lat.positions[j, :] .- lat.positions[i, :])
+                    for k in 1:3
+                        lat.periodicity[k] && (f[k] -= round(f[k]))
+                    end
+                    d = scv * f
+                    return sqrt(sum(abs2, d)), abs(d[3])
+                end
+
+                # Default path unchanged: no stacking keyword, stacking=:aligned
+                # and layer_offset=(0.0, 0.0) all reproduce the shipped
+                # vertical-c geometry field for field, on the default single
+                # layer and on an aligned three-layer cell
+                for (dims, c, per3, cutoffs, kw) in [
+                        ((4, 2, 1), 1.0, false, [1.1], (;)),
+                        ((4, 4, 3), h, true, [1.05, 1.80], (; interlayer_spacing=h))]
+                    ref = inner_tri(dims, 0.0, 0.0, c, per3, cutoffs)
+                    for extra in ((;), (; stacking=:aligned), (; layer_offset=(0.0, 0.0)))
+                        lat = MLattice{1,TriangularLattice}(
+                            supercell_dimensions=dims,
+                            periodicity=(true, true, per3),
+                            cutoff_radii=cutoffs,
+                            components=[[false for _ in 1:2*prod(dims)]];
+                            kw..., extra...)
+                        @test lat.lattice_vectors == ref.lattice_vectors
+                        @test lat.positions == ref.positions
+                        @test lat.neighbors == ref.neighbors
+                    end
+                end
+
+                # stacking=:abc on (4, 4, 3) equals the inner-constructor
+                # build with the skewed third vector (Δx, Δy, h) field for
+                # field; the ladder [1.05, 1.745, 1.80] isolates the in-plane
+                # first and second shells and the adjacent-layer shell at
+                # √(1/3 + h²) ≈ 1.760, and construction is silent
+                ref = inner_tri((4, 4, 3), Δ[1], Δ[2], h, true, [1.05, 1.745, 1.80])
+                abc = @test_logs min_level = Base.CoreLogging.Warn MLattice{1,TriangularLattice}(
+                    interlayer_spacing=h,
+                    supercell_dimensions=(4, 4, 3),
+                    periodicity=(true, true, true),
+                    cutoff_radii=[1.05, 1.745, 1.80],
+                    components=[[false for _ in 1:96]],
+                    stacking=:abc)
+                for field in fieldnames(typeof(abc))
+                    @test getfield(abc, field) == getfield(ref, field)
+                end
+                # An explicit layer_offset=Δ, with or without stacking=:aligned
+                # spelled out, is the same object
+                for extra in ((; layer_offset=Δ), (; layer_offset=Δ, stacking=:aligned))
+                    expl = MLattice{1,TriangularLattice}(
+                        interlayer_spacing=h,
+                        supercell_dimensions=(4, 4, 3),
+                        periodicity=(true, true, true),
+                        cutoff_radii=[1.05, 1.745, 1.80],
+                        components=[[false for _ in 1:96]];
+                        extra...)
+                    @test expl.lattice_vectors == abc.lattice_vectors
+                    @test expl.positions == abc.positions
+                    @test expl.neighbors == abc.neighbors
+                end
+                # lattice_constant scales the :abc offset with the cell
+                a2 = MLattice{1,TriangularLattice}(
+                    lattice_constant=2.0,
+                    interlayer_spacing=2h,
+                    supercell_dimensions=(4, 4, 3),
+                    periodicity=(true, true, true),
+                    cutoff_radii=[2.1],
+                    components=[[false for _ in 1:96]],
+                    stacking=:abc)
+                @test a2.lattice_vectors ≈ [2.0 0.0 1.0; 0.0 2S3 S3/3; 0.0 0.0 2h]
+
+                # No layer-count condition: the supercell's third vector is
+                # d3 times the skewed a₃, a lattice vector of the stacked
+                # crystal for every d3, so every layer count is a valid
+                # periodic supercell with the same site geometry. Under the
+                # all-images convention the (4, 4, 2) and (4, 4, 1) :abc
+                # cells with a periodic third axis reproduce the bulk
+                # coordination [6, 6, 6] of the three-rung ladder; on the
+                # one-layer (rhombohedral primitive) cell the adjacent-layer
+                # partners include the site's own images
+                for (d3, expect_self) in ((2, false), (1, true))
+                    per = @test_logs min_level = Base.CoreLogging.Warn MLattice{1,TriangularLattice}(
+                        interlayer_spacing=h,
+                        supercell_dimensions=(4, 4, d3),
+                        periodicity=(true, true, true),
+                        cutoff_radii=[1.05, 1.745, 1.80],
+                        components=[[false for _ in 1:32*d3]],
+                        stacking=:abc,
+                        image_multiplicity=true)
+                    @test all(length.(per.neighbors[s]) == [6, 6, 6] for s in 1:32*d3)
+                    @test all((s in per.neighbors[s][3]) == expect_self for s in 1:32*d3)
+                    @test !any(s in per.neighbors[s][shell] for s in 1:32*d3 for shell in 1:2)
+                end
+                six = MLattice{1,TriangularLattice}(
+                    interlayer_spacing=h,
+                    supercell_dimensions=(4, 4, 6),
+                    periodicity=(true, true, true),
+                    cutoff_radii=[1.05],
+                    components=[[false for _ in 1:192]],
+                    stacking=:abc)
+                @test six.lattice_vectors[:, 3] == [Δ[1], Δ[2], h]
+                @test six.positions[:, 3] == vcat([fill((k - 1) * h, 32) for k in 1:6]...)
+                open2 = MLattice{1,TriangularLattice}(
+                    interlayer_spacing=h,
+                    supercell_dimensions=(4, 4, 2),
+                    periodicity=(true, true, false),
+                    cutoff_radii=[1.05],
+                    components=[[false for _ in 1:64]],
+                    stacking=:abc)
+                @test open2.lattice_vectors[:, 3] == [Δ[1], Δ[2], h]
+                @test open2.positions[33:64, 1:2] ≈ open2.positions[1:32, 1:2] .+ [Δ[1] Δ[2]]
+                # A generic explicit offset is accepted at any layer count
+                for d3 in (2, 3)
+                    @test MLattice{1,TriangularLattice}(
+                        interlayer_spacing=h,
+                        supercell_dimensions=(4, 4, d3),
+                        periodicity=(true, true, true),
+                        cutoff_radii=[1.05],
+                        components=[[false for _ in 1:32*d3]],
+                        layer_offset=(0.5, 0.0)).lattice_vectors[:, 3] == [0.5, 0.0, h]
+                end
+                # Keyword validation: finite offsets, known stacking, and
+                # not both at once
+                @test_throws ArgumentError MLattice{1,TriangularLattice}(
+                    layer_offset=(NaN, 0.0), components=[[false for _ in 1:16]])
+                @test_throws ArgumentError MLattice{1,TriangularLattice}(
+                    layer_offset=(0.0, Inf), components=[[false for _ in 1:16]])
+                @test_throws ArgumentError MLattice{1,TriangularLattice}(
+                    stacking=:abab, components=[[false for _ in 1:16]])
+                @test_throws ArgumentError MLattice{1,TriangularLattice}(
+                    stacking=:abc, layer_offset=Δ, components=[[false for _ in 1:16]])
+
+                # Positions on the :abc (4, 4, 3) cell: layer k at (k − 1)·Δ
+                # in-plane and (k − 1)·h out of plane
+                @test abc.positions[33:64, 1:2] ≈ abc.positions[1:32, 1:2] .+ [Δ[1] Δ[2]]
+                @test abc.positions[65:96, 1:2] ≈ abc.positions[1:32, 1:2] .+ 2 .* [Δ[1] Δ[2]]
+                @test abc.positions[:, 3] == vcat(zeros(32), fill(h, 32), fill(2h, 32))
+                # Third-axis minimum image: shell 3 is the adjacent-layer
+                # shell, six partners per site at √(1/3 + h²) with |Δz| = h;
+                # the in-plane shells have |Δz| = 0
+                d_I1 = sqrt(1 / 3 + h^2)
+                @test all(length(abc.neighbors[s][3]) == 6 for s in 1:96)
+                @test all(isapprox(minimg(abc, s, j)[1], d_I1; atol=1e-12)
+                          for s in 1:96 for j in abc.neighbors[s][3])
+                @test all(isapprox(minimg(abc, s, j)[2], h; atol=1e-12)
+                          for s in 1:96 for j in abc.neighbors[s][3])
+                @test all(isapprox(minimg(abc, s, j)[2], 0.0; atol=1e-12)
+                          for s in 1:96 for shell in 1:2 for j in abc.neighbors[s][shell])
+                # The nearest layer-2 and layer-3 sites of a layer-1 site are
+                # both adjacent-layer partners (the periodic image of layer 3
+                # sits one layer below layer 1), and the wrapped |Δz| of every
+                # pair is 0 or h (the third-axis wrap alone decides it)
+                @test minimum(minimg(abc, 1, j)[1] for j in 33:64) ≈ d_I1 atol = 1e-12
+                @test minimum(minimg(abc, 1, j)[1] for j in 65:96) ≈ d_I1 atol = 1e-12
+                dz = sort(unique(round.([minimg(abc, i, j)[2] for i in 1:96, j in 1:96]; digits=9)))
+                @test dz ≈ [0.0, h] atol = 1e-8
+
+                # Bulk coordination on the :abc (6, 6, 3) cell under the
+                # image-multiplicity convention: a fourteen-rung ladder that
+                # isolates the six in-plane shells (1, √3, 2, √7, 3, 2√3) and
+                # the eight interlayer shells between them reproduces the
+                # bulk counts on every site, with no self-image entries
+                ladder = [1.05, 1.745, 1.80, 2.012, 2.10, 2.40, 2.655, 2.75,
+                          2.90, 3.008, 3.06, 3.35, 3.40, 3.470]
+                bulk = [6, 6, 6, 6, 6, 12, 12, 12, 6, 6, 12, 6, 6, 6]
+                big = @test_logs min_level = Base.CoreLogging.Warn MLattice{1,TriangularLattice}(
+                    interlayer_spacing=h,
+                    supercell_dimensions=(6, 6, 3),
+                    periodicity=(true, true, true),
+                    cutoff_radii=ladder,
+                    components=[[false for _ in 1:216]],
+                    stacking=:abc,
+                    image_multiplicity=true)
+                @test all(length.(big.neighbors[s]) == bulk for s in 1:216)
+                @test !any(s in vcat(big.neighbors[s]...) for s in 1:216)
+            end
+
             @testset "Error handling" begin
                 # Test wrong number of components
                 @test_throws ArgumentError MLattice{2,SquareLattice}(

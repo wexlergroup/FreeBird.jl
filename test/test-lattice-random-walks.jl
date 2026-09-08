@@ -501,14 +501,398 @@
                 adsorptions=:full)
             @test_throws ArgumentError geometric_cluster_swap!(lat1b, 0.3)
 
-            # Three-dimensional supercell: not supported on triangular
+            # Stacked cell with a non-periodic third axis: the layer
+            # reflection wraps on the c period, so this keeps throwing
+            lat3d_open = MLattice{1,TriangularLattice}(
+                supercell_dimensions=(3, 3, 2),
+                periodicity=(true, true, false),
+                cutoff_radii=[1.1],
+                components=[[1]],
+                adsorptions=:full)
+            @test_throws ArgumentError geometric_cluster_swap!(lat3d_open, 0.3)
+
+            # Disclosure: the assertion shipped here expected an ArgumentError
+            # from this c-periodic (3, 3, 2) cell, stacked triangular cells
+            # being unsupported. The three-dimensional point inversion accepts
+            # it, so the assertion is replaced by the new contract: the move
+            # runs and conserves the particle count.
             lat3d = MLattice{1,TriangularLattice}(
                 supercell_dimensions=(3, 3, 2),
                 periodicity=(true, true, true),
                 cutoff_radii=[1.1],
-                components=[[1]],
+                components=[[1, 7, 20]],
                 adsorptions=:full)
-            @test_throws ArgumentError geometric_cluster_swap!(lat3d, 0.3)
+            geometric_cluster_swap!(lat3d, 0.3)
+            @test occupied_site_count(lat3d) == [3]
+        end
+
+        @testset "stacked triangular cluster moves" begin
+            using Random
+            using Unitful
+            using DataFrames
+
+            # Fixtures. Aligned stacks come from the keyword constructor with
+            # `interlayer_spacing`; at the default cutoffs shell 2 holds the
+            # axial interlayer neighbours (two at nz >= 3). The (6, 4, 2)
+            # aligned cells are built with the in-plane shell only, since at
+            # nz = 2 the two axial neighbours are the same site and the
+            # default neighbour path would warn; those cells feed only the
+            # map tests. Offset stacks, each layer shifted by the triangle
+            # centre (the ABC stacking of close-packed layers), are built
+            # through the inner constructor with the third lattice vector
+            # (1/2, sqrt(3)/6, h) and `image_multiplicity=true` (the supercell
+            # is non-orthogonal; see the geometric_cluster_swap! docstring);
+            # at h = 1 and cutoffs [1.05, 1.2], shell 1 is the six in-plane
+            # neighbours and shell 2 the six adjacent-layer neighbours
+            # (verified by execution). Both stackings are c-periodic.
+            B_of(nx, ny) = 2 * nx * ny
+            layer_of(s, nx, ny) = (s - 1) ÷ B_of(nx, ny)
+            basis_of(s) = (s - 1) % 2
+            function aligned_tri(nx, ny, nz; h=1.2, cutoffs=[1.1, 1.25],
+                                 comps=[[1]])
+                MLattice{length(comps),TriangularLattice}(
+                    supercell_dimensions=(nx, ny, nz),
+                    periodicity=(true, true, true),
+                    interlayer_spacing=h,
+                    cutoff_radii=cutoffs,
+                    components=comps,
+                    adsorptions=:full)
+            end
+            function offset_tri(nx, ny, nz; h=1.0, cutoffs=[1.05, 1.2],
+                                comps=[[1]])
+                M = 2 * nx * ny * nz
+                occ = [zeros(Bool, M) for _ in comps]
+                for (c, sites) in enumerate(comps)
+                    occ[c][sites] .= true
+                end
+                MLattice{length(comps),TriangularLattice}(
+                    [1.0 0.0 0.5; 0.0 sqrt(3) sqrt(3)/6; 0.0 0.0 h],
+                    [(0.0, 0.0, 0.0), (0.5, sqrt(3)/2, 0.0)],
+                    (nx, ny, nz), (true, true, true), cutoffs,
+                    occ, ones(Bool, M); image_multiplicity=true)
+            end
+            # The map under test, through the pivot midpoint of sites s1, s2
+            function reflect3d(s, s1, s2, nx, ny, nz)
+                h1 = MonteCarloMoves._tri_site_to_halfgrid(s1, nx, ny)
+                h2 = MonteCarloMoves._tri_site_to_halfgrid(s2, nx, ny)
+                return MonteCarloMoves._tri_reflect_site_3d(
+                    s, h1[1] + h2[1], h1[2] + h2[2], h1[3] + h2[3], nx, ny, nz)
+            end
+
+            @testset "stacked reflection: involution and bijection" begin
+                Random.seed!(7201)
+                for lat in (aligned_tri(4, 4, 3), offset_tri(4, 4, 3),
+                            aligned_tri(6, 4, 2; cutoffs=[1.1]), offset_tri(6, 4, 2))
+                    nx, ny, nz = lat.supercell_dimensions
+                    M = num_sites(lat)
+                    for _ in 1:25
+                        s1 = rand(1:M)
+                        s2 = rand(1:M)
+                        σ = [reflect3d(s, s1, s2, nx, ny, nz) for s in 1:M]
+                        @test sort(σ) == collect(1:M)          # bijection on sites
+                        @test all(σ[σ[s]] == s for s in 1:M)   # involution
+                    end
+                end
+            end
+
+            @testset "stacked reflection is a lattice symmetry" begin
+                # Geometric check against the stored positions, independent of
+                # the index arithmetic: 2·pivot − r(s) − r(σ(s)) must be a
+                # supercell lattice vector (fractional coordinates integer),
+                # on both stackings
+                Random.seed!(7202)
+                for lat in (aligned_tri(4, 4, 3), offset_tri(4, 4, 3),
+                            aligned_tri(6, 4, 2; cutoffs=[1.1]), offset_tri(6, 4, 2))
+                    nx, ny, nz = lat.supercell_dimensions
+                    M = num_sites(lat)
+                    A = lat.lattice_vectors * [nx 0 0; 0 ny 0; 0 0 nz]
+                    Ainv = inv(A)
+                    for _ in 1:10
+                        s1 = rand(1:M)
+                        s2 = rand(1:M)
+                        pv = lat.positions[s1, :] .+ lat.positions[s2, :]
+                        for s in 1:M
+                            r = reflect3d(s, s1, s2, nx, ny, nz)
+                            f = Ainv * (pv .- lat.positions[s, :] .- lat.positions[r, :])
+                            @test all(isapprox.(f, round.(f), atol=1e-9))
+                        end
+                    end
+                end
+            end
+
+            @testset "stacked reflection layer rule" begin
+                # Any pivot sends layer k to kp − k (mod nz), an involution
+                # on layers. A site pivot (kp = 2 k1) preserves the basis
+                # index and fixes its own layer, sending layer k1 + d to
+                # k1 − d; a midpoint pivot with an odd layer sum pairs the
+                # layers whose indices sum to kp (mod nz), which at nz = 3
+                # fixes the third layer and at nz = 2 is the strict exchange
+                # 0 <-> 1
+                for lat in (aligned_tri(4, 4, 3), offset_tri(4, 4, 3))
+                    nx, ny, nz = lat.supercell_dimensions
+                    M = num_sites(lat)
+                    B = B_of(nx, ny)
+                    for s1 in (1, B + 4, 2 * B + 18)
+                        k1 = layer_of(s1, nx, ny)
+                        for s in 1:M
+                            r = reflect3d(s, s1, s1, nx, ny, nz)
+                            @test basis_of(r) == basis_of(s)
+                            @test layer_of(r, nx, ny) == mod(2 * k1 - layer_of(s, nx, ny), nz)
+                        end
+                        @test all(layer_of(reflect3d(s, s1, s1, nx, ny, nz), nx, ny) == k1
+                                  for s in (k1 * B + 1):((k1 + 1) * B))
+                    end
+                    s1, s2 = 1, B + 2
+                    kp = layer_of(s1, nx, ny) + layer_of(s2, nx, ny)
+                    @test isodd(kp)
+                    for s in 1:M
+                        r = reflect3d(s, s1, s2, nx, ny, nz)
+                        @test layer_of(r, nx, ny) == mod(kp - layer_of(s, nx, ny), nz)
+                    end
+                    # At nz = 3 the layer not paired by kp = 1 is fixed
+                    @test all(layer_of(reflect3d(s, s1, s2, nx, ny, nz), nx, ny) == 2
+                              for s in (2 * B + 1):(3 * B))
+                end
+                for lat in (aligned_tri(6, 4, 2; cutoffs=[1.1]), offset_tri(6, 4, 2))
+                    nx, ny, nz = lat.supercell_dimensions
+                    M = num_sites(lat)
+                    B = B_of(nx, ny)
+                    s1, s2 = 3, B + 5
+                    @test isodd(layer_of(s1, nx, ny) + layer_of(s2, nx, ny))
+                    for s in 1:M
+                        r = reflect3d(s, s1, s2, nx, ny, nz)
+                        @test layer_of(r, nx, ny) == 1 - layer_of(s, nx, ny)
+                    end
+                end
+            end
+
+            @testset "reduction to the single-layer map at nz = 1" begin
+                nx, ny = 6, 4
+                M = 2 * nx * ny
+                @test all(MonteCarloMoves._tri_site_to_halfgrid(s, nx, ny) ==
+                          (MonteCarloMoves._tri_site_to_halfgrid(s, nx)..., 0)
+                          for s in 1:M)
+                for s1 in 1:M, s2 in 1:M
+                    h1 = MonteCarloMoves._tri_site_to_halfgrid(s1, nx)
+                    h2 = MonteCarloMoves._tri_site_to_halfgrid(s2, nx)
+                    hpx, hpy = h1[1] + h2[1], h1[2] + h2[2]
+                    @test all(MonteCarloMoves._tri_reflect_site_3d(
+                                  s, hpx, hpy, 0, nx, ny, 1) ==
+                              MonteCarloMoves._tri_reflect_site(s, hpx, hpy, nx, ny)
+                              for s in 1:M)
+                end
+
+                # Seeded single-layer cluster walk, captured on the
+                # single-layer method shipped before this change (dev
+                # 60113fd1) and reproduced identically across two Julia
+                # processes. The ceiling binds: 36 of 60 proposals are
+                # rejected at the first seed and 15 at the second, so the
+                # revert path is inside the pinned stream. Every recorded
+                # float comes from the fixed nested scalar accumulation of
+                # the lattice energy plus one perturbation product per step,
+                # with no vectorized reduction, so the exact pins are expected
+                # to hold on every CI leg. Disclosed fallback: should a leg
+                # falsify that on the energy digits, those two pins drop to
+                # rtol 1e-12 while the integer and occupation pins stay exact.
+                pin_ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+                function pin_walk(seed)
+                    sl = SLattice{TriangularLattice}(
+                        supercell_dimensions=(6, 4, 1),
+                        cutoff_radii=[1.1, 1.8],
+                        components=[[1, 5, 10, 20, 30, 40, 13, 27]],
+                        adsorptions=:full)
+                    w = LatticeWalker(sl, energy=interacting_energy(sl, pin_ham), iter=0)
+                    Random.seed!(seed)
+                    acc, rate, w = MC_cluster_walk!(60, w, pin_ham, -0.36, 0.3;
+                                                    energy_perturb=1e-9)
+                    return acc, rate, w.energy.val,
+                           findall(w.configuration.components[1])
+                end
+                acc1, rate1, e1, occ1 = pin_walk(7101)
+                @test acc1 == true
+                @test rate1 == 0.4
+                @test e1 == -0.4225000004312682
+                @test occ1 == [8, 9, 10, 11, 12, 14, 21, 42]
+                acc2, rate2, e2, occ2 = pin_walk(7102)
+                @test acc2 == true
+                @test rate2 == 0.75
+                @test e2 == -0.39000000014891933
+                @test occ2 == [6, 9, 16, 19, 26, 27, 29, 30]
+                # Same-process replay identity
+                @test pin_walk(7101) == (acc1, rate1, e1, occ1)
+            end
+
+            @testset "particle count preserved (stacked triangular)" begin
+                Random.seed!(7204)
+                ham1 = GenericLatticeHamiltonian(-0.04, [-0.01, -0.006], u"eV")
+                sites1 = [1, 2, 5, 10, 17, 24, 33, 40, 50, 61, 77, 90]
+                for lat in (aligned_tri(4, 4, 3; comps=[sites1]),
+                            offset_tri(4, 4, 3; comps=[sites1]))
+                    w = LatticeWalker(lat, energy=interacting_energy(lat, ham1), iter=0)
+                    n0 = occupied_site_count(lat)
+                    for _ in 1:25
+                        MC_cluster_walk!(4, w, ham1, Inf, 0.3)
+                        @test occupied_site_count(w.configuration) == n0
+                    end
+                end
+                # Two components: every off-diagonal and diagonal coupling set,
+                # the matrix built directly (no flattened-vector constructor)
+                h11 = GenericLatticeHamiltonian(-0.04, [-0.01, -0.006], u"eV")
+                h12 = GenericLatticeHamiltonian(-0.03, [-0.005, -0.002], u"eV")
+                h22 = GenericLatticeHamiltonian(-0.02, [-0.008, -0.004], u"eV")
+                ham2 = MLatticeHamiltonian{2,2,typeof(0.0u"eV")}(
+                    reshape([h11, h12, h12, h22], 2, 2))
+                sitesA = [1, 3, 5, 7, 34, 36, 66, 70]
+                sitesB = [2, 4, 6, 8, 35, 37, 67, 71]
+                for lat in (aligned_tri(4, 4, 3; comps=[sitesA, sitesB]),
+                            offset_tri(4, 4, 3; comps=[sitesA, sitesB]))
+                    w = LatticeWalker(lat, energy=interacting_energy(lat, ham2), iter=0)
+                    n0 = occupied_site_count(lat)
+                    for _ in 1:25
+                        MC_cluster_walk!(4, w, ham2, Inf, 0.4)
+                        @test occupied_site_count(w.configuration) == n0
+                    end
+                end
+            end
+
+            @testset "self-inverse and layer crossing (stacked triangular)" begin
+                sites = [1, 5, 10, 20, 30, 40, 55, 70, 85]
+                for lat in (aligned_tri(4, 4, 3; comps=[sites]),
+                            offset_tri(4, 4, 3; comps=[sites]))
+                    nx, ny, nz = lat.supercell_dimensions
+                    original = deepcopy(lat.components)
+                    Random.seed!(7205)
+                    geometric_cluster_swap!(lat, 0.3)
+                    Random.seed!(7205)
+                    geometric_cluster_swap!(lat, 0.3)
+                    @test lat.components == original
+                    # The layer reflection is exercised: some applied pair
+                    # joins sites in different layers
+                    crossed = false
+                    rec = Tuple{Int,Int}[]
+                    for _ in 1:200
+                        empty!(rec)
+                        geometric_cluster_swap!(lat, 0.3; record=rec)
+                        if any(layer_of(a, nx, ny) != layer_of(b, nx, ny) for (a, b) in rec)
+                            crossed = true
+                            break
+                        end
+                    end
+                    @test crossed
+                end
+            end
+
+            @testset "stationarity against exact enumeration (stacked triangular)" begin
+                # calibration-begin
+                # Offset (2, 2, 3) cell, 24 sites, 5 particles (42504
+                # configurations), in-plane nearest-neighbour coupling in
+                # shell 1 and the adjacent-layer coupling in shell 2. A seeded
+                # fixed-N nested-sampling ladder with mixed local and cluster
+                # moves must reproduce the exact canonical mean energy at two
+                # temperatures; a local-swap-only run at the same step budget
+                # is the control at the same gate.
+                st_N = 5
+                st_lattice() = offset_tri(2, 2, 3; comps=[collect(1:st_N)])
+                st_ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.006], u"eV")
+                st_kB = 8.617333262e-5
+                st_betas = [1 / (st_kB * 150.0), 1 / (st_kB * 400.0)]
+                st_K = 200
+                st_nsteps = Int64(3000)
+                function st_run(seed, clusters_freq)
+                    Random.seed!(seed)
+                    walkers = LatticeWalker{1}[]
+                    for _ in 1:st_K
+                        lat = st_lattice()
+                        lat.components[1] .= false
+                        lat.components[1][randperm(num_sites(lat))[1:st_N]] .= true
+                        push!(walkers, LatticeWalker(lat, energy=0.0u"eV", iter=0))
+                    end
+                    ls = LatticeGasWalkers(walkers, st_ham)
+                    params = LatticeNestedSamplingParameters(mc_steps=40,
+                                                             allowed_fail_count=10^9)
+                    routine = MCMixedMoves(walks_freq=1, clusters_freq=clusters_freq,
+                                           initial_cluster_p=0.3,
+                                           cluster_adjust_interval=50)
+                    tag = "t_st_$(seed)_$(clusters_freq)"
+                    save = SaveEveryN("$(tag).csv", "$(tag).traj", "$(tag).ls",
+                                      10^6, 10^6, 10^6)
+                    df, _, params_out = nested_sampling(ls, params, st_nsteps,
+                                                        routine, save)
+                    rm.(["$(tag).csv", "$(tag).traj", "$(tag).ls"], force=true)
+                    w = ωᵢ(df.iter, st_K)
+                    return [internal_energy(β, w, df.emax) for β in st_betas], params_out
+                end
+                st_df_ex, _ = exact_enumeration(st_lattice(), st_ham)
+                st_E_ex = [e.val for e in st_df_ex.energy]
+                st_U_ex = [internal_energy(β, ones(length(st_E_ex)), st_E_ex)
+                           for β in st_betas]
+                # calibration-end
+                st_U_mix, st_p_mix = st_run(7301, 1)
+                st_U_ctl, _ = st_run(7301, 0)
+                # Gates: 3x the maximum three-seed deviation per temperature
+                # over both routines (seeds 7301, 7302, 7303; the shipped seed
+                # is the first). Calibration |U_NS - U_exact| in eV:
+                #   mixed   150 K: 2.1858e-3, 9.502e-4, 8.660e-4
+                #           400 K: 6.152e-4, 1.239e-4, 1.4213e-3
+                #   control 150 K: 5.899e-4, 3.345e-4, 9.251e-4
+                #           400 K: 4.443e-4, 1.093e-4, 1.0436e-3
+                # Maxima 2.1858e-3 and 1.4213e-3, both from the mixed run;
+                # U_exact = -0.26379 eV and -0.24833 eV.
+                st_gate = [0.0066, 0.0043]
+                for t in 1:2
+                    @test abs(st_U_mix[t] - st_U_ex[t]) < st_gate[t]
+                    @test abs(st_U_ctl[t] - st_U_ex[t]) < st_gate[t]
+                end
+                @test any(>(0.0), st_p_mix.cluster_accept_history)
+            end
+
+            @testset "drivers on a stacked offset cell" begin
+                drv_ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.006], u"eV")
+                drv_cleanup(tag) = rm.(["$(tag).csv", "$(tag).traj", "$(tag).ls"],
+                                       force=true)
+                drv_save(tag) = SaveEveryN("$(tag).csv", "$(tag).traj", "$(tag).ls",
+                                           10^6, 10^6, 10^6)
+
+                # Fixed-N nested sampling with mixed local and cluster moves
+                Random.seed!(7401)
+                walkers = LatticeWalker{1}[]
+                for _ in 1:20
+                    lat = offset_tri(4, 4, 3; comps=[Int[]])
+                    lat.components[1][randperm(num_sites(lat))[1:24]] .= true
+                    push!(walkers, LatticeWalker(lat, energy=0.0u"eV", iter=0))
+                end
+                ls = LatticeGasWalkers(walkers, drv_ham)
+                params = LatticeNestedSamplingParameters(mc_steps=40,
+                                                         allowed_fail_count=10^9)
+                routine = MCMixedMoves(walks_freq=1, clusters_freq=1,
+                                       cluster_adjust_interval=10)
+                df, ls_out, p_out = nested_sampling(ls, params, Int64(300), routine,
+                                                    drv_save("t_drv_fn"))
+                drv_cleanup("t_drv_fn")
+                @test df isa DataFrame
+                @test nrow(df) > 0
+                @test length(ls_out.walkers) == 20
+                @test all(sum(w.configuration.components[1]) == 24
+                          for w in ls_out.walkers)
+                @test any(>(0.0), p_out.cluster_accept_history)
+
+                # Ideal-gas-referenced grand-canonical driver with cluster moves
+                Random.seed!(7402)
+                gw = [LatticeWalker(offset_tri(4, 4, 3; comps=[Int[]]),
+                                    energy=0.0u"eV", iter=0) for _ in 1:20]
+                gls = LatticeGasWalkers(gw, drv_ham; assign_energy=false)
+                gparams = IdealGasReferencedGCNSParameters(mc_steps=40,
+                                                           reference_fugacity=0.5)
+                groutine = MCGrandCanonicalMoves(p_move=0.5, p_insert=0.25,
+                                                 clusters_freq=1, swaps_freq=1)
+                gdf, _, gp = ideal_gas_referenced_nested_sampling(
+                    gls, gparams, Int64(300), groutine, drv_save("t_drv_ig"))
+                drv_cleanup("t_drv_ig")
+                @test gdf isa DataFrame
+                @test nrow(gdf) > 0
+                @test gp.move_stats[:cluster_attempted] > 0
+                @test gp.move_stats[:cluster_accepted] > 0
+            end
         end
 
     end

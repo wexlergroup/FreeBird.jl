@@ -589,6 +589,316 @@
         @test all(isapprox.(df.psi4, df.psi .^ 4; rtol=1e-12))
     end
 
+    @testset "layer-indexed order parameters and stacking amplitudes on multilayer triangular cells" begin
+        # Triangular cells, offset-stacked (:abc) and aligned, interlayer
+        # spacing h in units of the in-plane lattice constant
+        h = 4.683 / 2.816
+        S3 = sqrt(3.0)
+        function obs_tri_layers(d1, d2, d3; stacking=:aligned)
+            MLattice{1,TriangularLattice}(
+                lattice_constant=1.0,
+                interlayer_spacing=h,
+                supercell_dimensions=(d1, d2, d3),
+                periodicity=(true, true, true),
+                cutoff_radii=[1.05],
+                components=[[false for _ in 1:2*d1*d2*d3]],
+                adsorptions=:full,
+                stacking=stacking)
+        end
+        # Site decoder of lattice_positions (basis innermost, dimension 1,
+        # dimension 2, dimension 3 outermost) -> zero-based (ci, cj, b, k),
+        # and its inverse
+        function site_index(lat, s)
+            d1, d2, _ = lat.supercell_dimensions
+            cell = (s - 1) ÷ 2
+            return cell % d1, (cell ÷ d1) % d2, (s - 1) % 2, cell ÷ (d1 * d2)
+        end
+        function site_of(lat, ci, cj, b, k)
+            d1, d2, _ = lat.supercell_dimensions
+            return ((k * d2 + cj) * d1 + ci) * 2 + b + 1
+        end
+        function set_state!(lat, rule)
+            for s in eachindex(lat.components[1])
+                lat.components[1][s] = rule(site_index(lat, s)...)
+            end
+            return lat
+        end
+        # p(2×1) rows along t₂, identical in every layer's own frame or
+        # shifted by one row per layer
+        row_rule(ci, cj, b, k) = iseven(ci - cj)
+        row_rule_shift(ci, cj, b, k) = iseven(ci - cj + k)
+        # √3×√3 states built from explicit coordinates: the primitive
+        # coordinates (p, q) of each site's own-frame position,
+        # r = p·t₁ + q·t₂ with t₁ = (1, 0) and t₂ = (1/2, √3/2), label the
+        # tripartition c = (p − q) mod 3, and `sublattice(k)` picks the
+        # occupied sublattice of (zero-based) layer k
+        function sqrt3_state!(lat, sublattice)
+            d1, d2, d3 = lat.supercell_dimensions
+            B = 2 * d1 * d2
+            a3 = lat.lattice_vectors[:, 3]
+            for s in eachindex(lat.components[1])
+                k = (s - 1) ÷ B
+                x = lat.positions[s, 1] - k * a3[1]
+                y = lat.positions[s, 2] - k * a3[2]
+                q = round(Int, y / (S3 / 2))
+                p = round(Int, x - q / 2)
+                lat.components[1][s] = mod(p - q, 3) == sublattice(k)
+            end
+            return lat
+        end
+        sqrt3_fixed!(lat) = sqrt3_state!(lat, k -> 0)
+        sqrt3_rot_plus!(lat) = sqrt3_state!(lat, k -> mod(k, 3))
+        sqrt3_rot_minus!(lat) = sqrt3_state!(lat, k -> mod(-k, 3))
+        # Lattice translations of an occupation `occ` on `lat`: by the third
+        # lattice vector (a cyclic relabelling of the layers), by t₁, and
+        # by t₂ (basis site 0 -> 1, basis site 1 -> 0 of the next cell)
+        function translate_a3(lat, occ)
+            B = 2 * lat.supercell_dimensions[1] * lat.supercell_dimensions[2]
+            return vcat(occ[(end - B + 1):end], occ[1:(end - B)])
+        end
+        function translate_t1(lat, occ)
+            d1 = lat.supercell_dimensions[1]
+            new = similar(occ)
+            for s in eachindex(occ)
+                ci, cj, b, k = site_index(lat, s)
+                new[site_of(lat, mod(ci + 1, d1), cj, b, k)] = occ[s]
+            end
+            return new
+        end
+        function translate_t2(lat, occ)
+            d1, d2, _ = lat.supercell_dimensions
+            new = similar(occ)
+            for s in eachindex(occ)
+                ci, cj, b, k = site_index(lat, s)
+                if b == 0
+                    new[site_of(lat, ci, cj, 1, k)] = occ[s]
+                else
+                    new[site_of(lat, mod(ci + 1, d1), mod(cj + 1, d2), 0, k)] = occ[s]
+                end
+            end
+            return new
+        end
+        # Three-dimensional structure factor of the periodic supercell at
+        # its reciprocal-lattice point K = 2π·A⁻ᵀ·(m, n, l), on the true
+        # positions
+        function structure_factor(lat, m, n, l)
+            dims = lat.supercell_dimensions
+            A = hcat([lat.lattice_vectors[:, k] .* dims[k] for k in 1:3]...)
+            K = 2 * pi .* (transpose(inv(A)) * [m, n, l])
+            occ = lat.components[1]
+            z = sum(cis(K[1] * lat.positions[s, 1] + K[2] * lat.positions[s, 2] +
+                        K[3] * lat.positions[s, 3])
+                    for s in eachindex(occ) if occ[s])
+            return abs(z) / length(occ)
+        end
+
+        abc = obs_tri_layers(6, 6, 3; stacking=:abc)
+        aligned = obs_tri_layers(6, 6, 3)
+        flat = obs_tri_lattice(6, 6)
+        B = 72
+        # Zero-argument value of one layer's contiguous block projected
+        # onto the (6, 6, 1) cell
+        function projected(lat, k, f)
+            flat.components[1] .= lat.components[1][((k - 1) * B + 1):(k * B)]
+            return f(flat)
+        end
+
+        for lat in (abc, aligned)
+            # Row states: 1/2 on the M-point quadrature and exactly 0 on the
+            # three-sublattice modulus in every layer, each equal to the
+            # projected zero-argument value
+            for rule in (row_rule, row_rule_shift)
+                set_state!(lat, rule)
+                for k in 1:3
+                    @test order_parameter_p2x2(lat, k) ≈ 1 / 2 atol = 1e-12
+                    @test order_parameter_sqrt3(lat, k) == 0.0
+                    @test order_parameter_p2x2(lat, k) == projected(lat, k, order_parameter_p2x2)
+                    @test order_parameter_sqrt3(lat, k) == projected(lat, k, order_parameter_sqrt3)
+                    @test bragg_amplitude(lat, 3, -3, k) ==
+                          projected(lat, k, l -> bragg_amplitude(l, 3, -3))
+                end
+            end
+            # √3×√3 states (fixed and both rotating sublattice sequences):
+            # exactly 1/3 and exactly 0
+            for build! in (sqrt3_fixed!, sqrt3_rot_plus!, sqrt3_rot_minus!)
+                build!(lat)
+                for k in 1:3
+                    @test order_parameter_sqrt3(lat, k) == 1 / 3
+                    @test order_parameter_p2x2(lat, k) == 0.0
+                    @test order_parameter_p2x2(lat, k) == projected(lat, k, order_parameter_p2x2)
+                    @test order_parameter_sqrt3(lat, k) == projected(lat, k, order_parameter_sqrt3)
+                    @test bragg_amplitude(lat, 3, -3, k) ==
+                          projected(lat, k, l -> bragg_amplitude(l, 3, -3))
+                end
+            end
+        end
+
+        # At d3 == 1, layer = 1 is the zero-argument form bit for bit, and
+        # the own-frame amplitudes agree to roundoff
+        Random.seed!(4167)
+        for _ in 1:10
+            flat.components[1] .= rand(Bool, 72)
+            @test order_parameter_sqrt3(flat, 1) == order_parameter_sqrt3(flat)
+            @test order_parameter_p2x2(flat, 1) == order_parameter_p2x2(flat)
+            @test bragg_amplitude(flat, 1, 2, 1) == bragg_amplitude(flat, 1, 2)
+            @test bragg_amplitude(flat, 3, -3, 1) == bragg_amplitude(flat, 3, -3)
+            @test abs(bragg_amplitude_layers(flat, 1, 2)[1]) ≈ bragg_amplitude(flat, 1, 2) atol = 1e-12
+            @test stacking_bragg_amplitude(flat, 1, 2, 0) ≈ bragg_amplitude(flat, 1, 2) atol = 1e-12
+        end
+
+        # Guards: layer out of range; the zero-argument forms still reject
+        # the multilayer cell; the in-plane commensurability guards and the
+        # basis guard survive in the layer-indexed forms; l out of range
+        for bad in (0, 4)
+            @test_throws ArgumentError order_parameter_sqrt3(abc, bad)
+            @test_throws ArgumentError bragg_amplitude(abc, 3, -3, bad)
+            @test_throws ArgumentError order_parameter_p2x2(abc, bad)
+        end
+        @test_throws ArgumentError order_parameter_sqrt3(abc)
+        @test_throws ArgumentError bragg_amplitude(abc, 3, -3)
+        @test_throws ArgumentError order_parameter_p2x2(abc)
+        @test_throws ArgumentError order_parameter_p2x2(flat, 2)
+        odd = obs_tri_layers(3, 3, 3; stacking=:abc)    # d1 = 3: √3×√3 closes, the M points do not
+        @test_throws ArgumentError order_parameter_p2x2(odd, 1)
+        odd.components[1][1] = true
+        @test order_parameter_sqrt3(odd, 1) == 1 / 18
+        @test order_parameter_sqrt3(odd, 2) == 0.0
+        four = obs_tri_layers(4, 4, 3; stacking=:abc)   # d1 = 4: the converse
+        @test_throws ArgumentError order_parameter_sqrt3(four, 1)
+        four.components[1][33] = true                    # one particle in layer 2
+        @test order_parameter_p2x2(four, 2) ≈ sqrt(3) / 32 rtol = 1e-12
+        @test order_parameter_p2x2(four, 1) == 0.0
+        @test bragg_amplitude(four, 0, 4, 2) == 1 / 32
+        @test_throws ArgumentError stacking_bragg_amplitude(abc, 3, -3, -1)
+        @test_throws ArgumentError stacking_bragg_amplitude(abc, 3, -3, 3)
+        latnb = MLattice{1,TriangularLattice}(
+            lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0), (0.5, 0.5, 0.0)],
+            supercell_dimensions=(4, 4, 2),
+            periodicity=(true, true, false),
+            cutoff_radii=[1.1],
+            components=[[false for _ in 1:64]],
+            adsorptions=:full)
+        @test_throws ArgumentError bragg_amplitude_layers(latnb, 1, 0)
+        @test_throws ArgumentError bragg_amplitude(latnb, 1, 0, 1)
+        @test_throws ArgumentError order_parameter_sqrt3(latnb, 1)
+        @test_throws ArgumentError order_parameter_p2x2(latnb, 1)
+
+        # Stacking amplitudes at the ordering M point (3, −3) of the row
+        # states, own-frame convention, on the offset and the aligned cell
+        # alike: rows held fixed across layers carry the same own-frame
+        # phase in every layer, a pure l = 0 component of 1/2; rows shifted
+        # by one row per layer flip the own-frame phase each layer (a
+        # two-layer period), which a three-layer cell spreads as
+        # (1/6, 1/3, 1/3); the per-layer moduli are 1/2 in both
+        for lat in (abc, aligned)
+            set_state!(lat, row_rule)
+            ρu = bragg_amplitude_layers(lat, 3, -3)
+            @test abs.(ρu) ≈ [0.5, 0.5, 0.5] atol = 1e-12
+            @test ρu[2] ≈ ρu[1] atol = 1e-12
+            @test ρu[3] ≈ ρu[1] atol = 1e-12
+            @test [stacking_bragg_amplitude(lat, 3, -3, l) for l in 0:2] ≈ [1 / 2, 0.0, 0.0] atol = 1e-12
+            set_state!(lat, row_rule_shift)
+            ρs = bragg_amplitude_layers(lat, 3, -3)
+            @test abs.(ρs) ≈ [0.5, 0.5, 0.5] atol = 1e-12
+            @test ρs[2] ≈ -ρs[1] atol = 1e-12
+            @test ρs[3] ≈ ρs[1] atol = 1e-12
+            @test [stacking_bragg_amplitude(lat, 3, -3, l) for l in 0:2] ≈ [1 / 6, 1 / 3, 1 / 3] atol = 1e-12
+        end
+        # On a six-layer :abc cell the two-layer period is commensurate:
+        # shifted rows give a pure l = 3 component of 1/2 with l = 0 zero,
+        # rows held fixed a pure l = 0 component
+        six = obs_tri_layers(6, 6, 6; stacking=:abc)
+        set_state!(six, row_rule)
+        @test abs.(bragg_amplitude_layers(six, 3, -3)) ≈ fill(0.5, 6) atol = 1e-12
+        @test [stacking_bragg_amplitude(six, 3, -3, l) for l in 0:5] ≈ [1 / 2, 0, 0, 0, 0, 0] atol = 1e-12
+        set_state!(six, row_rule_shift)
+        @test abs.(bragg_amplitude_layers(six, 3, -3)) ≈ fill(0.5, 6) atol = 1e-12
+        @test [stacking_bragg_amplitude(six, 3, -3, l) for l in 0:5] ≈ [0, 0, 0, 1 / 2, 0, 0] atol = 1e-12
+        # √3×√3 stackings at the K point (4, 0) on the three-layer cells: a
+        # sublattice held fixed across layers is l = 0, one that rotates by
+        # one sublattice per layer is l = 1 or l = 2 by its sense, each with
+        # the full per-layer weight 1/3 and the same labels on the offset
+        # and the aligned cell
+        for lat in (abc, aligned)
+            for (build!, expect) in ((sqrt3_fixed!, [1 / 3, 0, 0]),
+                                     (sqrt3_rot_plus!, [0, 1 / 3, 0]),
+                                     (sqrt3_rot_minus!, [0, 0, 1 / 3]))
+                build!(lat)
+                @test abs.(bragg_amplitude_layers(lat, 4, 0)) ≈ fill(1 / 3, 3) atol = 1e-12
+                @test [stacking_bragg_amplitude(lat, 4, 0, l) for l in 0:2] ≈ expect atol = 1e-12
+            end
+        end
+
+        # Random occupations on both three-layer cells: the moduli equal
+        # the layer-indexed amplitudes, Parseval closes, and every component
+        # is the three-dimensional structure factor of the periodic
+        # supercell at its reciprocal-lattice point (m, n, l), evaluated on
+        # the true positions
+        Random.seed!(4168)
+        for lat in (abc, aligned), _ in 1:5
+            lat.components[1] .= rand(Bool, 216)
+            for (m, n) in [(3, -3), (0, 6), (1, 2)]
+                ρ = bragg_amplitude_layers(lat, m, n)
+                for k in 1:3
+                    @test abs(ρ[k]) ≈ bragg_amplitude(lat, m, n, k) atol = 1e-12
+                end
+                @test sum(stacking_bragg_amplitude(lat, m, n, l)^2 for l in 0:2) ≈
+                      sum(abs2, ρ) / 3 atol = 1e-12
+                for l in 0:2
+                    @test stacking_bragg_amplitude(lat, m, n, l) ≈
+                          structure_factor(lat, m, n, l) atol = 1e-12
+                end
+            end
+        end
+
+        # Lattice translations of a random occupation, by a₃ (a cyclic
+        # relabelling of the layers), by t₁ and by t₂, leave every stacking
+        # amplitude unchanged on the three- and the six-layer :abc cells,
+        # at in-plane indices whose offset phase d3·k·Δ is and is not a
+        # whole number of turns alike
+        Random.seed!(4170)
+        for lat in (abc, six), _ in 1:2
+            orig = rand(Bool, length(lat.components[1]))
+            d3 = lat.supercell_dimensions[3]
+            for (m, n) in [(3, -3), (0, 6), (1, 2), (5, -1)]
+                lat.components[1] .= orig
+                ref = [stacking_bragg_amplitude(lat, m, n, l) for l in 0:d3-1]
+                for translate in (translate_a3, translate_t1, translate_t2)
+                    lat.components[1] .= translate(lat, orig)
+                    for l in 0:d3-1
+                        @test stacking_bragg_amplitude(lat, m, n, l) ≈ ref[l + 1] atol = 1e-12
+                    end
+                end
+            end
+        end
+
+        # A short seeded fixed-N run on the :abc cell records a layer-indexed
+        # order parameter and a stacking amplitude through the observables
+        # hook
+        Random.seed!(4169)
+        ham = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
+        walkers = [LatticeWalker(obs_tri_layers(6, 6, 3; stacking=:abc),
+                                 energy=0.0u"eV", iter=0) for _ in 1:20]
+        for w in walkers
+            occ = vcat(fill(true, 72), fill(false, 144))
+            shuffle!(occ)
+            w.configuration.components[1] .= occ
+        end
+        ls = LatticeGasWalkers(walkers, ham; perturb_energy=1e-9)
+        params = LatticeNestedSamplingParameters(mc_steps=30,
+            energy_perturbation=1e-9, allowed_fail_count=100000)
+        df, _, _ = nested_sampling(ls, params, Int64(200),
+            MCRandomWalkClone(), obs_save;
+            observables=[:p1 => (cfg -> order_parameter_p2x2(cfg, 1)),
+                         :s0 => (cfg -> stacking_bragg_amplitude(cfg, 3, 3, 0))])
+        obs_cleanup()
+        @test names(df) == ["iter", "emax", "p1", "s0"]
+        @test nrow(df) > 0
+        @test all(0.0 .<= df.p1 .<= 1 / 2)
+        @test all(0.0 .<= df.s0 .<= 1.0)
+    end
+
     @testset "observable hook: validation" begin
         lat = obs_square_lattice(4, 4)
         walkers = [LatticeWalker(deepcopy(lat), energy=0.0u"eV", iter=0) for _ in 1:8]

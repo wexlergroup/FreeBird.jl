@@ -331,7 +331,9 @@ Throws an `ArgumentError` if the number of components does not match `C`.
                                   cutoff_radii::Vector{Float64}=[1.1, 1.8],
                                   components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
                                   adsorptions::Union{Vector{Int},Symbol}=:full,
-                                  image_multiplicity::Bool=false)
+                                  image_multiplicity::Bool=false,
+                                  layer_offset::Union{Nothing,NTuple{2,Float64}}=nothing,
+                                  stacking::Symbol=:aligned)
 
 Constructs a square/triangular lattice with the specified parameters. The `components` and `adsorptions` arguments can be a vector of integers specifying
 the indices of the occupied sites, or a symbol. If `components` is `:equal`, the lattice is divided into `C` equal components when possible, or
@@ -372,6 +374,40 @@ cutoff-ladder validation and the empty-shell warning of
 with `image_multiplicity`; the third axis is non-periodic by default, so
 slabs gain no z-wrap images. Must be finite and strictly positive when given;
 violations throw an `ArgumentError`.
+
+The triangular constructor's `layer_offset` and `stacking` keywords set the
+in-plane displacement between successive layers, for layered hosts whose
+layers do not sit vertically above one another. The default
+(`layer_offset = nothing`, `stacking = :aligned`) keeps the vertical third
+lattice vector `[0, 0, c]`, so every existing call constructs the same
+object. An explicit `layer_offset = (Δx, Δy)`, an absolute in-plane
+displacement in the same length units as `lattice_constant` and
+`interlayer_spacing`, makes the third lattice vector `[Δx, Δy, c]`, so
+layer `k` sits at `(k − 1)·(Δx, Δy)` in-plane; `stacking = :aligned` with
+an explicit offset is accepted. `stacking = :abc` selects the
+triangle-centre offset `(a/2, √3·a/6)`: each layer sits over the triangle
+centres of the layer below and the site geometry repeats after three
+layers (`3·Δ = t₁ + t₂` is an in-plane lattice vector). It cannot be
+combined with an explicit `layer_offset`, and any other `stacking` value
+throws an `ArgumentError`. Both offset components must be finite. No
+layer-count condition applies with a periodic third axis: the supercell's
+third vector is `supercell_dimensions[3]` times the skewed `a₃`, itself a
+lattice vector of the stacked crystal, so every layer count gives a valid
+periodic crystal with the same ABC site geometry, and
+`supercell_dimensions[3]` is the period of the occupation pattern along
+the stacking direction: `1` constrains every layer to the same pattern in
+its own frame (a cell primitive along the stacking direction), while `3`
+or `6` admits the stacking sequences of an in-plane order (see
+[`stacking_bragg_amplitude`](@ref)). On an offset cell build with
+`image_multiplicity = true`: on one- and two-layer periodic cells the
+default once-per-pair minimum-image convention drops the interlayer shell
+entirely or by half, because the partners across the stacking direction
+are further images of in-plane neighbours (a warning fires), and on
+taller skewed cells it can still drop pairs from a long-cutoff shell,
+whereas the all-images convention enumerates every in-cutoff image and
+reproduces the bulk coordination of the stacked crystal. The skewed cell
+needs no other change: the layer
+helpers read the contiguous layer blocks of `lattice_positions`.
 
 ## Returns
 - `MLattice{C,G}`: A square/triangular lattice object with `C` components.
@@ -552,6 +588,44 @@ function _out_of_plane_spacing(lattice_constant::Float64, interlayer_spacing::Un
     return interlayer_spacing
 end
 
+"""
+    _layer_offset(lattice_constant, layer_offset, stacking)
+
+Resolve the in-plane offset between successive layers for the triangular
+keyword constructor: `stacking = :aligned` returns `layer_offset` (the zero
+offset when `nothing`), and `stacking = :abc` returns the triangle centre
+`(a/2, √3·a/6)` of the in-plane lattice, so that each layer sits over the
+triangle centres of the one below and the site geometry repeats after
+three layers. An explicit `layer_offset` together with `stacking = :abc`,
+an unknown `stacking`, or a non-finite offset throws an `ArgumentError`.
+No layer-count condition applies: the supercell's third vector is
+`supercell_dimensions[3]` times the skewed `a₃`, a lattice vector of the
+stacked crystal for every layer count, so every `supercell_dimensions[3]`
+is a valid periodic supercell with the same site geometry (see the
+[`MLattice`](@ref) docstring).
+"""
+function _layer_offset(lattice_constant::Float64,
+                       layer_offset::Union{Nothing,NTuple{2,Float64}},
+                       stacking::Symbol)
+    if stacking == :aligned
+        offset = layer_offset === nothing ? (0.0, 0.0) : layer_offset
+    elseif stacking == :abc
+        if layer_offset !== nothing
+            throw(ArgumentError(
+                "stacking=:abc fixes the layer offset to (a/2, √3·a/6); pass " *
+                "either stacking or layer_offset, not both, got " *
+                "layer_offset=$layer_offset"))
+        end
+        offset = (lattice_constant / 2, sqrt(3) * lattice_constant / 6)
+    else
+        throw(ArgumentError("stacking must be :aligned or :abc, got :$stacking"))
+    end
+    if !(isfinite(offset[1]) && isfinite(offset[2]))
+        throw(ArgumentError("layer_offset must be finite, got $offset"))
+    end
+    return offset
+end
+
 function MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
                                     interlayer_spacing::Union{Nothing,Float64}=nothing,
                                     basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0)],
@@ -582,10 +656,13 @@ function MLattice{C,TriangularLattice}(; lattice_constant::Float64=1.0,
                                         components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
                                         adsorptions::Union{Vector{Int},Symbol}=:full,
                                         image_multiplicity::Bool=false,
+                                        layer_offset::Union{Nothing,NTuple{2,Float64}}=nothing,
+                                        stacking::Symbol=:aligned,
                                     ) where C
 
     c = _out_of_plane_spacing(lattice_constant, interlayer_spacing)
-    lattice_vectors = [lattice_constant 0.0 0.0; 0.0 sqrt(3)*lattice_constant 0.0; 0.0 0.0 c]
+    dx, dy = _layer_offset(lattice_constant, layer_offset, stacking)
+    lattice_vectors = [lattice_constant 0.0 dx; 0.0 sqrt(3)*lattice_constant dy; 0.0 0.0 c]
     lattice_comp, lattice_adsorptions = mlattice_setup(C, basis, supercell_dimensions, components, adsorptions)
 
     return MLattice{C,TriangularLattice}(lattice_vectors, basis, supercell_dimensions, periodicity, cutoff_radii, lattice_comp, lattice_adsorptions;
@@ -712,7 +789,9 @@ strictly two-dimensional supercell (`supercell_dimensions[3] == 1`), and
 `supercell_dimensions[1]` divisible by 3 (the tripartition closes on the
 periodic cell iff the a₁ circumference is a multiple of 3; the a₂ dimension
 is unconstrained); violations throw an `ArgumentError`. Note the shipped
-default `supercell_dimensions = (4, 2, 1)` is *not* commensurate.
+default `supercell_dimensions = (4, 2, 1)` is *not* commensurate. For
+multilayer cells use the layer-indexed method
+`order_parameter_sqrt3(lattice, layer)`.
 """
 function order_parameter_sqrt3(lattice::MLattice{1,TriangularLattice})
     if length(lattice.basis) != 2
@@ -759,6 +838,101 @@ function order_parameter_sqrt3(lattice::MLattice{1,TriangularLattice})
     # integers; one final square root, no complex arithmetic.
     s2 = n[1]^2 + n[2]^2 + n[3]^2 - n[1] * n[2] - n[2] * n[3] - n[3] * n[1]
     return sqrt(Float64(s2)) / M
+end
+
+"""
+    _check_triangular_basis(caller::Symbol, lattice::MLattice{1,TriangularLattice})
+
+Shared guard for the layer-indexed triangular observables: throw an
+`ArgumentError`, naming the public entry point `caller`, unless the lattice
+carries the standard two-site centered-rectangular basis
+`[(0, 0, 0), (a/2, √3·a/2, 0)]` consistent with its lattice vectors, the
+convention under which the in-plane site decoders of the single-layer
+kernels apply.
+"""
+function _check_triangular_basis(caller::Symbol, lattice::MLattice{1,TriangularLattice})
+    if length(lattice.basis) != 2
+        throw(ArgumentError("$caller requires the two-site " *
+            "centered-rectangular triangular basis, got " *
+            "$(length(lattice.basis)) basis sites"))
+    end
+    ax, ay = lattice.lattice_vectors[1, 1], lattice.lattice_vectors[2, 2]
+    b1, b2 = lattice.basis
+    if !(isapprox(b1[1], 0.0, atol=1e-9) && isapprox(b1[2], 0.0, atol=1e-9) &&
+         isapprox(b2[1], ax / 2, atol=1e-9) && isapprox(b2[2], ay / 2, atol=1e-9))
+        throw(ArgumentError("$caller requires the standard " *
+            "triangular basis [(0, 0, 0), (a/2, √3·a/2, 0)] consistent with " *
+            "the lattice vectors, got $(lattice.basis)"))
+    end
+    return nothing
+end
+
+"""
+    _check_layer_index(caller::Symbol, d3::Int, layer::Int)
+
+Shared guard for the layer-indexed observables: throw an `ArgumentError`,
+naming the public entry point `caller`, unless `1 ≤ layer ≤ d3`, in the
+style of [`layer_coverage`](@ref).
+"""
+function _check_layer_index(caller::Symbol, d3::Int, layer::Int)
+    if !(1 <= layer <= d3)
+        throw(ArgumentError("$caller requires 1 <= layer <= $d3 " *
+            "(= supercell_dimensions[3]), got $layer"))
+    end
+    return nothing
+end
+
+"""
+    order_parameter_sqrt3(lattice::MLattice{1,TriangularLattice}, layer::Int) -> Float64
+
+Layer-resolved form of [`order_parameter_sqrt3`](@ref) for multilayer
+triangular cells: the same three-sublattice modulus evaluated on the
+contiguous block of `B = 2·d₁·d₂` sites of layer `layer` (see
+[`site_layers`](@ref)) and normalized by `B`, so a perfect √3×√3
+arrangement in that layer gives `1/3` whatever the other layers hold.
+Because `lattice_positions` orders basis innermost, dimension 1 next and
+dimension 3 outermost, a layer block carries the site ordering of the
+two-dimensional cell and the tripartition arithmetic of the single-layer
+kernel applies verbatim, for aligned and for offset-stacked layers alike
+(the `layer_offset`/`stacking` keywords of the constructor): the sublattice
+labels are read from the block index, not from the Cartesian positions. At
+`d₃ == 1`, `layer = 1` returns exactly the zero-argument value (same loop,
+same reduction).
+
+Usable per configuration through the `observables` keyword of the
+nested-sampling loops, one callback per layer:
+
+    observables = [Symbol(:psi, k) => (cfg -> order_parameter_sqrt3(cfg, k)) for k in 1:d₃]
+
+Requires the standard two-site basis and `supercell_dimensions[1]`
+divisible by 3, as the zero-argument form, plus `1 ≤ layer ≤ d₃`; the
+two-dimensionality guard of the zero-argument form does not apply.
+Violations throw an `ArgumentError`.
+"""
+function order_parameter_sqrt3(lattice::MLattice{1,TriangularLattice}, layer::Int)
+    _check_triangular_basis(:order_parameter_sqrt3, lattice)
+    d1, d2, d3 = lattice.supercell_dimensions
+    _check_layer_index(:order_parameter_sqrt3, d3, layer)
+    if d1 % 3 != 0
+        throw(ArgumentError("order_parameter_sqrt3 requires " *
+            "supercell_dimensions[1] divisible by 3 so the three √3×√3 " *
+            "sublattices close on the periodic cell, got $d1"))
+    end
+    B = 2 * d1 * d2
+    occ = lattice.components[1]
+    s0 = (layer - 1) * B
+    # The single-layer sublattice decoder applied to the block-local index
+    # t = s − s0 (dimension 3 outermost, so the block is one layer)
+    n = zeros(Int, 3)
+    for t in 1:B
+        occ[s0 + t] || continue
+        b = (t - 1) % 2
+        ci = ((t - 1) ÷ 2) % d1
+        c = b == 0 ? ci % 3 : (ci + 2) % 3
+        n[c+1] += 1
+    end
+    s2 = n[1]^2 + n[2]^2 + n[3]^2 - n[1] * n[2] - n[2] * n[3] - n[3] * n[1]
+    return sqrt(Float64(s2)) / B
 end
 
 """
@@ -941,7 +1115,9 @@ must be evaluated on configurations (e.g. per culled walker, via the
 Requires the standard two-site centered-rectangular triangular basis
 `[(0, 0, 0), (a/2, √3·a/2, 0)]` consistent with the lattice vectors and a
 strictly two-dimensional supercell (`supercell_dimensions[3] == 1`);
-violations throw an `ArgumentError`.
+violations throw an `ArgumentError`. For multilayer cells use the
+layer-indexed method `bragg_amplitude(lattice, m, n, layer)` or
+[`bragg_amplitude_layers`](@ref).
 """
 function bragg_amplitude(lattice::MLattice{1,TriangularLattice}, m::Int, n::Int)
     if length(lattice.basis) != 2
@@ -993,6 +1169,66 @@ function bragg_amplitude(lattice::MLattice{1,TriangularLattice}, m::Int, n::Int)
 end
 
 """
+    bragg_amplitude(lattice::MLattice{1,TriangularLattice}, m::Int, n::Int, layer::Int) -> Float64
+
+Layer-resolved form of the triangular [`bragg_amplitude`](@ref) for
+multilayer cells: `|ρ(k)|` of the occupation pattern in layer `layer`'s
+contiguous block of `B = 2·d₁·d₂` sites (see [`site_layers`](@ref)),
+normalized by `B`, at the same in-plane `k = 2π·(m/d₁, n/(√3·d₂))` of the
+conventional cell. The phase is read from the block-local site index, so
+the value is that of the layer's pattern in its own frame; a rigid in-plane
+offset of the whole layer (the `layer_offset`/`stacking` keywords of the
+constructor) multiplies ρ by a global phase that the modulus drops, so
+aligned and offset-stacked cells give the same value. The relative phases
+between layers, which carry the stacking sequence of an in-plane order, are
+available from [`bragg_amplitude_layers`](@ref). At `d₃ == 1`, `layer = 1`
+returns exactly the zero-argument value (same loop, same reduction).
+
+Requires the standard two-site basis and `1 ≤ layer ≤ d₃`; violations throw
+an `ArgumentError`.
+"""
+function bragg_amplitude(lattice::MLattice{1,TriangularLattice}, m::Int, n::Int, layer::Int)
+    _check_triangular_basis(:bragg_amplitude, lattice)
+    d1, d2, d3 = lattice.supercell_dimensions
+    _check_layer_index(:bragg_amplitude, d3, layer)
+    colnum, rownum, twoM = _bragg_phase_tables(d1, d2, m, n)
+    z = _bragg_block_sum(lattice.components[1], d1, d2, colnum, rownum, twoM,
+                         (layer - 1) * twoM)
+    return abs(z) / twoM
+end
+
+# Own-frame phase tables of the single-layer triangular kernel for the
+# in-plane index (m, n): the reduced column and row numerators and the
+# modulus 2·d₁·d₂ (see the single-layer `bragg_amplitude` for the derivation)
+function _bragg_phase_tables(d1::Int, d2::Int, m::Int, n::Int)
+    twoM = 2 * d1 * d2
+    mr = mod(m, 2 * d1)
+    nr = mod(n, 2 * d2)
+    colnum = [mod(mr * u * d2, twoM) for u in 0:2*d1-1]
+    rownum = [mod(nr * v * d1, twoM) for v in 0:2*d2-1]
+    return colnum, rownum, twoM
+end
+
+# Unnormalized own-frame Bragg sum over the block of twoM sites following
+# site s0: the single-layer loop and reduction applied to the block-local
+# index t = s − s0 (dimension 3 outermost, so the block is one layer)
+function _bragg_block_sum(occ::Vector{Bool}, d1::Int, d2::Int,
+                          colnum::Vector{Int}, rownum::Vector{Int}, twoM::Int, s0::Int)
+    z = 0.0 + 0.0im
+    for t in 1:twoM
+        if occ[s0 + t]
+            b = (t - 1) % 2
+            ci0 = ((t - 1) ÷ 2) % d1
+            cj0 = (t - 1) ÷ (2 * d1)
+            num = colnum[2*ci0+b+1] + rownum[2*cj0+b+1]
+            num >= twoM && (num -= twoM)
+            z += cispi(num / (d1 * d2))
+        end
+    end
+    return z
+end
+
+"""
     order_parameter_p2x2(lattice::MLattice{1,TriangularLattice}) -> Float64
 
 Orientation-degenerate M-point order parameter for p(2×2) and p(2×1)/row
@@ -1035,7 +1271,8 @@ of the p(2×2) sublattice. A cell hosting this order parameter and
 [`order_parameter_sqrt3`](@ref) simultaneously needs
 `supercell_dimensions[1]` divisible by 6 with an even second dimension;
 the shipped default `(4, 2, 1)` satisfies this function's guards but not
-the √3×√3 one's.
+the √3×√3 one's. For multilayer cells use the layer-indexed method
+`order_parameter_p2x2(lattice, layer)`.
 """
 function order_parameter_p2x2(lattice::MLattice{1,TriangularLattice})
     if length(lattice.basis) != 2
@@ -1066,6 +1303,141 @@ function order_parameter_p2x2(lattice::MLattice{1,TriangularLattice})
     return sqrt(bragg_amplitude(lattice, d1 ÷ 2, -(d2 ÷ 2))^2 +
                 bragg_amplitude(lattice, 0, d2)^2 +
                 bragg_amplitude(lattice, d1 ÷ 2, d2 ÷ 2)^2)
+end
+
+"""
+    order_parameter_p2x2(lattice::MLattice{1,TriangularLattice}, layer::Int) -> Float64
+
+Layer-resolved form of [`order_parameter_p2x2`](@ref) for multilayer
+triangular cells: the quadrature of the three layer-indexed M-point
+amplitudes of [`bragg_amplitude`](@ref) for layer `layer`, so a perfect
+p(2×1) row phase in that layer gives `1/2` and a perfect p(2×2) arrangement
+`√3/4`, whatever the other layers hold and for aligned and offset-stacked
+layers alike. At `d₃ == 1`, `layer = 1` returns exactly the zero-argument
+value.
+
+Usable per configuration through the `observables` keyword of the
+nested-sampling loops, one callback per layer:
+
+    observables = [Symbol(:psi, k) => (cfg -> order_parameter_p2x2(cfg, k)) for k in 1:d₃]
+
+Requires the standard two-site basis and even in-plane supercell
+dimensions, as the zero-argument form, plus `1 ≤ layer ≤ d₃`; violations
+throw an `ArgumentError`.
+"""
+function order_parameter_p2x2(lattice::MLattice{1,TriangularLattice}, layer::Int)
+    _check_triangular_basis(:order_parameter_p2x2, lattice)
+    d1, d2, d3 = lattice.supercell_dimensions
+    _check_layer_index(:order_parameter_p2x2, d3, layer)
+    if d1 % 2 != 0 || d2 % 2 != 0
+        bad = d1 % 2 != 0 ? d1 : d2
+        throw(ArgumentError("order_parameter_p2x2 requires even in-plane " *
+            "supercell dimensions, since the M points sit at half-integer " *
+            "reciprocal indices and the p(2×2) sublattice closes on the " *
+            "periodic cell only for even circumferences; got $bad"))
+    end
+    return sqrt(bragg_amplitude(lattice, d1 ÷ 2, -(d2 ÷ 2), layer)^2 +
+                bragg_amplitude(lattice, 0, d2, layer)^2 +
+                bragg_amplitude(lattice, d1 ÷ 2, d2 ÷ 2, layer)^2)
+end
+
+"""
+    bragg_amplitude_layers(lattice::MLattice{1,TriangularLattice}, m::Int, n::Int) -> Vector{ComplexF64}
+
+Complex per-layer Bragg amplitudes of the occupation pattern on a
+multilayer single-component triangular lattice, each layer in its own
+frame,
+
+    ρ_k = (1/B) Σ_{occupied sites s in layer k} e^{i k·r_s},   k = 1:d₃,
+
+with `B = 2·d₁·d₂` sites per layer, the in-plane wavevector
+`k = 2π·(m/d₁, n/(√3·d₂))` in inverse lattice constants (the convention of
+the triangular [`bragg_amplitude`](@ref)), and `r_s` the in-plane position
+of site `s` relative to its own layer's origin: the phase table of the
+layer-indexed [`bragg_amplitude`](@ref), read from the block-local site
+index, so `abs.(ρ)` equals that function's values and the relative phases
+between layers compare each layer's pattern in the layer's own frame. The
+rigid in-plane offset of an offset-stacked cell (the
+`layer_offset`/`stacking` keywords of the constructor) does not enter: it
+is absorbed in the skewed supercell whose reciprocal lattice
+[`stacking_bragg_amplitude`](@ref) samples, whereas a per-layer offset
+phase would make the layer transform depend on which layer is called
+layer 1 whenever `d₃·k·Δ` is not a whole number of turns. The vector is
+translation-covariant: an in-plane lattice translation multiplies every
+`ρ_k` by one common phase, and a translation by the third lattice vector
+relabels the layers cyclically.
+
+The return value is a `Vector`, not a scalar, so this function is not
+directly usable as an `observables` callback (callbacks must return a
+`Real`); record a component's modulus caller-side, e.g.
+`cfg -> abs(bragg_amplitude_layers(cfg, m, n)[k])`, or use
+[`stacking_bragg_amplitude`](@ref).
+
+Requires the standard two-site centered-rectangular triangular basis
+`[(0, 0, 0), (a/2, √3·a/2, 0)]` consistent with the lattice vectors;
+violations throw an `ArgumentError`. Any number of layers is accepted,
+`d₃ == 1` included.
+"""
+function bragg_amplitude_layers(lattice::MLattice{1,TriangularLattice}, m::Int, n::Int)
+    _check_triangular_basis(:bragg_amplitude_layers, lattice)
+    d1, d2, d3 = lattice.supercell_dimensions
+    colnum, rownum, twoM = _bragg_phase_tables(d1, d2, m, n)
+    occ = lattice.components[1]
+    rho = zeros(ComplexF64, d3)
+    for k in 1:d3
+        rho[k] = _bragg_block_sum(occ, d1, d2, colnum, rownum, twoM, (k - 1) * twoM) / twoM
+    end
+    return rho
+end
+
+"""
+    stacking_bragg_amplitude(lattice::MLattice{1,TriangularLattice}, m::Int, n::Int, l::Int) -> Float64
+
+Stacking-resolved Bragg amplitude of a multilayer single-component
+triangular lattice: the modulus of the discrete Fourier transform, along
+the layer index, of the own-frame per-layer amplitudes of
+[`bragg_amplitude_layers`](@ref),
+
+    |A_l| = |(1/d₃) Σ_{k=1}^{d₃} ρ_k e^{2πi·l·(k − 1)/d₃}|,   l ∈ 0:d₃−1.
+
+This is the three-dimensional structure factor of the periodic supercell,
+`|Σ_{occupied sites} e^{i K·r}| / M` with `M = 2·d₁·d₂·d₃`, at its own
+reciprocal-lattice point `K = 2π·A⁻ᵀ·(m, n, l)` (`A` the supercell
+matrix, so the skewed third vector of an offset-stacked cell is accounted
+for exactly). It is therefore invariant under every lattice translation
+of the configuration, in-plane or along the stacking direction, at every
+`(m, n, l)` on every cell, and the `l` labels do not depend on the sign or
+size of the layer offset. `l = 0` is the amplitude of the sequence in
+which every layer carries the same own-frame pattern, and `l ≥ 1` picks
+out the sequences whose own-frame phase advances by `−2π·l/d₃` per layer:
+on a three-layer cell at a K point, a √3×√3 sublattice held fixed across
+layers gives `l = 0` and one that rotates by one sublattice per layer
+gives `l = 1` or `l = 2` by its sense; at an M point, rows held fixed give
+`l = 0`, while rows shifted by one row per layer (an own-frame phase
+advance of π, a two-layer period) give a pure `l = d₃/2` component on an
+even layer count and spread over every `l`, `l = 0` included, on an odd
+one ((1/6, 1/3, 1/3) on three layers). The components
+obey the Parseval identity `Σ_l |A_l|² = (1/d₃) Σ_k |ρ_k|²`, and each lies
+in `[0, 1]`. The value is a scalar, so
+`cfg -> stacking_bragg_amplitude(cfg, m, n, l)` is directly usable as an
+`observables` callback in the nested-sampling loops.
+
+Requires the structural guard of [`bragg_amplitude_layers`](@ref) and
+`0 ≤ l ≤ d₃ − 1`; violations throw an `ArgumentError`.
+"""
+function stacking_bragg_amplitude(lattice::MLattice{1,TriangularLattice}, m::Int, n::Int, l::Int)
+    d3 = lattice.supercell_dimensions[3]
+    if !(0 <= l <= d3 - 1)
+        throw(ArgumentError("stacking_bragg_amplitude requires 0 <= l <= $(d3 - 1) " *
+            "(= supercell_dimensions[3] - 1), got $l"))
+    end
+    rho = bragg_amplitude_layers(lattice, m, n)
+    z = 0.0 + 0.0im
+    for k in 1:d3
+        # Layer phase reduced modulo one turn, so half turns are exactly ±1
+        z += rho[k] * cispi(2 * mod(l * (k - 1), d3) / d3)
+    end
+    return abs(z) / d3
 end
 
 """

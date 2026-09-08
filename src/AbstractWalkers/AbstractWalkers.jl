@@ -32,6 +32,7 @@ export order_parameter_sqrt3
 export bragg_amplitude
 export order_parameter_stripe
 export order_parameter_p2x2
+export bragg_amplitude_layers, stacking_bragg_amplitude
 export site_layers, layer_coverage, occupancy_profile, layer_field
 export enumerate_motif_embeddings, motif_distances
 export view_structure

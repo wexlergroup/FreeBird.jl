@@ -585,6 +585,11 @@ function lattice_random_walk!(lattice::SLattice)
     return lattice
 end
 
+function lattice_random_walk!(lattice::AtomicLattice)
+    _lattice_walk_draw!(lattice)
+    return lattice
+end
+
 """
     _lattice_walk_draw!(lattice) -> (hop_from, hop_to)
 
@@ -599,6 +604,13 @@ function _lattice_walk_draw!(lattice::SLattice)
     hop_from = rand(eachindex(lattice.components[1]))
     # pick a random site to hop to (can be the same as hop_from)
     hop_to = rand(eachindex(lattice.components[1]))
+    _lattice_walk_apply!(lattice, hop_from, hop_to)
+    return hop_from, hop_to
+end
+
+function _lattice_walk_draw!(lattice::AtomicLattice)
+    hop_from = rand(1:num_sites(lattice))
+    hop_to = rand(1:num_sites(lattice))
     _lattice_walk_apply!(lattice, hop_from, hop_to)
     return hop_from, hop_to
 end
@@ -632,6 +644,12 @@ function _lattice_walk_apply!(lattice::SLattice, hop_from::Int, hop_to::Int)
     return lattice
 end
 
+function _lattice_walk_apply!(lattice::AtomicLattice, hop_from::Int, hop_to::Int)
+    is_occupied(lattice, hop_from) != is_occupied(lattice, hop_to) &&
+        swap_sites!(lattice, hop_from, hop_to)
+    return lattice
+end
+
 function _lattice_walk_apply!(lattice::MLattice{C,G}, hop_from::Int, hop_to::Int) where {C,G}
     # case 1: occupied/unoccupied swap
     is_occupied_from::Bool = any([lattice.components[comp][hop_from] for comp in 1:C])
@@ -643,47 +661,6 @@ function _lattice_walk_apply!(lattice::MLattice{C,G}, hop_from::Int, hop_to::Int
         return swap_occupied_sites_across_components!(lattice, hop_from, hop_to)
     end
     # case 3: both sites unoccupied, do nothing
-    return lattice
-end
-
-"""
-    lattice_random_walk!(lattice::AtomicLattice)
-
-Move one adsorbate to a randomly chosen empty site. Occupancy-conserving.
-
-The previous implementation is worth recording, because its failure was quiet.
-It picked an adsorbate by ASE index, wrote a new position into the ASE frame,
-and then **assigned the adsorbate's old position into `all_sites[hop_to]`** —
-overwriting an entry of the *site geometry* as though `all_sites` were a list of
-free positions. It also drew `hop_to` from all sites including occupied ones, so
-at t = 0 it could "move" an adsorbate onto an already-occupied site. Both bugs
-are invisible in an energy trace: the lattice quietly stops being the lattice it
-was constructed as.
-
-Neither is expressible now. Occupancy is a mask over `all_sites`, the geometry
-is never written, and the destination is drawn from the empty sites only. The
-ASE frame is left stale and flagged rather than updated — see
-[`sync_ase_lattice!`](@ref) — which also removes the Python round trip this move
-used to make on every proposal.
-
-# Arguments
-- `lattice::AtomicLattice`: The lattice to move an adsorbate on. Mutated.
-
-# Returns
-- `lattice::AtomicLattice`: The same lattice, after the move. Returned unchanged
-  if there is nothing to move or nowhere to move it.
-"""
-function lattice_random_walk!(lattice::AtomicLattice)
-    occupied = findall(lattice.occupations)
-    empty_sites = findall(.!lattice.occupations)
-    (isempty(occupied) || isempty(empty_sites)) && return lattice
-
-    hop_from = rand(occupied)
-    hop_to = rand(empty_sites)
-    lattice.occupations[hop_from] = false
-    lattice.occupations[hop_to] = true
-    lattice.ase_dirty = true
-
     return lattice
 end
 
@@ -701,8 +678,6 @@ function lattice_random_walk!(lattice::MLattice{C,G}) where {C,G}
     _lattice_walk_draw!(lattice)
     return lattice
 end
-
-
 
 """
     swap_empty_occupied_sites!(lattice::MLattice{C,G}, hop_from::Int, hop_to::Int) where {C,G}
@@ -811,7 +786,7 @@ end
 # ======================================================================
 
 """
-    random_microstate!(lattice::SLattice; p::Float64=0.5)
+    random_microstate!(lattice::AbstractLattice; p::Float64=0.5)
 
 Set each site occupied independently with probability `p`, producing a
 variable-N configuration suitable for grand-canonical sampling.
@@ -823,9 +798,9 @@ variable-N configuration suitable for grand-canonical sampling.
 # Returns
 - `lattice::SLattice`: The mutated lattice with a random microstate.
 """
-function random_microstate!(lattice::SLattice; p::Float64=0.5)
-    for i in eachindex(lattice.components[1])
-        lattice.components[1][i] = rand() < p
+function random_microstate!(lattice::AbstractLattice; p::Float64=0.5)
+    for i in 1:num_sites(lattice)
+        set_occupied!(lattice, i, rand() < p)
     end
     return lattice
 end
@@ -845,16 +820,16 @@ Insert a particle at a random empty site. Returns `true` if successful,
 - `site::Int`: The inserted site index (0 when unsuccessful). A trailing
   addition: two-name destructures of the previous return keep working.
 """
-function lattice_insert_particle!(lattice::SLattice)
+function lattice_insert_particle!(lattice::AbstractLattice)
     n_sites = num_sites(lattice)
-    n_occ = sum(lattice.components[1])
+    n_occ = n_occupied(lattice)
     if n_occ >= n_sites
         return false, lattice, 0
     end
     # Collect empty site indices
-    empty_sites = findall(.!lattice.components[1])
+    empty_sites = empty_indices(lattice)
     site = rand(empty_sites)
-    lattice.components[1][site] = true
+    set_occupied!(lattice, site, true)
     return true, lattice, site
 end
 
@@ -873,14 +848,14 @@ Delete a particle from a random occupied site. Returns `true` if successful,
 - `site::Int`: The vacated site index (0 when unsuccessful). A trailing
   addition: two-name destructures of the previous return keep working.
 """
-function lattice_delete_particle!(lattice::SLattice)
-    n_occ = sum(lattice.components[1])
+function lattice_delete_particle!(lattice::AbstractLattice)
+    n_occ = n_occupied(lattice)
     if n_occ == 0
         return false, lattice, 0
     end
-    occupied_sites = findall(lattice.components[1])
+    occupied_sites = occupied_indices(lattice)
     site = rand(occupied_sites)
-    lattice.components[1][site] = false
+    set_occupied!(lattice, site, false)
     return true, lattice, site
 end
 
@@ -1138,7 +1113,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
     for _ in 1:n_steps
         r = rand()
         config = lattice.configuration
-        n = sum(config.components[1])
+        n = n_occupied(config)
         was_null = false
 
         if r < p_move
@@ -1163,13 +1138,13 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     if n == 0 || n == n_sites
                         continue
                     end
-                    hop_from = rand(findall(config.components[1]))
-                    hop_to = rand(findall(.!config.components[1]))
+                    hop_from = rand(occupied_indices(config))
+                    hop_to = rand(empty_indices(config))
                     if use_deltas
                         step_delta = site_flip_delta(config, h, hop_from)
-                        config.components[1][hop_from] = !config.components[1][hop_from]
+                        set_occupied!(config, hop_from, false)
                         step_delta += site_flip_delta(config, h, hop_to)
-                        config.components[1][hop_to] = !config.components[1][hop_to]
+                        set_occupied!(config, hop_to, true)
                     else
                         _lattice_walk_apply!(config, hop_from, hop_to)
                     end
@@ -1179,13 +1154,15 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     # with the second delta evaluated on the intermediate
                     # state; an equal-occupancy pair performs no flips and
                     # contributes exactly zero.
-                    hop_from = rand(eachindex(config.components[1]))
-                    hop_to = rand(eachindex(config.components[1]))
-                    if config.components[1][hop_from] != config.components[1][hop_to]
+                    hop_from = rand(1:num_sites(config))
+                    hop_to = rand(1:num_sites(config))
+                    if is_occupied(config, hop_from) != is_occupied(config, hop_to)
                         step_delta = site_flip_delta(config, h, hop_from)
-                        config.components[1][hop_from] = !config.components[1][hop_from]
+                        old_from = is_occupied(config, hop_from)
+                        old_to = is_occupied(config, hop_to)
+                        set_occupied!(config, hop_from, old_to)
                         step_delta += site_flip_delta(config, h, hop_to)
-                        config.components[1][hop_to] = !config.components[1][hop_to]
+                        set_occupied!(config, hop_to, old_from)
                     else
                         was_null = true
                     end
@@ -1194,8 +1171,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     # Post-exchange classification: a non-null pair still
                     # differs after the exchange; an equal-occupancy pair
                     # was a no-op
-                    was_null = config.components[1][hop_from] ==
-                               config.components[1][hop_to]
+                    was_null = is_occupied(config, hop_from) ==
+                               is_occupied(config, hop_to)
                 end
                 move_type = :move
                 swap_attempted += 1
@@ -1225,11 +1202,11 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     # as lattice_insert_particle!, inlined to capture the site
                     # for the composite density (keep in lockstep with it)
                     insert_uniform_attempted += 1
-                    empty_sites = findall(.!config.components[1])
+                    empty_sites = empty_indices(config)
                     insert_site = rand(empty_sites)
                     insert_from_biased = false
                 end
-                config.components[1][insert_site] = true
+                set_occupied!(config, insert_site, true)
             else
                 # p_bias == 0: legacy path, bit-identical RNG stream (no
                 # channel draw; lattice_insert_particle! draws exactly once)
@@ -1256,9 +1233,9 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 # Inlined uniform deletion (the same single rand(::Vector)
                 # draw as lattice_delete_particle!) to capture the vacated
                 # site for the reverse composite density (keep in lockstep)
-                occupied_sites = findall(config.components[1])
+                occupied_sites = occupied_indices(config)
                 deleted_site = rand(occupied_sites)
-                config.components[1][deleted_site] = false
+                set_occupied!(config, deleted_site, false)
             else
                 success, _, deleted_site = lattice_delete_particle!(config)
                 if !success
@@ -1286,7 +1263,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             proposed_raw = interacting_energy(config, h)
         end
         proposed_energy = proposed_raw + perturbation_energy
-        n_new = sum(config.components[1])
+        n_new = n_occupied(config)
         proposed_omega = proposed_energy - mu * n_new * unit(lattice.energy)
 
         if proposed_omega >= omega_max_u
@@ -1400,9 +1377,9 @@ recorded site back. No random draws.
     elseif move_type == :cluster
         _apply_cluster_pairs!(config, cluster_pairs)
     elseif move_type == :insert
-        config.components[1][insert_site] = false
+        set_occupied!(config, insert_site, false)
     else # :delete
-        config.components[1][deleted_site] = true
+        set_occupied!(config, deleted_site, true)
     end
     return config
 end

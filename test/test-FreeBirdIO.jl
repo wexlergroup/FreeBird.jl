@@ -220,4 +220,44 @@ end
         @test _test_min_dist(sysj1) >= 12.5 / 5 - 2 * sqrt(3) * 0.2 - 1e-9
         @test_throws ArgumentError FreeBirdIO.generate_lattice_starting_config(12.5, 0)
     end
+
+    @testset "AtomicLattice extXYZ round trip" begin
+        lattice = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        lattice.occupations .= false
+        lattice.occupations[[1, 6, 11]] .= true
+        lattice.ase_dirty = true
+        walker = LatticeWalker(lattice; energy=-1.25u"eV", iter=7)
+
+        filename = "atomic_lattice.traj.extxyz"
+        write_walkers(filename, [walker])
+        @test isfile(filename)
+        @test lattice.ase_dirty == false
+
+        frames = read_configs(filename)
+        @test length(frames) == 1
+        @test frames[1].data[:freebird_walker] == "AtomicLattice"
+        @test frames[1].data[:energy_convention] == "bare_E_v1"
+        @test frames[1].data[:occupations] == "bits=1000010000100000"
+
+        restored = read_single_walker(filename)
+        @test restored isa LatticeWalker{1}
+        @test restored.energy == walker.energy
+        @test restored.iter == walker.iter
+        @test restored.configuration isa AtomicLattice{1,SquareLattice}
+        @test restored.configuration.occupations == lattice.occupations
+        @test restored.configuration.periodicity == lattice.periodicity
+        @test restored.configuration.ase_dirty == false
+
+        write_single_walker(filename, walker, true)
+        @test length(read_walkers(filename)) == 2
+        rm(filename, force=true)
+    end
 end

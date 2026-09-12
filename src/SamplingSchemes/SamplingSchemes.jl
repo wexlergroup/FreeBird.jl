@@ -15,6 +15,10 @@ using AtomsBase
 using Distributions
 using StaticArrays
 
+# `pyimport`, for the per-proposal deepcopy of the ASE frame in
+# nvt_monte_carlo(::MCNewSample, ::AtomicLattice, ::PyMLPotential, ...).
+using PythonCall
+
 using Distributed
 
 using ..MonteCarloMoves
@@ -55,7 +59,7 @@ export MCAtomGrandCanonicalMoves
 export MCGalileanWalk
 
 # other sampling schemes
-export exact_enumeration
+export exact_enumeration, grand_canonical_exact_enumeration
 export wang_landau
 export nvt_monte_carlo, monte_carlo_sampling
 

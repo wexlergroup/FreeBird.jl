@@ -1,3 +1,10 @@
+# Lightweight deterministic energy model used only to exercise AtomicLattice's
+# generic GCNS plumbing without making this gate depend on optional ICET.
+struct AtomicLatticeSmokeHamiltonian <: ClassicalHamiltonian end
+FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
+                                       ::AtomicLatticeSmokeHamiltonian) =
+    -0.04 * n_occupied(lattice) * u"eV"
+
 @testset "Grand-canonical nested sampling tests" begin
  
     # ================================================================
@@ -359,7 +366,9 @@
             liveset, gc_params, Int64(20), mc_routine, save_strategy)
  
         @test df isa DataFrame
-        @test names(df) == ["iter", "omega", "energy", "num_particles"]
+        @test names(df) == ["iter", "omega", "energy", "num_particles",
+                            "energy_convention"]
+        @test all(==("bare_E_v1"), df.energy_convention)
         @test nrow(df) <= 20
         @test nrow(df) > 0  # At least some steps should succeed
         @test eltype(df.iter) == Int
@@ -406,6 +415,72 @@
         rm("test_ms_df.csv", force=true)
         rm("test_ms.traj", force=true)
         rm("test_ms.ls", force=true)
+    end
+
+    # ================================================================
+    @testset "AtomicLattice GCNS and output smoke test" begin
+        template = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        walkers = [LatticeWalker(deepcopy(template)) for _ in 1:8]
+        liveset = LatticeGasWalkers(walkers, AtomicLatticeSmokeHamiltonian())
+        params = GrandCanonicalNestedSamplingParameters(
+            mc_steps=10, chemical_potential=-0.02,
+            energy_perturbation=1e-9, random_seed=20260912)
+        routine = MCGrandCanonicalMoves(clusters_freq=0)
+        save = SaveEveryN("atomic_gcns.csv", "atomic_gcns.traj.extxyz",
+                          "atomic_gcns.ls.extxyz", 25, 100, 1000)
+
+        df, final_liveset, _ = grand_canonical_nested_sampling(
+            liveset, params, Int64(100), routine, save)
+
+        @test nrow(df) > 0
+        @test readline("atomic_gcns.csv") ==
+              "iter,omega,energy,num_particles,energy_convention"
+        @test !isempty(read_configs("atomic_gcns.traj.extxyz"))
+        restored = read_walkers("atomic_gcns.ls.extxyz")
+        @test length(restored) == length(final_liveset.walkers)
+        @test all(w -> w isa LatticeWalker{1}, restored)
+        @test all(w -> w.configuration isa AtomicLattice{1,SquareLattice}, restored)
+
+        rm("atomic_gcns.csv", force=true)
+        rm("atomic_gcns.traj.extxyz", force=true)
+        rm("atomic_gcns.ls.extxyz", force=true)
+    end
+
+    # ================================================================
+    @testset "random_seed makes a run reproducible" begin
+        # Before the seed was consumed, two runs of identical parameters were
+        # different Markov chains: the field was stored and never reached an
+        # RNG. This test detects that directly — without seeding, the second
+        # call continues the global stream where the first left off and cannot
+        # reproduce it.
+        function gc_run(seed)
+            walkers = [LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV", iter=0) for _ in 1:10]
+            ls = LatticeGasWalkers(walkers, ham; assign_energy=false)
+            p = GrandCanonicalNestedSamplingParameters(
+                mc_steps=50, chemical_potential=-0.05, random_seed=seed)
+            routine = MCGrandCanonicalMoves()
+            save = SaveEveryN("test_gc_seed.csv", "test_gc_seed.traj", "test_gc_seed.ls",
+                              1000, 1000, 1000)
+            df, _, _ = grand_canonical_nested_sampling(ls, p, Int64(30), routine, save)
+            return df
+        end
+
+        df_a = gc_run(2024)
+        df_b = gc_run(2024)
+        @test nrow(df_a) > 0
+        @test isequal(df_a, df_b)
+
+        rm("test_gc_seed.csv", force=true)
+        rm("test_gc_seed.traj", force=true)
+        rm("test_gc_seed.ls", force=true)
     end
 
     # ================================================================
@@ -461,15 +536,14 @@
         exact_E = 0.0
         exact_E2 = 0.0
         exact_N = 0.0
+        exact_N2 = 0.0
         exact_EN = 0.0
  
-        for mask in 0:(2^n_sites - 1)
-            lattice = deepcopy(lattice_template)
-            for site in 1:n_sites
-                lattice.components[1][site] = ((mask >> (site - 1)) & 1) == 1
-            end
-            E_val = interacting_energy(lattice, ham_val).val
-            N_val = sum(lattice.components[1])
+        E_all, N_all = grand_canonical_exact_enumeration(lattice_template, ham_val)
+
+        for i in eachindex(E_all)
+            E_val = E_all[i].val
+            N_val = N_all[i]
             omega_val = E_val - mu_val * N_val
  
             boltz = exp(-beta_test * omega_val)
@@ -477,6 +551,7 @@
             exact_E += boltz * E_val
             exact_E2 += boltz * E_val^2
             exact_N += boltz * N_val
+            exact_N2 += boltz * N_val^2
             exact_EN += boltz * E_val * N_val
         end
  
@@ -484,9 +559,16 @@
         exact_mean_N = exact_N / exact_z
         exact_mean_E2 = exact_E2 / exact_z
         exact_mean_EN = exact_EN / exact_z
+        exact_mean_N2 = exact_N2 / exact_z
         exact_var_E = exact_mean_E2 - exact_mean_E^2
+        exact_var_N = exact_mean_N2 - exact_mean_N^2
         exact_cov_EN = exact_mean_EN - exact_mean_E * exact_mean_N
+        # C_E — the thermodynamic heat capacity, and the default `cv`.
         exact_Cv = kb * beta_test^2 * (exact_var_E - mu_val * exact_cov_EN)
+        # C_Ω — the fluctuation of Ω = E − μN. It differs from C_E by
+        # −μ(∂⟨N⟩/∂T)_μ, and it is that difference this test now pins.
+        exact_c_omega = kb * beta_test^2 *
+            (exact_var_E - 2mu_val * exact_cov_EN + mu_val^2 * exact_var_N)
  
         # Run GC-NS with enough walkers and iterations
         n_walkers = 100
@@ -508,16 +590,42 @@
         @test nrow(df) > 0
  
         # Compute NS thermodynamic stats
-        mean_E_ns, Cv_ns, mean_N_ns = gc_thermodynamic_stats(
-            df, [beta_test], n_walkers, mu_val)
- 
+        r = gc_thermodynamic_stats(df, [beta_test], n_walkers, mu_val)
+        mean_E_ns, Cv_ns, mean_N_ns = r.mean_E, r.cv, r.mean_N
+
         # Compare with exact values (generous tolerances for stochastic algorithm)
         @test mean_E_ns[1] ≈ exact_mean_E rtol=0.3
         @test mean_N_ns[1] ≈ exact_mean_N rtol=0.3
-        # Cv is harder to converge; just check it's in the right ballpark
-        if isfinite(Cv_ns[1]) && isfinite(exact_Cv) && exact_Cv > 0
-            @test Cv_ns[1] > 0
-        end
+
+        # The heat capacities were previously checked for sign only — and
+        # inside an `if` that could skip the assertion entirely, so a run
+        # producing a non-finite Cv passed by asserting nothing at all. A
+        # sign test also accepts a value wrong by any factor.
+        #
+        # Both are now compared numerically against the exact enumeration.
+        # rtol=0.15 is measured, not guessed: with the chain pinned by
+        # random_seed the observed errors are reproducible, and they are 5.0%
+        # for C_E and 6.4% for C_Ω (logged below). 0.15 leaves roughly 3x and
+        # 2.3x headroom — loose enough that a legitimate change to the sampler
+        # does not trip it, tight enough to catch an estimator that has lost a
+        # term or a factor. The first moments keep rtol=0.3 pending the same
+        # treatment; their errors are logged below for that purpose.
+        #
+        # This is what pins MERGE_PLAN §1.3(a) — that C_Ω and C_E are
+        # different quantities — in a test rather than in a docstring.
+        @test isfinite(Cv_ns[1])
+        @test isfinite(r.c_omega[1])
+        @test Cv_ns[1] > 0
+        @test Cv_ns[1] ≈ exact_Cv rtol=0.15
+        @test r.c_omega[1] ≈ exact_c_omega rtol=0.15
+
+        # And that the difference is not a subtlety. At this μ the exact
+        # enumeration puts C_E at 2.90x C_Ω, so quoting one where the other is
+        # meant is a factor-of-three error, not a rounding one. Asserted on the
+        # exact values, which carry no sampling noise at all.
+        @test exact_Cv / exact_c_omega > 2.0
+
+        @info "G3 accuracy vs exact enumeration (seeded, so reproducible)" rel_err_mean_E=abs(mean_E_ns[1] - exact_mean_E) / abs(exact_mean_E) rel_err_mean_N=abs(mean_N_ns[1] - exact_mean_N) / abs(exact_mean_N) rel_err_C_E=abs(Cv_ns[1] - exact_Cv) / abs(exact_Cv) rel_err_C_omega=abs(r.c_omega[1] - exact_c_omega) / abs(exact_c_omega) ratio_C_E_to_C_omega=exact_Cv / exact_c_omega
  
         rm("test_val.csv", force=true)
         rm("test_val.traj", force=true)
@@ -571,7 +679,9 @@
             liveset_cl, gc_params_cl, Int64(50), mc_routine_cl, save_cl)
 
         @test df_cl isa DataFrame
-        @test names(df_cl) == ["iter", "omega", "energy", "num_particles"]
+        @test names(df_cl) == ["iter", "omega", "energy", "num_particles",
+            "energy_convention"]
+        @test all(df_cl.energy_convention .== "bare_E_v1")
         @test nrow(df_cl) > 0
         @test length(updated_liveset_cl.walkers) == 10
 
@@ -610,13 +720,10 @@
         # Exact enumeration
         exact_z_cl = 0.0
         exact_N_cl = 0.0
-        for mask in 0:(2^n_sites_cl - 1)
-            lat = deepcopy(lattice_template_cl)
-            for site in 1:n_sites_cl
-                lat.components[1][site] = ((mask >> (site - 1)) & 1) == 1
-            end
-            E_v = interacting_energy(lat, ham_cl).val
-            N_v = sum(lat.components[1])
+        E_all_cl, N_all_cl = grand_canonical_exact_enumeration(lattice_template_cl, ham_cl)
+        for i in eachindex(E_all_cl)
+            E_v = E_all_cl[i].val
+            N_v = N_all_cl[i]
             omega_v = E_v - mu_cl * N_v
             boltz = exp(-beta_cl * omega_v)
             exact_z_cl += boltz
@@ -660,7 +767,6 @@
         rm("test_val_cl.traj", force=true)
         rm("test_val_cl.ls", force=true)
     end
-
     @testset "dead-point callback (Ω-sorted route)" begin
         using Random
         dpc_save = SaveEveryN("t_dpc_gc.csv", "t_dpc_gc.traj", "t_dpc_gc.ls",
@@ -981,13 +1087,14 @@
 
         # Schema pins and per-column closure welds, both drivers
         d_ig, p_ig = ll_igref(99210, 60; record=true)
-        @test names(d_ig) == vcat(["iter", "emax", "num_particles"], rate12)
+        @test names(d_ig) == vcat(["iter", "emax", "num_particles",
+                                   "energy_convention"], rate12)
         for name in rate12
             @test sum(d_ig[!, name]) == get(p_ig.move_stats, Symbol(name), 0)
         end
         d_om, p_om = ll_omega(99211, 60; record=true)
         @test names(d_om) == vcat(["iter", "omega", "energy",
-                                   "num_particles"], rate12)
+                                   "num_particles", "energy_convention"], rate12)
         for name in rate12
             @test sum(d_om[!, name]) == get(p_om.move_stats, Symbol(name), 0)
         end
@@ -995,7 +1102,8 @@
         # Recording on or off never touches the trajectory, either driver
         d_on, _ = ll_igref(99212, 40; record=true)
         d_off, _ = ll_igref(99212, 40)
-        @test names(d_off) == ["iter", "emax", "num_particles"]
+        @test names(d_off) == ["iter", "emax", "num_particles",
+                               "energy_convention"]
         @test d_on.emax == d_off.emax
         @test d_on.num_particles == d_off.num_particles
         o_on, _ = ll_omega(99213, 40; record=true)

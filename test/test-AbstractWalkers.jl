@@ -1663,4 +1663,51 @@
         end
     end
 
+    @testset "AtomicLattice interface" begin
+        periodic = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O"], coverage=0.25,
+            num_nearest_neighbors=2, type_of_sites=["hollow"])
+        finite = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(false, false, false),
+            adsorbate_atoms=["O"], coverage=0.25,
+            num_nearest_neighbors=2, type_of_sites=["hollow"])
+
+        @test num_sites(periodic) == 16
+        @test num_sites(finite) == 9
+        @test num_lattice_components(periodic) == 1
+        @test n_occupied(periodic) == sum(periodic.occupations)
+        @test sort(vcat(occupied_indices(periodic), empty_indices(periodic))) ==
+              collect(1:num_sites(periodic))
+
+        sync_ase_lattice!(periodic)
+        before = copy(periodic.occupations)
+        sites_before = copy(periodic.all_sites)
+        lattice_random_walk!(periodic)
+        @test sum(periodic.occupations) == sum(before)
+        @test periodic.all_sites == sites_before
+
+        # A random hop pair may legitimately be a no-op (the same site, or
+        # two sites with the same occupancy).  Exercise the mutation and ASE
+        # invalidation contract with a deterministic occupied/empty pair.
+        sync_ase_lattice!(periodic)
+        before = copy(periodic.occupations)
+        swap_sites!(periodic,
+                    first(occupied_indices(periodic)),
+                    first(empty_indices(periodic)))
+        @test count(periodic.occupations .!= before) == 2
+        @test periodic.ase_dirty
+
+        sync_ase_lattice!(periodic)
+        @test !periodic.ase_dirty
+        @test_throws ArgumentError neighbor_shell(periodic, 1)
+
+        walker = LatticeWalker(periodic)
+        @test walker isa LatticeWalker{1}
+        @test !isempty(sprint(show, walker))
+        @test !isempty(sprint(show, [walker]))
+    end
+
 end

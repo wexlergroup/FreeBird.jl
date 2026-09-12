@@ -11,6 +11,10 @@ using Distributions
 using Unitful
 using StaticArrays
 
+# `pyconvert`, for reading an adsorbate position off the ASE frame in
+# lattice_random_walk!(::AtomicLattice).
+using PythonCall
+
 using ..AbstractPotentials
 using ..AbstractHamiltonians
 using ..AbstractWalkers

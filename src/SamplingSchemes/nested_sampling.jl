@@ -590,7 +590,8 @@ end
 Estimate the temperature for the nested sampling algorithm from dlog(ω)/dE.
 """
 function estimate_temperature(n_walkers::Int, n_cull::Int, ediff::Float64, iter::Int=1)
-    ω = (n_cull / (n_walkers + n_cull)) * (n_walkers / (n_walkers + n_cull))^iter
+    ω = (n_cull / (n_walkers + n_cull)) *
+        (n_walkers / (n_walkers + n_cull))^(iter - 1)
     β = log(ω) / ediff
     kb = 8.617333262145e-5 # eV/K
     T = 1 / (kb * β) # in Kelvin
@@ -1548,7 +1549,7 @@ end
 Compute Ω = E − μN for a single-component lattice walker.
 """
 function _grand_potential(walker::LatticeWalker{1}, mu::Float64)
-    n = sum(walker.configuration.components[1])
+    n = n_occupied(walker.configuration)
     return walker.energy - mu * n * unit(walker.energy)
 end
 
@@ -1570,6 +1571,8 @@ function _shared_geometry_walker(w::LatticeWalker, cfg::MLattice{C,G}) where {C,
                            [copy(v) for v in cfg.components])
     return LatticeWalker(shared, energy=w.energy, iter=w.iter)
 end
+
+_shared_geometry_walker(w::LatticeWalker, cfg::AtomicLattice) = deepcopy(w)
 
 """
     _perturbation_energy_bound(h, lattice) -> Union{Float64,Nothing}
@@ -1649,12 +1652,12 @@ function _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonical
     for walker in liveset.walkers
         random_microstate!(walker.configuration; p=gc_params.init_occupation_p)
         # Enforce n_max: if too many particles, randomly delete until N ≤ n_max
-        n_occ = sum(walker.configuration.components[1])
+        n_occ = n_occupied(walker.configuration)
         if n_occ > n_max
-            occupied = findall(walker.configuration.components[1])
+            occupied = occupied_indices(walker.configuration)
             shuffle!(occupied)
             for i in 1:(n_occ - n_max)
-                walker.configuration.components[1][occupied[i]] = false
+                set_occupied!(walker.configuration, occupied[i], false)
             end
         end
         assign_energy!(walker, h; perturb_energy=gc_params.energy_perturbation)
@@ -1705,7 +1708,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     worst = ats[1]
     omega_worst = omega_keys[1]
     energy_worst = worst.energy
-    n_worst = sum(worst.configuration.components[1])
+    n_worst = n_occupied(worst.configuration)
 
     # Select parent: prefer walkers strictly below omega_worst
     omega_max_val = omega_worst.val  # unitless for the MC function
@@ -1802,6 +1805,8 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
                                          dead_point_callback::Union{Nothing,Function}=nothing,
                                          stop_on_stall::Bool=false,
                                          record_move_rates::Bool=false)
+    Random.seed!(gc_params.random_seed)
+
     # Initialize walkers with random microstates
     _init_gc_walkers!(liveset, gc_params)
     _warn_perturbation_scale(liveset, gc_params.energy_perturbation)
@@ -1819,7 +1824,8 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
     # cluster-move configuration above
     empty!(gc_params.move_stats)
 
-    df = DataFrame(iter=Int[], omega=Float64[], energy=Float64[], num_particles=Int[])
+    df = DataFrame(iter=Int[], omega=Float64[], energy=Float64[],
+                   num_particles=Int[], energy_convention=String[])
     if record_move_rates
         for name in _LATTICE_MOVE_RATE_COLUMNS
             df[!, name] = Int[]
@@ -1888,9 +1894,11 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
                 lat_rate_row = ()
             end
             if observables === nothing
-                push!(df, (iter, omega.val, energy.val, n_par, lat_rate_row...))
+                push!(df, (iter, omega.val, energy.val, n_par, "bare_E_v1",
+                           lat_rate_row...))
             else
-                push!(df, (iter, omega.val, energy.val, n_par, lat_rate_row...,
+                push!(df, (iter, omega.val, energy.val, n_par, "bare_E_v1",
+                           lat_rate_row...,
                            (Float64(f(culled.configuration)) for (_, f) in observables)...))
             end
             dead_point_callback === nothing || dead_point_callback(iter, culled)
@@ -2097,7 +2105,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     iter::Union{Missing,Int} = missing
     worst = ats[1]
     emax_worst = worst.energy
-    n_worst = sum(worst.configuration.components[1])
+    n_worst = n_occupied(worst.configuration)
 
     emax_val = emax_worst.val  # unitless for the MC function
     eligible = [k for k in 2:n_walkers if ats[k].energy < emax_worst]
@@ -2209,6 +2217,8 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
                                               dead_point_callback::Union{Nothing,Function}=nothing,
                                               stop_on_stall::Bool=false,
                                               record_move_rates::Bool=false)
+    Random.seed!(params.random_seed)
+
     # Initialize walkers as i.i.d. draws from the Bernoulli(z0/(1+z0)) prior
     _init_ideal_gas_ref_walkers!(liveset, params)
     _warn_perturbation_scale(liveset, params.energy_perturbation)
@@ -2226,7 +2236,8 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
     # cluster-move configuration above
     empty!(params.move_stats)
 
-    df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[])
+    df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[],
+                   energy_convention=String[])
     if record_move_rates
         for name in _LATTICE_MOVE_RATE_COLUMNS
             df[!, name] = Int[]
@@ -2283,9 +2294,9 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
                 lat_rate_row = ()
             end
             if observables === nothing
-                push!(df, (iter, emax.val, n_par, lat_rate_row...))
+                push!(df, (iter, emax.val, n_par, "bare_E_v1", lat_rate_row...))
             else
-                push!(df, (iter, emax.val, n_par, lat_rate_row...,
+                push!(df, (iter, emax.val, n_par, "bare_E_v1", lat_rate_row...,
                            (Float64(f(culled.configuration)) for (_, f) in observables)...))
             end
             dead_point_callback === nothing || dead_point_callback(iter, culled)

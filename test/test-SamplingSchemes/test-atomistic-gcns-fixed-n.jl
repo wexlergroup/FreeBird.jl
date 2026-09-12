@@ -35,17 +35,65 @@
         @test isapprox(ustrip(u"Å", Λ_2T) / ustrip(u"Å", Λ_H), 1 / sqrt(2), rtol=1e-10)
     end
 
+    @testset "shallow-NS live-set tail closes Σw = 1 exactly" begin
+        # The closed-form testset below runs 5000 iterations, where the residual
+        # volume X_f = r^5000 underflows and the tail cannot be measured at all —
+        # it passed with a stray ω0 on the tail for exactly that reason. Here the
+        # NS is deliberately shallow, so X_f is O(1) and the tail dominates.
+        #
+        # K = 4, C = 1, n = 3  ⇒  r = 4/5, X_f = 0.512, dead weights = 0.488.
+        # With the normalized default ω0 = 1 the dead weights sum to 1 − X_f
+        # and a tail of X_f/K per survivor closes Z_NS^{(N)} = 1 exactly,
+        # making Ξ = exp(zV) to machine precision. A tail carrying ω0·X_f/K
+        # would over-weight the residual volume.
+        K, C, n_iters = 4, 1, 3
+        N_max = 20
+        N_values = collect(0:N_max)
+
+        ns_outputs = [DataFrame(iter=collect(1:n_iters), emax=zeros(n_iters))
+                      for _ in N_values]
+        live_emax = [zeros(K) for _ in N_values]
+
+        V = 1000.0u"Å^3"
+        m = 40.0u"u"
+        T = 300.0u"K"
+        kb = 8.617333262e-5
+        β = 1.0 / (kb * ustrip(u"K", T))
+        Λ_val = ustrip(u"Å", FreeBird.AnalysisTools._thermal_wavelength(m, T))
+        V_val = ustrip(u"Å^3", V)
+        μ_for_zV(zV) = (log(zV * Λ_val^3 / V_val) / β) * u"eV"
+
+        zV_targets = (0.5, 1.5, 3.0)
+        out = gc_thermodynamic_stats_fixed_N(
+            ns_outputs, N_values, V, m, [μ_for_zV(z) for z in zV_targets], [T];
+            n_walkers=K, n_cull=C, live_emax=live_emax)
+
+        for (k, zV) in enumerate(zV_targets)
+            # Machine precision, not sampling tolerance: this is an algebraic
+            # identity, and it is what makes the tail construction checkable.
+            @test isapprox(out.Xi[k, 1], exp(zV), rtol=1e-8)
+            @test isapprox(out.mean_N[k, 1], zV, rtol=1e-8)
+            @test isapprox(out.var_N[k, 1], zV, rtol=1e-8)   # Poisson ⇒ Var = ⟨N⟩
+        end
+
+        # Same construction, tail omitted: the dead weights alone carry only
+        # 1 − X_f = 0.488 of the prior volume per sector, so Ξ must fall short.
+        out_trunc = gc_thermodynamic_stats_fixed_N(
+            ns_outputs, N_values, V, m, [μ_for_zV(1.5)], [T];
+            n_walkers=K, n_cull=C)
+        @test out_trunc.Xi[1, 1] < exp(1.5)
+    end
+
     @testset "ideal-gas closed form: Ξ, ⟨N⟩, Var(N), ⟨U⟩" begin
         # Synthesize per-N canonical NS DataFrames for an ideal gas (E ≡ 0).
-        # With ω0 = (K+1)/K and many iterations, sum(ω_i) → 1 exactly,
-        # making Z_NS^{(N)} = 1 for every N (the analytical answer).
+        # With the normalized default ω0 = 1 and many iterations,
+        # sum(ω_i) → 1 exactly, making Z_NS^{(N)} = 1 for every N.
         # N_max = 20 keeps the truncation tail (zV)^N/N! negligible for
         # ⟨N⟩ ≤ 3 at rtol = 1e-3.
         N_max = 20
         N_values = collect(0:N_max)
         K = 120
         n_iters = 5000
-        ω0_test = (K + 1) / K
 
         ns_outputs = [DataFrame(iter=collect(1:n_iters), emax=zeros(n_iters))
                       for _ in N_values]
@@ -68,13 +116,26 @@
 
         out = gc_thermodynamic_stats_fixed_N(
             ns_outputs, N_values, V, m, μ_grid, T_grid;
-            n_walkers=K, ω0=ω0_test)
+            n_walkers=K)
 
         for (k, zV) in enumerate(zV_targets)
             @test isapprox(out.Xi[k, 1], exp(zV), rtol=1e-3)
             @test isapprox(out.mean_N[k, 1], zV, rtol=1e-3)
             @test isapprox(out.var_N[k, 1], zV, rtol=1e-3)
             @test isapprox(out.mean_U[k, 1], 0.0, atol=1e-12)
+
+            # The heat capacities have a closed form here, and it is a sharp
+            # one: with E ≡ 0 the configurational energy cannot fluctuate, so
+            # Var(E) = Cov(E,N) = 0 and
+            #   C_E = 0,  C_N = 0,  C_Ω = k_B β² μ² Var(N).
+            # C_Ω survives alone because Ω = E − μN still fluctuates through N.
+            # A sign slip or a misplaced factor in any of the three definitions
+            # shows up here rather than as a plausible-looking number.
+            μ_val = ustrip(u"eV", μ_grid[k])
+            @test isapprox(out.cv[k, 1], 0.0, atol=1e-12)
+            @test isapprox(out.c_N[k, 1], 0.0, atol=1e-12)
+            @test isapprox(out.c_omega[k, 1],
+                           kb * β^2 * μ_val^2 * out.var_N[k, 1], rtol=1e-8)
         end
     end
 
@@ -83,7 +144,6 @@
         N_values = collect(0:N_max)
         K = 120
         n_iters = 5000
-        ω0_test = (K + 1) / K
 
         ns_outputs = [DataFrame(iter=collect(1:n_iters), emax=zeros(n_iters))
                       for _ in N_values]
@@ -96,7 +156,7 @@
 
         out = gc_thermodynamic_stats_fixed_N(
             ns_outputs, N_values, V, m, μ_grid, T_grid;
-            n_walkers=K, ω0=ω0_test)
+            n_walkers=K)
 
         @test all(diff(out.Xi, dims=1) .> 0)
     end
@@ -150,7 +210,7 @@
         # energies at the floor.
         K = 64
         n_iters = 400
-        ω0_test = (K + 1) / K
+        ω0_test = 1.0
         N_values = collect(0:4)
 
         V = 1000.0u"Å^3"
@@ -219,8 +279,8 @@
             live_const = [N == 0 ? Float64[] : fill(E_N(N), K) for N in N_values]
 
             r = K / (K + 1)
-            M_dead = sum(ω0_test * (1 / (K + 1)) * r^i for i in 1:n_iters)
-            M_tail = ω0_test * r^n_iters
+            M_dead = sum(ω0_test * (1 / (K + 1)) * r^(i - 1) for i in 1:n_iters)
+            M_tail = r^n_iters
             M = M_dead + M_tail
 
             out_def = gc_thermodynamic_stats_fixed_N(
@@ -286,7 +346,7 @@ end
     # law-of-total-expectation assembly.
     K = 64
     n_iters = 400
-    ω0_test = (K + 1) / K
+    ω0_test = 1.0
     N_values = collect(0:4)
 
     V = 1000.0u"Å^3"
@@ -331,12 +391,13 @@ end
             end
             df = ns_outs[i]
             for row in 1:nrow(df)
-                lw = log(ω0_test) + log(1 / (K + 1)) + df.iter[row] * log(r)
+                lw = log(ω0_test) + log(1 / (K + 1)) +
+                     (df.iter[row] - 1) * log(r)
                 arow = Dict(col => Float64(df[row, col]) for col in obs_cols)
                 add!(df.emax[row], lw, N, arow)
             end
             n_it = maximum(df.iter)
-            lw_tail = log(ω0_test) + n_it * log(r) - log(K)
+            lw_tail = n_it * log(r) - log(K)
             for (s, E) in enumerate(live_all[i])
                 atail = Dict(col => Float64(live_obs === nothing ? 0.0 :
                                             live_obs[i][col][s]) for col in obs_cols)
@@ -410,8 +471,8 @@ end
                       DataFrame(iter=collect(1:n_iters), emax=zeros(n_iters))
                       for N in N_values]
         live_all = [N == 0 ? Float64[] : zeros(K) for N in N_values]
-        M_dead = sum(ω0_test * (1 / (K + 1)) * r^i for i in 1:n_iters)
-        M_tail = ω0_test * r^n_iters
+        M_dead = sum(ω0_test * (1 / (K + 1)) * r^(i - 1) for i in 1:n_iters)
+        M_tail = r^n_iters
         M = M_dead + M_tail
         out = gc_thermodynamic_stats_fixed_N(
             ns_outputs, N_values, V, m, μ_grid, T_grid;
@@ -511,7 +572,8 @@ end
             n_walkers=K, ω0=ω0_test, live_emax=live_all)
         @test propertynames(out) == (:Xi, :mean_N, :var_N, :mean_U, :logXi,
                                      :var_U, :cov_UN, :log_Z_N, :N_values,
-                                     :p_N, :N_support, :observables)
+                                     :p_N, :N_support, :observables,
+                                     :cv, :c_omega, :c_N)
         @test out[1] === out.Xi && out[2] === out.mean_N &&
               out[3] === out.var_N && out[4] === out.mean_U
         @test isempty(out.observables)
@@ -1550,7 +1612,7 @@ end
         SA = BigFloat(0)          # its declared z_com is 0.0
         sector = 2 * BigFloat(log_zV) - log(BigFloat(2))   # N·ln zV − ln N!, N = 2
         for row in 1:nrow(df)
-            lw = df.iter[row] * log_r - log(BigFloat(K + 1))
+            lw = (df.iter[row] - 1) * log_r - log(BigFloat(K + 1))
             w = exp(lw - BigFloat(β) * BigFloat(df.emax[row]) + sector)
             S0 += w
             SA += w * df.z_com[row]

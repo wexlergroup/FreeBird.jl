@@ -56,7 +56,7 @@
         Ts = [200.0, 400.0] .* u"K"
         E = -0.3
         K = 25
-        for ω0 in (1.0, (K + 1) / K), live in (fill(E, K), [E])
+        for ω0 in (1.0,), live in (fill(E, K), [E])
             logZ, meanE = fe(empty_df, Ts;
                 n_walkers=K, n_cull=1, ω0=ω0, live_energies=live, kb=kb)
             for (j, T) in enumerate(Ts)
@@ -72,14 +72,14 @@
         # On-site-only lattice gas: every N-particle configuration has
         # E = N ε_ads, so each per-N NS ladder is exactly flat and can be
         # synthesized without running a sampler. With Skilling weights
-        # ω0 = (K+1)/K plus the live-set tail, Σω = 1 per sector (up to
-        # O(r^n/K)) and the assembly must reproduce the Langmuir closed form
+        # ω0 = 1 plus the live-set tail, Σω = 1 per sector, and the assembly
+        # must reproduce the Langmuir closed form
         # Ξ = (1 + z e^{-βε})^M to floating-point accuracy.
         M = 16
         ε = -0.04
         K = 25
         n_iters = 600
-        ω0 = (K + 1) / K
+        ω0 = 1.0
         N_values = collect(0:M)
 
         dfs = [DataFrame(iter=collect(1:n_iters), emax=fill(N * ε, n_iters))
@@ -228,7 +228,7 @@
 
             return gc_thermodynamic_stats_fixed_N(dfs, collect(0:M), M,
                 μ_grid, T_grid;
-                n_walkers=K, n_cull=1, ω0=(K + 1) / K, live_emax=live)
+                n_walkers=K, n_cull=1, ω0=1.0, live_emax=live)
         end
 
         function check_stats(stats)

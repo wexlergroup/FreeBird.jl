@@ -50,7 +50,8 @@
                    for _ in 1:10]
         ls = LatticeGasWalkers(walkers, pin_ham(); assign_energy=false)
         params = IdealGasReferencedGCNSParameters(mc_steps=30,
-            reference_fugacity=1.0, energy_perturbation=1e-9)
+            reference_fugacity=1.0, energy_perturbation=1e-9,
+            random_seed=seed)
         df, _, pout = ideal_gas_referenced_nested_sampling(ls, params,
             Int64(50), routine, pin_save(tag))
         pin_cleanup(tag)
@@ -64,7 +65,8 @@
                    for _ in 1:10]
         ls = LatticeGasWalkers(walkers, pin_ham(); assign_energy=false)
         gc = GrandCanonicalNestedSamplingParameters(mc_steps=30,
-            chemical_potential=-0.05, energy_perturbation=1e-9)
+            chemical_potential=-0.05, energy_perturbation=1e-9,
+            random_seed=seed)
         df, _, pout = grand_canonical_nested_sampling(ls, gc, Int64(50),
             MCGrandCanonicalMoves(), pin_save(tag))
         pin_cleanup(tag)

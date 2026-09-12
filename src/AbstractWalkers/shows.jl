@@ -56,6 +56,40 @@ function Base.show(io::IO, lattice::MLattice{C,G}) where {C,G}
     end
 end
 
+function Base.show(io::IO, lattice::AtomicLattice)
+    println(io, typeof(lattice))
+    println(io, "    lattice_vectors      : ", lattice.lattice_atom)
+    println(io, "    positions            : ", length(lattice.lattice_positions[:,1]), " grid points")
+    println(io, "    supercell_dimensions : ", lattice.supercell_dimensions)
+    println(io, "    periodicity          : ", lattice.periodicity)
+    println(io, "    adsorbate_atoms      : ", lattice.adsorbate_atoms)
+    println(io, "    coverage             : ", coverage(lattice))
+    println(io, "    occupied sites       : ", sum(lattice.occupations), " / ", length(lattice.occupations))
+    println(io, "    # nn                 : ", lattice.num_nearest_neighbors)
+    println()
+end
+
+
+"""
+    view_structure(lattice::AtomicLattice)
+
+Open the lattice in ASE's viewer.
+
+This was `view(lattice::AtomicLattice)`, which defined a function named `view`
+inside `AbstractWalkers` and so shadowed `Base.view` for the whole module. It
+loaded only because nothing in the module happened to call `Base.view` before
+this line — a later `view(A, 1:3)` anywhere in `AbstractWalkers` would have
+resolved here and thrown a `MethodError` about `AtomicLattice`.
+
+`view_structure` already exists for `AbstractSystem` and `AtomWalker`
+(`helpers.jl`) and is already exported, so this is a method on the right
+function rather than a new name. Note it syncs first: `ase_lattice` is a cache
+of `occupations` and may be stale.
+"""
+function view_structure(lattice::AtomicLattice)
+    return ase.visualize.view(sync_ase_lattice!(lattice).ase_lattice)
+end
+
 """
     merge_components(lattice::MLattice{C}) where C
     
@@ -148,6 +182,46 @@ function print_layer_single_comp(io::IO, lattice::MLattice{C,G}, boolvec::Vector
     end
 end
 
+
+"""
+    print_lattice_header(io::IO, lattice::AbstractLattice)
+
+Print the geometry summary a live set shows above its walkers.
+
+Dispatched rather than written inline because the two lattice types do not share
+a field set: `MLattice` has `lattice_vectors`, `basis` and `cutoff_radii`;
+`AtomicLattice` has none of them and carries `lattice_atom`, `type_of_sites` and
+a site list instead. The live-set `show` read the `MLattice` names directly,
+which was a `FieldError` the moment an `AtomicLattice` could reach it.
+"""
+function print_lattice_header(io::IO, lattice::MLattice)
+    println(io, "    lattice_vectors:      ", lattice.lattice_vectors)
+    println(io, "    supercell_dimensions: ", lattice.supercell_dimensions)
+    println(io, "    periodicity:          ", lattice.periodicity)
+    println(io, "    basis:                ", lattice.basis)
+end
+
+function print_lattice_header(io::IO, lattice::AtomicLattice)
+    println(io, "    lattice_atom:         ", lattice.lattice_atom)
+    println(io, "    adsorbate_atoms:      ", lattice.adsorbate_atoms)
+    println(io, "    supercell_dimensions: ", lattice.supercell_dimensions)
+    println(io, "    periodicity:          ", lattice.periodicity)
+    println(io, "    type_of_sites:        ", lattice.type_of_sites)
+    println(io, "    sites:                ", num_sites(lattice))
+end
+
+"""
+    print_occupation(io::IO, lattice::AtomicLattice)
+
+Print an `AtomicLattice`'s occupancy as a row of 0/1 over `all_sites`.
+
+Needed because `LatticeWalker`'s show path calls `print_occupation` on whatever
+configuration it holds, and until `AtomicLattice` could be a walker
+configuration at all there was no reason for a method here.
+"""
+function print_occupation(io::IO, lattice::AtomicLattice)
+    print(io, [o ? 1 : 0 for o in lattice.occupations])
+end
 
 function print_occupation(io::IO, lattice::MLattice{C,G}) where {C,G}
     if G == GenericLattice

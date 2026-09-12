@@ -159,10 +159,7 @@ end
 
 function Base.show(io::IO, ls::LatticeGasWalkers)
     println(io, "LatticeGasWalkers($(eltype(ls.walkers)), $(typeof(ls.hamiltonian))):")
-    println(io, "    lattice_vectors:      ", ls.walkers[1].configuration.lattice_vectors)
-    println(io, "    supercell_dimensions: ", ls.walkers[1].configuration.supercell_dimensions)
-    println(io, "    periodicity:          ", ls.walkers[1].configuration.periodicity)
-    println(io, "    basis:                ", ls.walkers[1].configuration.basis)
+    AbstractWalkers.print_lattice_header(io, ls.walkers[1].configuration)
     if length(ls.walkers) > 10
         for i in 1:5
             println(io, "[$i] ", "energy = ", ls.walkers[i].energy, ", iter = ", ls.walkers[i].iter)
@@ -193,7 +190,15 @@ function print_lattice_walker_in_walkers(io::IO, walker::LatticeWalker{C}) where
             println(io, "          ", component)
         end
     else
-        AbstractWalkers.print_lattice(io, walker.configuration, walker.configuration.occupations)
+        # This branch was unreachable until AtomicLattice became a usable walker
+        # configuration, and it called `AbstractWalkers.print_lattice`, which
+        # does not exist anywhere in the package — so the moment it became
+        # reachable it would have thrown UndefVarError. MERGE_PLAN C4 flagged
+        # exactly this, on the grounds that W11 would give AtomicLattice an
+        # `occupations` field and make the dereference start resolving.
+        print(io, "      ")
+        AbstractWalkers.print_occupation(io, walker.configuration)
+        println(io)
     end
 end
 

@@ -263,7 +263,9 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
             liveset, gc_params, Int64(20), mc_routine, save_strategy)
  
         @test df isa DataFrame
-        @test names(df) == ["iter", "omega", "energy", "num_particles"]
+        @test names(df) == ["iter", "omega", "energy", "num_particles",
+                            "energy_convention"]
+        @test all(==("bare_E_v1"), df.energy_convention)
         @test nrow(df) <= 20
         @test nrow(df) > 0  # At least some steps should succeed
         @test eltype(df.iter) == Int
@@ -307,7 +309,8 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
             liveset, params, Int64(100), routine, save)
 
         @test nrow(df) > 0
-        @test readline("atomic_gcns.csv") == "iter,omega,energy,num_particles"
+        @test readline("atomic_gcns.csv") ==
+              "iter,omega,energy,num_particles,energy_convention"
         @test !isempty(read_configs("atomic_gcns.traj.extxyz"))
         restored = read_walkers("atomic_gcns.ls.extxyz")
         @test length(restored) == length(final_liveset.walkers)
@@ -544,7 +547,9 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
             liveset_cl, gc_params_cl, Int64(50), mc_routine_cl, save_cl)
 
         @test df_cl isa DataFrame
-        @test names(df_cl) == ["iter", "omega", "energy", "num_particles"]
+        @test names(df_cl) == ["iter", "omega", "energy", "num_particles",
+            "energy_convention"]
+        @test all(df_cl.energy_convention .== "bare_E_v1")
         @test nrow(df_cl) > 0
         @test length(updated_liveset_cl.walkers) == 10
 

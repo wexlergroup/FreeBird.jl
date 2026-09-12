@@ -1319,7 +1319,8 @@ Whichever way the loop exits, the DataFrame and live set are flushed once more o
 the way out, so an early stop never leaves a truncated file on disk.
 
 # Returns
-- `df::DataFrame`: Columns `[:iter, :omega, :energy, :num_particles]`.
+- `df::DataFrame`: Columns `[:iter, :omega, :energy, :num_particles,
+  :energy_convention]`; the convention tag is `"bare_E_v1"`.
 - `liveset::LatticeGasWalkers`: The final liveset (surviving walkers).
 - `gc_params::GrandCanonicalNestedSamplingParameters`: Updated parameters.
 """
@@ -1351,7 +1352,8 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
         empty!(gc_params.cluster_adjust_iterations)
     end
 
-    df = DataFrame(iter=Int[], omega=Float64[], energy=Float64[], num_particles=Int[])
+    df = DataFrame(iter=Int[], omega=Float64[], energy=Float64[],
+                   num_particles=Int[], energy_convention=String[])
 
     consecutive_fails = 0
 
@@ -1374,7 +1376,7 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
         end
 
         if !(iter isa typeof(missing))
-            push!(df, (iter, omega.val, energy.val, n_par))
+            push!(df, (iter, omega.val, energy.val, n_par, "bare_E_v1"))
         end
 
         if print_info && !(iter isa typeof(missing))
@@ -1683,7 +1685,8 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
         empty!(params.cluster_adjust_iterations)
     end
 
-    df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[])
+    df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[],
+                   energy_convention=String[])
 
     consecutive_fails = 0
 
@@ -1706,7 +1709,7 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
         end
 
         if !(iter isa typeof(missing))
-            push!(df, (iter, emax.val, n_par))
+            push!(df, (iter, emax.val, n_par, "bare_E_v1"))
         end
 
         if print_info && !(iter isa typeof(missing))

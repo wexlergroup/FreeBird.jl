@@ -458,6 +458,9 @@ end
 Compute grand-canonical thermodynamic stats from a GC-NS output DataFrame.
 
 The DataFrame must have columns `:iter`, `:omega`, `:energy`, `:num_particles`.
+New sampler output also carries `energy_convention = "bare_E_v1"`; this makes
+on-disk tables self-describing while preserving support for programmatically
+constructed DataFrames.
 
 Pass the surviving live set as `live_energies` / `live_numbers` to add the
 live-walker contribution to the end of the recorded samples. Nested sampling

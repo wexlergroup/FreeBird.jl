@@ -160,6 +160,7 @@
         frames = read_configs(filename)
         @test length(frames) == 1
         @test frames[1].data[:freebird_walker] == "AtomicLattice"
+        @test frames[1].data[:energy_convention] == "bare_E_v1"
         @test frames[1].data[:occupations] == "bits=1000010000100000"
 
         restored = read_single_walker(filename)

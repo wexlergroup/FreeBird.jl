@@ -126,7 +126,8 @@
 
         df, live_E, live_N = igref_run(igref_template, ham_ni, 1.0, n_walkers, 3000)
         @test nrow(df) > 0
-        @test names(df) == ["iter", "emax", "num_particles"]
+        @test names(df) == ["iter", "emax", "num_particles", "energy_convention"]
+        @test all(df.energy_convention .== "bare_E_v1")
         # E-sorted NS: recorded energy ceilings are non-increasing
         @test issorted(df.emax, rev=true)
 

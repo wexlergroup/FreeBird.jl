@@ -1,3 +1,10 @@
+# Lightweight deterministic energy model used only to exercise AtomicLattice's
+# generic GCNS plumbing without making this gate depend on optional ICET.
+struct AtomicLatticeSmokeHamiltonian <: ClassicalHamiltonian end
+FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
+                                       ::AtomicLatticeSmokeHamiltonian) =
+    -0.04 * n_occupied(lattice) * u"eV"
+
 @testset "Grand-canonical nested sampling tests" begin
  
     # ================================================================
@@ -275,6 +282,41 @@
         rm("test_gc_df.csv", force=true)
         rm("test_gc.traj", force=true)
         rm("test_gc.ls", force=true)
+    end
+
+    @testset "AtomicLattice GCNS and output smoke test" begin
+        template = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        walkers = [LatticeWalker(deepcopy(template)) for _ in 1:8]
+        liveset = LatticeGasWalkers(walkers, AtomicLatticeSmokeHamiltonian())
+        params = GrandCanonicalNestedSamplingParameters(
+            mc_steps=10, chemical_potential=-0.02,
+            energy_perturbation=1e-9, random_seed=20260912)
+        routine = MCGrandCanonicalMoves(clusters_freq=0)
+        save = SaveEveryN("atomic_gcns.csv", "atomic_gcns.traj.extxyz",
+                          "atomic_gcns.ls.extxyz", 25, 100, 1000)
+
+        df, final_liveset, _ = grand_canonical_nested_sampling(
+            liveset, params, Int64(100), routine, save)
+
+        @test nrow(df) > 0
+        @test readline("atomic_gcns.csv") == "iter,omega,energy,num_particles"
+        @test !isempty(read_configs("atomic_gcns.traj.extxyz"))
+        restored = read_walkers("atomic_gcns.ls.extxyz")
+        @test length(restored) == length(final_liveset.walkers)
+        @test all(w -> w isa LatticeWalker{1}, restored)
+        @test all(w -> w.configuration isa AtomicLattice{1,SquareLattice}, restored)
+
+        rm("atomic_gcns.csv", force=true)
+        rm("atomic_gcns.traj.extxyz", force=true)
+        rm("atomic_gcns.ls.extxyz", force=true)
     end
 
     # ================================================================

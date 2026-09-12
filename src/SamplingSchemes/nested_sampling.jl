@@ -1115,7 +1115,7 @@ end
 Compute Ω = E − μN for a single-component lattice walker.
 """
 function _grand_potential(walker::LatticeWalker{1}, mu::Float64)
-    n = sum(walker.configuration.components[1])
+    n = n_occupied(walker.configuration)
     return walker.energy - mu * n * unit(walker.energy)
 end
 
@@ -1131,12 +1131,12 @@ function _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonical
     for walker in liveset.walkers
         random_microstate!(walker.configuration; p=gc_params.init_occupation_p)
         # Enforce n_max: if too many particles, randomly delete until N ≤ n_max
-        n_occ = sum(walker.configuration.components[1])
+        n_occ = n_occupied(walker.configuration)
         if n_occ > n_max
-            occupied = findall(walker.configuration.components[1])
+            occupied = occupied_indices(walker.configuration)
             shuffle!(occupied)
             for i in 1:(n_occ - n_max)
-                walker.configuration.components[1][occupied[i]] = false
+                set_occupied!(walker.configuration, occupied[i], false)
             end
         end
         assign_energy!(walker, h; perturb_energy=gc_params.energy_perturbation)
@@ -1179,7 +1179,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     worst = ats[1]
     omega_worst = _grand_potential(worst, mu)
     energy_worst = worst.energy
-    n_worst = sum(worst.configuration.components[1])
+    n_worst = n_occupied(worst.configuration)
 
     # Select parent: prefer walkers strictly below omega_worst
     omega_max_val = omega_worst.val  # unitless for the MC function
@@ -1568,7 +1568,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     iter::Union{Missing,Int} = missing
     worst = ats[1]
     emax_worst = worst.energy
-    n_worst = sum(worst.configuration.components[1])
+    n_worst = n_occupied(worst.configuration)
 
     emax_val = emax_worst.val  # unitless for the MC function
     eligible = [k for k in 2:n_walkers if ats[k].energy < emax_worst]

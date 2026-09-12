@@ -718,72 +718,72 @@ end
 # ======================================================================
 
 """
-    random_microstate!(lattice::SLattice; p::Float64=0.5)
+    random_microstate!(lattice::AbstractLattice; p::Float64=0.5)
 
 Set each site occupied independently with probability `p`, producing a
 variable-N configuration suitable for grand-canonical sampling.
 
 # Arguments
-- `lattice::SLattice`: The single-component lattice to randomize.
+- `lattice::AbstractLattice`: The single-component lattice to randomize.
 - `p::Float64=0.5`: Per-site occupation probability.
 
 # Returns
-- `lattice::SLattice`: The mutated lattice with a random microstate.
+- `lattice::AbstractLattice`: The mutated lattice with a random microstate.
 """
-function random_microstate!(lattice::SLattice; p::Float64=0.5)
-    for i in eachindex(lattice.components[1])
-        lattice.components[1][i] = rand() < p
+function random_microstate!(lattice::AbstractLattice; p::Float64=0.5)
+    for i in 1:num_sites(lattice)
+        set_occupied!(lattice, i, rand() < p)
     end
     return lattice
 end
 
 """
-    lattice_insert_particle!(lattice::SLattice)
+    lattice_insert_particle!(lattice::AbstractLattice)
 
 Insert a particle at a random empty site. Returns `true` if successful,
 `false` if the lattice is full.
 
 # Arguments
-- `lattice::SLattice`: The single-component lattice.
+- `lattice::AbstractLattice`: The single-component lattice.
 
 # Returns
 - `success::Bool`: Whether a particle was inserted.
-- `lattice::SLattice`: The mutated lattice.
+- `lattice::AbstractLattice`: The mutated lattice.
 """
-function lattice_insert_particle!(lattice::SLattice)
+function lattice_insert_particle!(lattice::AbstractLattice)
     n_sites = num_sites(lattice)
-    n_occ = sum(lattice.components[1])
+    n_occ = n_occupied(lattice)
     if n_occ >= n_sites
         return false, lattice
     end
     # Collect empty site indices
-    empty_sites = findall(.!lattice.components[1])
+    empty_sites = empty_indices(lattice)
     site = rand(empty_sites)
-    lattice.components[1][site] = true
+    set_occupied!(lattice, site, true)
     return true, lattice
 end
 
 """
-    lattice_delete_particle!(lattice::SLattice)
+    lattice_delete_particle!(lattice::AbstractLattice)
 
 Delete a particle from a random occupied site. Returns `true` if successful,
 `false` if the lattice is empty.
 
 # Arguments
-- `lattice::SLattice`: The single-component lattice.
+- `lattice::AbstractLattice`: The single-component lattice.
 
 # Returns
 - `success::Bool`: Whether a particle was deleted.
-- `lattice::SLattice`: The mutated lattice.
+- `lattice::AbstractLattice`: The mutated lattice.
 """
-function lattice_delete_particle!(lattice::SLattice)
-    n_occ = sum(lattice.components[1])
+function lattice_delete_particle!(lattice::AbstractLattice)
+    n_occ = n_occupied(lattice)
     if n_occ == 0
         return false, lattice
     end
-    occupied_sites = findall(lattice.components[1])
+    occupied_sites = occupied_indices(lattice)
     site = rand(occupied_sites)
-    lattice.components[1][site] = false
+    set_occupied!(lattice, site, false)
     return true, lattice
 end
 
@@ -879,7 +879,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
     for _ in 1:n_steps
         r = rand()
         proposed_lattice = deepcopy(lattice.configuration)
-        n = sum(proposed_lattice.components[1])
+        n = n_occupied(proposed_lattice)
 
         if r < p_move
             # Fixed-N branch: choose cluster or local swap
@@ -917,7 +917,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
 
         perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
         proposed_energy = interacting_energy(proposed_lattice, h) + perturbation_energy
-        n_new = sum(proposed_lattice.components[1])
+        n_new = n_occupied(proposed_lattice)
         proposed_omega = proposed_energy - mu * n_new * unit(lattice.energy)
 
         if proposed_omega >= omega_max_u

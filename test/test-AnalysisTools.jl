@@ -1,10 +1,9 @@
 @testset "AnalysisTools.jl tests" begin
     @testset "ωᵢ function tests" begin
         # Basic tests
-        @test ωᵢ([1], 4) ≈ [1/5 * (4/5)^1]
-        @test ωᵢ([1, 2, 3], 4) ≈ [1/5 * (4/5)^1, 1/5 * (4/5)^2, 1/5 * (4/5)^3]
-        @test ωᵢ([0], 4) ≈ [1/5]
-        @test ωᵢ([100], 4)[1] ≈ 1/5 * (4/5)^100 rtol=1e-10
+        @test ωᵢ([1], 4) ≈ [1/5]
+        @test ωᵢ([1, 2, 3], 4) ≈ [1/5, 1/5 * (4/5), 1/5 * (4/5)^2]
+        @test ωᵢ([100], 4)[1] ≈ 1/5 * (4/5)^99 rtol=1e-10
         
         # Edge cases and properties
         @test ωᵢ(Int[], 4) == Float64[]
@@ -17,8 +16,7 @@
     @testset "log_ωᵢ function tests" begin
         # Agrees with log.(ωᵢ(...)) everywhere ωᵢ has not underflowed
         @test log_ωᵢ([1], 4) ≈ log.(ωᵢ([1], 4))
-        @test log_ωᵢ([0], 4) ≈ [log(1/5)]
-        @test log_ωᵢ(collect(0:200), 4) ≈ log.(ωᵢ(collect(0:200), 4))
+        @test log_ωᵢ(collect(1:200), 4) ≈ log.(ωᵢ(collect(1:200), 4))
         @test log_ωᵢ([1, 2, 3], 4; ω0=2.5) ≈ log.(ωᵢ([1, 2, 3], 4; ω0=2.5))
         @test log_ωᵢ([5], 7; n_cull=3) ≈ log.(ωᵢ([5], 7; n_cull=3))
 
@@ -29,7 +27,7 @@
         @test ωᵢ([100_000], 4)[1] == 0.0
         @test isinf(log(ωᵢ([100_000], 4)[1]))
         @test isfinite(log_ωᵢ([100_000], 4)[1])
-        @test log_ωᵢ([100_000], 4)[1] ≈ log(1/5) + 100_000 * log(4/5)
+        @test log_ωᵢ([100_000], 4)[1] ≈ log(1/5) + 99_999 * log(4/5)
 
         # Same contracts as ωᵢ
         @test log_ωᵢ(Int[], 4) == Float64[]
@@ -46,12 +44,12 @@
         n = 3
         iters = collect(1:n)
 
-        # ω0 = (K+C)/K makes the dead-sample weights sum to 1 − X_f, so with the
-        # tail the weights close to exactly 1. Tag the dead samples with N = 0
+        # The default ω0 = 1 makes the dead-sample weights sum to 1 − X_f, so
+        # with the tail the weights close to exactly 1. Tag dead samples with N = 0
         # and the live ones with N = 1: at β = 0 the returned ⟨N⟩ *is* the
         # fraction of the total weight carried by the live set, which must be
         # X_f = r^n. Nothing else in the pipeline can produce that number.
-        ω0 = (K + C) / K
+        ω0 = 1.0
         df = DataFrame(iter = iters,
                        omega = fill(1.0, n),
                        energy = fill(1.0, n),

@@ -439,7 +439,8 @@ end
 Estimate the temperature for the nested sampling algorithm from dlog(ω)/dE.
 """
 function estimate_temperature(n_walkers::Int, n_cull::Int, ediff::Float64, iter::Int=1)
-    ω = (n_cull / (n_walkers + n_cull)) * (n_walkers / (n_walkers + n_cull))^iter
+    ω = (n_cull / (n_walkers + n_cull)) *
+        (n_walkers / (n_walkers + n_cull))^(iter - 1)
     β = log(ω) / ediff
     kb = 8.617333262145e-5 # eV/K
     T = 1 / (kb * β) # in Kelvin

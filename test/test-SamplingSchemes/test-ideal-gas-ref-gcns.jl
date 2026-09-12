@@ -136,7 +136,7 @@
         Ts = [200.0, 300.0, 500.0]
         stats = gc_thermodynamic_stats_ideal_ref(
             df, igref_n_sites, 1.0, μs, Ts, n_walkers;
-            ω0=(n_walkers + 1) / n_walkers, live_emax=live_E, live_numbers=live_N)
+            live_emax=live_E, live_numbers=live_N)
         stats_notail = gc_thermodynamic_stats_ideal_ref(
             df, igref_n_sites, 1.0, μs, Ts, n_walkers)
 
@@ -151,8 +151,11 @@
             @test isapprox(stats.mean_U[i, j], eps_ads * meanN_exact; rtol=0.10)
         end
 
-        # The live-set tail adds positive prior mass: logΞ strictly increases
-        @test all(stats.logXi .> stats_notail.logXi)
+        # The live-set tail adds non-negative prior mass. After 3000 iterations
+        # it is small enough to round away at some grid points, so require that
+        # logΞ never decreases and that the correction is visible somewhere.
+        @test all(stats.logXi .>= stats_notail.logXi)
+        @test any(stats.logXi .> stats_notail.logXi)
 
         # N_eff collapses out of the reweighting window: the far point
         # (μ = -0.08 at T = 200 K, |βμ - ln z0| ≈ 4.6) must have a much
@@ -189,7 +192,7 @@
 
         stats = gc_thermodynamic_stats_ideal_ref(
             df, igref_n_sites, z0, μs, Ts, n_walkers;
-            ω0=(n_walkers + 1) / n_walkers, live_emax=live_E, live_numbers=live_N)
+            live_emax=live_E, live_numbers=live_N)
 
         @test size(stats.cv) == (length(μs), length(Ts))
         @test size(stats.c_omega) == size(stats.cv)
@@ -236,7 +239,7 @@
         # With a zero Hamiltonian every configuration has E = 0 (up to the
         # 1e-12 tie-breaking tags), so at z = z0 the reweighting factor is 1
         # and logΞ must equal M·ln(1+z0) EXACTLY when the dead weights use
-        # ω0 = (K+n_cull)/K and the live-set tail closes the ladder:
+        # the one-based shell weights and the live-set tail close the ladder:
         # Σω = (1 - r^n) + r^n = 1, independent of n and of the sampled N_j.
         # This is an algebraic identity test of the weight bookkeeping — it
         # would catch any ω0/tail double counting.
@@ -247,7 +250,7 @@
         @test nrow(df) > 0
         stats = gc_thermodynamic_stats_ideal_ref(
             df, igref_n_sites, 1.0, [0.0], [300.0], n_walkers;
-            ω0=(n_walkers + 1) / n_walkers, live_emax=live_E, live_numbers=live_N)
+            live_emax=live_E, live_numbers=live_N)
         # β|E| ≲ 4e-11 from the tie-breaking tags; atol dominated by that
         @test isapprox(stats.logXi[1, 1], igref_n_sites * log(2.0); atol=1e-6)
     end

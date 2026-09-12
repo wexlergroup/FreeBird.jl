@@ -40,7 +40,7 @@ Calculates the \$\\omega\$ factors for the given number of iterations and walker
 The \$\\omega\$ factors account for the fractions of phase-space volume sampled during
 each nested sampling iteration, defined as:
 ```math
-\\omega_i = \\frac{C}{K+C} \\left(\\frac{K}{K+C}\\right)^i
+\\omega_i = \\frac{C}{K+C} \\left(\\frac{K}{K+C}\\right)^{i-1}
 ```
 where \$K\$ is the number of walkers, \$C\$ is the number of culled walkers, 
 and \$i\$ is the iteration number.
@@ -55,7 +55,8 @@ and \$i\$ is the iteration number.
 - A vector of \$\\omega\$ factors.
 """
 function ωᵢ(iters::AbstractVector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
-    ωi = ω0 * (n_cull/(n_walkers+n_cull)) * (n_walkers/(n_walkers+n_cull)).^iters
+    ωi = ω0 * (n_cull/(n_walkers+n_cull)) *
+          (n_walkers/(n_walkers+n_cull)).^(iters .- 1)
     return ωi
 end
 
@@ -65,7 +66,7 @@ end
 Log of [`ωᵢ`](@ref), built directly in log space:
 
 ```math
-\\log \\omega_i = \\log \\omega_0 + \\log\\frac{C}{K+C} + i \\log\\frac{K}{K+C}
+\\log \\omega_i = \\log \\omega_0 + \\log\\frac{C}{K+C} + (i-1) \\log\\frac{K}{K+C}
 ```
 
 Use this rather than `log.(ωᵢ(...))` anywhere the weights feed a log-sum-exp.
@@ -90,7 +91,7 @@ everywhere `ωᵢ` has not underflowed.
 """
 function log_ωᵢ(iters::AbstractVector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
     return (log(ω0) + log(n_cull / (n_walkers + n_cull))) .+
-           iters .* log(n_walkers / (n_walkers + n_cull))
+           (iters .- 1) .* log(n_walkers / (n_walkers + n_cull))
 end
 
 """
@@ -558,10 +559,10 @@ function gc_thermodynamic_stats(df::DataFrame,
             throw(DimensionMismatch("live_energies and live_numbers must have the same length"))
         end
         # Residual prior volume after the last recorded iteration, split
-        # uniformly over the K surviving walkers. No ω0 factor here: ω0 corrects
-        # the dead-sample shell weights, not the residual volume X_f — with
-        # ω0 = (K+C)/K the dead weights sum to 1 − X_f and the tail closes
-        # Σw = 1 exactly. Same construction as gc_thermodynamic_stats_ideal_ref.
+        # uniformly over the K surviving walkers. No ω0 factor here: ω0 only
+        # rescales the dead-sample shell weights. With the normalized default
+        # ω0 = 1, the dead weights sum to 1 − X_f and the tail closes Σw = 1.
+        # Same construction as gc_thermodynamic_stats_ideal_ref.
         n_iters = isempty(df.iter) ? 0 : maximum(df.iter)
         log_tail = n_iters * log(n_walkers / (n_walkers + n_cull)) - log(n_walkers)
 
@@ -621,18 +622,18 @@ target chemical potential μ and temperature T is then
 
 where the sum runs over culled walkers (plus, when `live_emax`/`live_numbers`
 are given, the surviving live walkers, each with residual weight
-`(K/(K+n_cull))^{n_iters} / K` — no `ω0` factor, since `ω0` corrects the
+`(K/(K+n_cull))^{n_iters} / K` — no `ω0` factor, since `ω0` rescales the
 dead-sample shell weights only). There is no thermal-wavelength factor: a
 lattice gas has no momentum degrees of freedom, so `z = exp(βμ)` directly.
 All sums are evaluated with the log-sum-exp trick, and Ξ is returned as
 `log Ξ` to avoid overflow at low temperature.
 
-For a fully normalized absolute Ξ, pass `ω0 = (n_walkers + n_cull)/n_walkers`
-(Skilling weights) together with the live-walker tail — the dead weights then
-sum to `1 − (K/(K+n_cull))^{n_iters}` and the tail supplies the remainder, so
-`Σω = 1` exactly. The default `ω0 = 1.0` underestimates Ξ by a factor
-`K/(K+n_cull)` and neglects the tail (see the `ωᵢ` conventions). Ratio
-observables (`mean_N`, `var_N`, `mean_U`) are insensitive to `ω0`.
+For a fully normalized absolute Ξ, use the default `ω0 = 1.0` together with the
+live-walker tail. The one-based Skilling shell weights then sum to
+`1 − (K/(K+n_cull))^{n_iters}` and the tail supplies the remainder, so `Σω = 1`
+exactly. Omitting the live set neglects the residual prior volume. Ratio
+observables (`mean_N`, `var_N`, `mean_U`) are insensitive to a common `ω0`
+when no live tail is supplied.
 
 The reweighting factor `(z/z0)^{N_j}` is pure importance sampling in μ: its
 reliability at each grid point is reported by the Kish effective sample size
@@ -706,16 +707,16 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
     # which silently zeroes the deepest (lowest-energy) samples on large lattices
     log_w0 = n_dead > 0 ?
         (log(ω0) + log(n_cull / (n_walkers + n_cull))) .+
-        Vector{Float64}(df.iter) .* log(n_walkers / (n_walkers + n_cull)) : Float64[]
+        (Vector{Float64}(df.iter) .- 1) .* log(n_walkers / (n_walkers + n_cull)) : Float64[]
     Es = n_dead > 0 ? Vector{Float64}(df.emax) : Float64[]
     Ns = n_dead > 0 ? Vector{Float64}(df.num_particles) : Float64[]
 
     if live_emax !== nothing && !isempty(live_emax)
         # Residual prior volume after the last recorded iteration, split
         # uniformly over the K surviving walkers. No ω0 factor here: ω0
-        # corrects the dead-sample shell weights, not the residual volume
-        # X_n = (K/(K+n_cull))^n — with ω0 = (K+n_cull)/K the dead weights sum
-        # to 1 − X_n and the tail closes the identity Σw = 1 exactly
+        # rescales the dead-sample shell weights, not the residual volume
+        # X_n = (K/(K+n_cull))^n. With ω0 = 1 the dead weights sum to
+        # 1 − X_n and the tail closes the identity Σw = 1 exactly.
         n_iters = n_dead > 0 ? maximum(df.iter) : 0
         log_tail = n_iters * log(n_walkers / (n_walkers + n_cull)) - log(n_walkers)
         log_w0 = vcat(log_w0, fill(log_tail, length(live_emax)))
@@ -823,13 +824,13 @@ grand sum for numerical stability.
 ## Live-set tail correction
 
 After a finite number of NS iterations `n_iters` the recorded weights `ωᵢ` sum to
-`ω0 · r · (1 − r^{n_iters})` with `r = K/(K+n_cull)`; the remaining prior volume,
+`ω0 · (1 − r^{n_iters})` with `r = K/(K+n_cull)`; the remaining prior volume,
 `X_f = r^{n_iters}`, sits in the `K` surviving live walkers. Supplying `live_emax`
 (one vector of K live walker energies per `N`) adds that tail to each per-N
 evidence: each live walker contributes weight `X_f / K` at its current energy —
 with **no** `ω0` factor, since `ω0` rescales the dead-sample shell weights and not
-the residual volume. At the recommended `ω0 = (K+n_cull)/K` the dead weights sum
-to exactly `1 − X_f` and the tail closes `Σw = 1`.
+the residual volume. At the normalized default `ω0 = 1` the dead weights sum to
+exactly `1 − X_f` and the tail closes `Σw = 1`.
 
 When omitted, the live-set tail is neglected — for ratio observables (`⟨N⟩`, `⟨U⟩`)
 the resulting bias is small but visible at low T or shallow NS; for the absolute
@@ -924,9 +925,9 @@ function gc_thermodynamic_stats_fixed_N(
         log_ωi = log_ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
         Es = collect(Float64, df.emax)
         # Residual prior volume after the last recorded iteration, split
-        # uniformly over the K surviving walkers. No ω0 factor here: ω0 corrects
-        # the dead-sample shell weights, not the residual volume X_f — with
-        # ω0 = (K+C)/K the dead weights sum to 1 − X_f and the tail closes
+        # uniformly over the K surviving walkers. No ω0 factor here: ω0
+        # rescales the dead-sample shell weights, not the residual volume X_f.
+        # With ω0 = 1 the dead weights sum to 1 − X_f and the tail closes
         # Σw = 1 exactly. Identical construction to gc_thermodynamic_stats and
         # gc_thermodynamic_stats_ideal_ref, which is what the docstrings above
         # claim all three share; this one used to carry a stray log(ω0), which

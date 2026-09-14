@@ -1555,12 +1555,12 @@ end
 """
     _clone_walker_shared_geometry(w::LatticeWalker)
 
-Clone a lattice walker for a replacement walk, copying only its occupancy
-vectors, energy, and iteration counter while sharing the run-invariant
-geometry by reference (the `Val(:share_geometry)` constructor). The
-geometry fields are never mutated after construction and the lattice
-drivers are serial loops, so the clone is behaviorally identical to a
-`deepcopy`: it draws no randomness and changes no floating-point value.
+Clone a lattice walker for a replacement walk. `MLattice` copies only its
+occupancy vectors, energy, and iteration counter while sharing run-invariant
+geometry through the `Val(:share_geometry)` constructor. `AtomicLattice`
+currently falls back to `deepcopy` because its Python-backed geometry cache
+does not yet have an equivalent sharing constructor. Neither path draws
+randomness or changes floating-point values.
 """
 _clone_walker_shared_geometry(w::LatticeWalker) =
     _shared_geometry_walker(w, w.configuration)

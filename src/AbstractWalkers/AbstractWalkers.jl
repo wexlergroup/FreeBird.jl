@@ -10,21 +10,8 @@ using Unitful
 using Random
 using LinearAlgebra
 using Statistics
-
-# AtomicLattice is backed by an ASE Atoms object. `Py` is a *field type* on the
-# struct, so it is resolved when the module is defined, not when a method runs:
-# without this import the package does not load at all, it fails with
-# `UndefVarError: Py not defined in FreeBird.AbstractWalkers`. The other uses
-# (`pyconvert` in get_positions and get_adsorbate_indicies, `ase.build.fcc100`
-# and `ase.build.add_adsorbate` in the constructor and add_adsorbates!,
-# `ase.visualize.view` in shows.jl) sit inside function bodies and would instead
-# have failed at call time.
-#
-# `..AbstractPotentials` imports both of these but does not re-export `Py`, so
-# it cannot supply them. Same pairing as AbstractPotentials.jl:31-32.
 using ASEconvert
 using PythonCall
-
 using ..AbstractPotentials
 using ..AbstractHamiltonians
 
@@ -35,12 +22,24 @@ export sort_components_by_atomic_number
 export split_components
 export split_components_by_chemical_species
 export check_num_components
+export insert_particle!, remove_particle!
 export LatticeWalker
 export LatticeGeometry, SquareLattice, TriangularLattice, GenericLattice
 export MLattice, SLattice, GLattice, AtomicLattice
+export replicate_walkers
 export update_walker!
 export num_sites, occupied_site_count, num_lattice_components
 export coverage, sync_ase_lattice!, nn_distance
+export n_occupied, is_occupied, set_occupied!, occupied_indices, empty_indices
+export swap_sites!, neighbor_shell
+export order_parameter_c2x2
+export order_parameter_sqrt3
+export bragg_amplitude
+export order_parameter_stripe
+export order_parameter_p2x2
+export bragg_amplitude_layers, stacking_bragg_amplitude
+export site_layers, layer_coverage, occupancy_profile, layer_field
+export enumerate_motif_embeddings, motif_distances
 export view_structure
 
 abstract type AbstractWalker end
@@ -52,5 +51,7 @@ include("lattice_walkers.jl")
 include("helpers.jl")
 
 include("shows.jl")
+
+include("lattice_interface.jl")
 
 end # module AbstractWalkers

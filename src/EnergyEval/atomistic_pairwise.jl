@@ -17,13 +17,23 @@ function inter_component_energy(at1::AbstractSystem, at2::AbstractSystem, pot::S
     pairs = [(i, j) for i in 1:length(at1), j in 1:length(at2)]
     # @show pairs # DEBUG
     energy = Array{typeof(0.0u"eV"), 1}(undef, length(pairs))
-    Threads.@threads for k in eachindex(pairs)
-        # @show i,j # DEBUG
-        (i, j) = pairs[k]
-        r = pbc_dist(position(at1, i), position(at2, j), at1)
-        energy[k] = pair_energy(r, pot)
+    # Serial path when single-threaded: @threads spawns and joins a task on
+    # every call, which dominates these small per-call loops (see ROADMAP
+    # "Threading granularity"). Results are identical either way because the
+    # iterations write disjoint slots.
+    if Threads.nthreads() == 1
+        for k in eachindex(pairs)
+            (i, j) = pairs[k]
+            r = pbc_dist(position(at1, i), position(at2, j), at1)
+            energy[k] = pair_energy(r, pot)
+        end
+    else
+        Threads.@threads for k in eachindex(pairs)
+            (i, j) = pairs[k]
+            r = pbc_dist(position(at1, i), position(at2, j), at1)
+            energy[k] = pair_energy(r, pot)
+        end
     end
-    # energy = energy*u"eV"
     return sum(energy)
 end
 
@@ -50,11 +60,18 @@ function intra_component_energy(at::AbstractSystem, pot::SingleComponentPotentia
     end
     # @info "num_pairs: $num_pairs, length(pairs): $(length(pairs))"
     energies = Vector{typeof(0.0u"eV")}(undef, length(pairs))
-    Threads.@threads for k in eachindex(pairs)
-        (i, j) = pairs[k]
-        r = pbc_dist(position(at, i), position(at, j), at)
-        energies[k] = pair_energy(r, pot)
-        # @info "interacting pair: [$(i),$(j)] $(lj_energy(r,lj))"
+    if Threads.nthreads() == 1   # see comment in inter_component_energy
+        for k in eachindex(pairs)
+            (i, j) = pairs[k]
+            r = pbc_dist(position(at, i), position(at, j), at)
+            energies[k] = pair_energy(r, pot)
+        end
+    else
+        Threads.@threads for k in eachindex(pairs)
+            (i, j) = pairs[k]
+            r = pbc_dist(position(at, i), position(at, j), at)
+            energies[k] = pair_energy(r, pot)
+        end
     end
     return sum(energies)
 end
@@ -82,6 +99,7 @@ function interacting_energy(at::AbstractSystem,
                             frozen::Vector{Bool}
                             ) where {C,P<:SingleComponentPotential{Pairwise}}
     check_num_components(C, list_num_par, frozen)
+    length(at) == 0 && return 0.0u"eV"
     energy = 0.0u"eV"
     components = split_components(at, list_num_par)
     # intra-component interactions
@@ -126,6 +144,7 @@ function interacting_energy(at::AbstractSystem,
                             frozen::Vector{Bool},
                             surface::AbstractSystem
                             ) where {C,P<:SingleComponentPotential{Pairwise}}
+    length(at) == 0 && return 0.0u"eV"
     energy = 0.0u"eV"
     components_at = split_components(at, list_num_par)
     components = [components_at..., surface] # combine components from at and surface
@@ -178,6 +197,7 @@ function interacting_energy(at::AbstractSystem,
     if length(list_num_par) != length(frozen)
         throw(ArgumentError("The number of frozen and free parts does not match the length of the number of components."))
     end
+    length(at) == 0 && return 0.0u"eV"
     energy = 0.0u"eV"
     components = split_components(at, list_num_par)
     # intra-component interactions

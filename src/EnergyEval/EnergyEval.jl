@@ -12,15 +12,13 @@ using ..AbstractWalkers
 using ..AbstractPotentials
 using ..AbstractHamiltonians
 using AtomsCalculators
-
-# ICETHamiltonian holds a `Py` and calls pyimport/pylist/pytuple/pyconvert.
-# PythonCall is already a hard dependency (AbstractPotentials loads it for the
-# ASE calculators); ICET itself is imported lazily, inside the constructor.
 using PythonCall
 
-export pbc_dist
+export pbc_dist, pbc_displacement
 export interacting_energy, frozen_energy
 export single_site_energy
+export site_flip_delta
+export pair_force, interacting_gradient
 export ICETHamiltonian
 
 # definitions of frozen_energy and interacting_energy
@@ -35,9 +33,10 @@ include("atomistic_pairwise.jl")
 # definitions of single_site_energy for computing a site energy using a pairwise potential
 include("atomistic_single_site.jl")
 
-# ICET cluster-expansion Hamiltonian for AtomicLattice. ICET is imported inside
-# the constructor, so this costs nothing at load time.
 include("icet_energies.jl")
+
+# definitions of pairwise forces and gradients
+include("atomistic_forces.jl")
 
 # definitions of interacting_energy for many-body potentials
 include("atomistic_many_body.jl")

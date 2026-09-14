@@ -27,6 +27,7 @@ function frozen_energy(at::AbstractSystem,
                        frozen::Vector{Bool}
                        ) where {C,P}
     check_num_components(C, list_num_par, frozen)
+    length(at) == 0 && return 0.0u"eV"
     energy = 0.0u"eV"
     components = split_components(at, list_num_par)
     # intra-component interactions
@@ -74,6 +75,7 @@ function frozen_energy(at::AbstractSystem,
     if length(list_num_par) != length(frozen)
         throw(ArgumentError("The number of frozen and free parts does not match the length of the number of components."))
     end
+    length(at) == 0 && return 0.0u"eV"
     energy = 0.0u"eV"
     components = split_components(at, list_num_par)
     # intra-component interactions

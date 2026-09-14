@@ -36,6 +36,7 @@ export NestedSamplingParameters
 export LatticeNestedSamplingParameters
 export WangLandauParameters
 export MetropolisMCParameters
+export MuVTMCParameters
 
 # nested sampling related functions
 export sort_by_energy!, nested_sampling_step!
@@ -43,6 +44,19 @@ export nested_sampling
 export MCRoutine, MCRandomWalkMaxE, MCRandomWalkClone, MCNewSample, MCRejectionSampling, MCMixedMoves, MCMixedMovesParallel
 
 export MCRandomWalkMaxEParallel, MCRandomWalkCloneParallel, MCDistributed
+
+# grand-canonical nested sampling
+export GrandCanonicalNestedSamplingParameters
+export MCGrandCanonicalMoves
+export grand_canonical_nested_sampling
+
+# ideal-gas-referenced grand-canonical nested sampling
+export IdealGasReferencedGCNSParameters
+export ideal_gas_referenced_nested_sampling
+
+export AtomisticIGRefGCNSParameters
+export MCAtomGrandCanonicalMoves
+export MCGalileanWalk
 
 # other sampling schemes
 export exact_enumeration
@@ -64,6 +78,7 @@ include("nested_sampling.jl")
 include("exact_enumeration.jl")
 
 include("nvt_monte_carlo.jl")
+include("muvt_monte_carlo.jl")
 
 include("wang_landau.jl")
 

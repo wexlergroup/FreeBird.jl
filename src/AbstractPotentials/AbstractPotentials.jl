@@ -23,6 +23,7 @@ export CompositeParameterSets
 export LJParameters, lj_energy
 export LennardJonesParameterSets
 export GuptaParameters
+export IdealGasParameters
 export PyCalculator
 
 
@@ -102,6 +103,8 @@ include("composite_paramsets.jl")
 include("lennardjones.jl")
 
 include("gupta.jl")
+
+include("ideal_gas.jl")
 
 include("ase_calculators.jl")
 

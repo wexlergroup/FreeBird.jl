@@ -131,9 +131,10 @@ MLattice{C,G}(
     basis::Vector{Tuple{Float64, Float64, Float64}},
     supercell_dimensions::Tuple{Int64, Int64, Int64},
     periodicity::Tuple{Bool, Bool, Bool},
-    components::Vector{Vector{Bool}},
-    adsorptions::Vector{Bool},
     cutoff_radii::Vector{Float64},
+    components::Vector{Vector{Bool}},
+    adsorptions::Vector{Bool};
+    image_multiplicity::Bool=false,
 ) where {C,G}
 ```
 =====================#
@@ -150,12 +151,14 @@ The `components=[[1,2,3,4]]` argument specifies that the system has a single com
 and the first four sites are occupied.
 ```julia
 MLattice{C,SquareLattice}(; lattice_constant::Float64=1.0,
+    interlayer_spacing::Union{Nothing,Float64}=nothing,
     basis::Vector{Tuple{Float64,Float64,Float64}}=[(0.0, 0.0, 0.0)],
     supercell_dimensions::Tuple{Int64,Int64,Int64}=(4, 4, 1),
     periodicity::Tuple{Bool,Bool,Bool}=(true, true, false),
     cutoff_radii::Vector{Float64}=[1.1, 1.5],
     components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol}=:equal,
-    adsorptions::Union{Vector{Int},Symbol}=:full)
+    adsorptions::Union{Vector{Int},Symbol}=:full,
+    image_multiplicity::Bool=false)
 ```
 ==#
 

@@ -53,6 +53,10 @@ Constructs an `AtomWalker` object with the given configuration.
 # Returns
 - `AtomWalker{C}`: The constructed `AtomWalker` object.
 
+An empty configuration is rejected with an `ArgumentError`: the number of components
+cannot be inferred from zero atoms. Construct `AtomWalker{1}(configuration)` directly for
+a zero-particle single-component walker.
+
 # Example
 ```jldoctest
 julia> at = FreeBirdIO.generate_multi_type_random_starting_config(10.0,[2,1,3,4,5,6];particle_types=[:H,:O,:H,:Fe,:Au,:Cl])
@@ -83,6 +87,9 @@ AtomWalker{5}(FastSystem(Au₅Cl₆Fe₄H₅O, periodic = FFF, bounding_box = [[
 
 """
 function AtomWalker(configuration::AbstractSystem; freeze_species::Vector{Symbol}=Symbol[], merge_same_species=true)
+    if length(configuration) == 0
+        throw(ArgumentError("empty configuration: the number of components cannot be inferred; construct AtomWalker{1}(configuration) directly for a zero-particle single-component walker."))
+    end
     if isa(configuration, FlexibleSystem)
         new_list = [Atom(atomic_symbol(i),position(i)) for i in configuration.particles]
         configuration = FastSystem(new_list, cell_vectors(configuration), periodicity(configuration))

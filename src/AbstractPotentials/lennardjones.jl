@@ -118,3 +118,19 @@ Compute the energy of a pair of particles separated by distance `r` using the Le
 
 """
 pair_energy(r::typeof(1.0u"Å"), lj::LJParameters) = lj_energy(r, lj)
+"""
+    _max_interaction_range(pot)
+
+Maximum pair-interaction range of a potential, as a Unitful length, for
+minimum-image sanity checks: `cutoff * sigma` for `LJParameters` (infinite for
+the untruncated default), the maximum over the entries of a
+`CompositeParameterSets`, and `missing` for potentials whose range the library
+cannot determine (the check is then skipped).
+"""
+_max_interaction_range(lj::LJParameters) = lj.cutoff * lj.sigma
+_max_interaction_range(::AbstractPotential) = missing
+function _max_interaction_range(cps::CompositeParameterSets)
+    ranges = [_max_interaction_range(p) for p in cps.param_sets]
+    any(r === missing for r in ranges) && return missing
+    return maximum(ranges)
+end

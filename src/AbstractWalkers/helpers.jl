@@ -12,13 +12,15 @@ Split the system into components based on the number of particles in each compon
 # Returns
 - `components`: An array of `FastSystem` objects representing the components of the system.
 
+An empty system, or a zero-count component, yields a zero-atom `FastSystem` carrying the
+parent system's cell and periodicity.
 """
 function split_components(at::AbstractSystem, list_num_par::Vector{Int})
     components = Array{FastSystem}(undef, length(list_num_par))
     comp_cut = vcat([0],cumsum(list_num_par))
     comp_split = [comp_cut[i]+1:comp_cut[i+1] for i in 1:length(list_num_par)]
     for i in 1:length(list_num_par)
-        new_list = empty([Symbol(atomic_symbol(at[1])) => position(at[1])])
+        new_list = Pair{Symbol, eltype(position(at, :))}[]
         pos = position(at, comp_split[i])
         symbols = [Symbol(atomic_symbol(at[i])) for i in comp_split[i]]
         for i in 1:length(pos)
@@ -41,6 +43,7 @@ Split an `AbstractSystem` into multiple components based on the chemical species
 
 # Returns
 An array of `FastSystem` objects, each representing a component of the input system.
+An empty system returns an empty array.
 
 # Example
 ```jldoctest
@@ -78,7 +81,7 @@ function split_components_by_chemical_species(at::AbstractSystem)
     species = sort!(unique(list_species))
     components = Array{FastSystem}(undef, length(species))
     for i in 1:length(species)
-        new_list = empty([Symbol(atomic_symbol(at[1])) => position(at[1])])
+        new_list = Pair{Symbol, eltype(position(at, :))}[]
         pos = position(at, findall(x->x==species[i],list_species))
         symbols = [Symbol(atomic_symbol(at[i])) for i in findall(x->x==species[i],list_species)]
         for i in 1:length(pos)
@@ -124,7 +127,7 @@ Sorts the components of an `AbstractSystem` object `at` by their atomic number.
 - `list_num_par::Vector{Int64}`: A vector containing the number of each component species.
 - `new_list::FastSystem`: A new `FastSystem` object with the sorted components.
 
-The function first extracts the atomic numbers of the components in `at`. If `merge_same_species` is `true`, it sorts the unique species and counts the number of each species. If `merge_same_species` is `false`, it creates a list of species and their counts. It then sorts the species and counts by atomic number. Finally, it constructs a new `FastSystem` object with the sorted components and returns the list of species counts and the new `FastSystem` object.
+The function first extracts the atomic numbers of the components in `at`. If `merge_same_species` is `true`, it sorts the unique species and counts the number of each species. If `merge_same_species` is `false`, it creates a list of species and their counts. It then sorts the species and counts by atomic number. Finally, it constructs a new `FastSystem` object with the sorted components and returns the list of species counts and the new `FastSystem` object. An empty system returns an empty `list_num_par` and a zero-atom system, under either flag.
 
 # Examples
 ```jldoctest
@@ -157,12 +160,12 @@ julia> AbstractWalkers.sort_components_by_atomic_number(at)
 """
 function sort_components_by_atomic_number(at::AbstractSystem; merge_same_species=true)
     list_species = [atomic_number(at, i) for i in 1:length(at)]
-    new_list = empty([Symbol(atomic_symbol(at[1])) => position(at[1])])
+    new_list = Pair{Symbol, eltype(position(at, :))}[]
     if merge_same_species
         species = sort!(unique(list_species))
         list_num_par = [count(x->x==s, list_species) for s in species]
     elseif !merge_same_species
-        species = [list_species[1]; [list_species[i] for i in 2:length(list_species) if list_species[i] != list_species[i-1]]]
+        species = isempty(list_species) ? empty(list_species) : [list_species[1]; [list_species[i] for i in 2:length(list_species) if list_species[i] != list_species[i-1]]]
         list_num_par = Vector{Int64}()
         i = 1
         while i <= length(list_species)
@@ -186,6 +189,58 @@ function sort_components_by_atomic_number(at::AbstractSystem; merge_same_species
     end
     sys = atomic_system(new_list, cell_vectors(at), periodicity(at))
     return list_num_par, FastSystem(sys)
+end
+
+"""
+    insert_particle!(walker::AtomWalker{1}, pos, species)
+
+Append one particle of `species` (a `Symbol` or `ChemicalSpecies`) at position `pos` to the
+walker's configuration, updating `list_num_par` in the same call. The two mutations are kept
+in lockstep here so the configuration arrays and the particle count cannot drift apart. The
+operation is purely structural: the walker's `energy` is not touched and the component's
+frozen flag is not consulted; callers own the energy bookkeeping (see
+`MC_grand_canonical_walk!`).
+
+# Arguments
+- `walker::AtomWalker{1}`: The single-component walker to extend.
+- `pos`: The new particle's position (any 3-vector of lengths accepted by the configuration).
+- `species`: The chemical identity of the new particle.
+
+# Returns
+- `walker::AtomWalker{1}`: The updated walker.
+"""
+function insert_particle!(walker::AtomWalker{1}, pos, species)
+    config = walker.configuration
+    sp = species isa ChemicalSpecies ? species : ChemicalSpecies(species)
+    push!(config.position, pos)
+    push!(config.species, sp)
+    push!(config.mass, mass(sp))
+    walker.list_num_par[1] += 1
+    return walker
+end
+
+"""
+    remove_particle!(walker::AtomWalker{1}, i::Int)
+
+Remove particle `i` from the walker's configuration, order-preserving, updating
+`list_num_par` in the same call. Purely structural, like `insert_particle!`: the walker's
+`energy` is not touched.
+
+# Arguments
+- `walker::AtomWalker{1}`: The single-component walker to shrink.
+- `i::Int`: The index of the particle to remove.
+
+# Returns
+- `walker::AtomWalker{1}`: The updated walker.
+"""
+function remove_particle!(walker::AtomWalker{1}, i::Int)
+    config = walker.configuration
+    checkbounds(config.position, i)
+    deleteat!(config.position, i)
+    deleteat!(config.species, i)
+    deleteat!(config.mass, i)
+    walker.list_num_par[1] -= 1
+    return walker
 end
 
 """

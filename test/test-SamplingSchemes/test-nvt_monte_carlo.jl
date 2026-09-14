@@ -157,3 +157,97 @@ end
 
     end
 end
+@testset "NVT MC loop hardening (aliasing, null moves, phase seeding)" begin
+    # Shared fixture: a 4-atom periodic LJ walker in a 10 A cubic box.
+    # Calibration ledger: null-move surplus (accepted - changepoints)/n on
+    #   MCMixedMoves(5, 1), n = 2000, T = 300 K, seeds 777/778/779: measured
+    #   0.0435, 0.0380, 0.0435 (accepted identity swaps only; expectation
+    #   (1/6)*(1/4) ~ 0.042, binomial sigma ~ 0.0045). The historical
+    #   double-draw loop adds null moves at 5/36 ~ 0.139 on top, landing near
+    #   0.146. Gate: surplus <= 0.09, over 10 sigma above the measured band's
+    #   ceiling and over 12 sigma below the defect value.
+    hardening_box = [[10.0u"Å", 0u"Å", 0u"Å"],
+                     [0u"Å", 10.0u"Å", 0u"Å"],
+                     [0u"Å", 0u"Å", 10.0u"Å"]]
+    hardening_coords = [:H => [0.2, 0.2, 0.2], :H => [0.7, 0.3, 0.4],
+                        :H => [0.3, 0.7, 0.6], :H => [0.6, 0.6, 0.3]]
+    hardening_at = AtomWalker(FastSystem(periodic_system(hardening_coords, hardening_box, fractional=true)))
+    hardening_lj = LJParameters(epsilon=0.1, sigma=2.5, cutoff=3.0, shift=true)
+
+    # State-changing acceptances, counted from the stored snapshots
+    function count_changepoints(configs, at_start)
+        prev = at_start.configuration.position
+        n = 0
+        for c in configs
+            if c.configuration.position != prev
+                n += 1
+            end
+            prev = c.configuration.position
+        end
+        return n
+    end
+
+    @testset "Stored trajectory snapshots are independent (MCRandomWalkMaxE)" begin
+        energies, configs, accepted = nvt_monte_carlo(
+            MCRandomWalkMaxE(), deepcopy(hardening_at), hardening_lj, 300.0, 200, 0.4, 4242)
+        @test 0 < accepted < 200
+        # Distinct objects, not one aliased walker repeated
+        @test all(configs[i] !== configs[j] for i in 1:20 for j in (i + 1):20)
+        # The stored trajectory actually varies
+        @test any(configs[i].configuration.position != configs[end].configuration.position for i in 1:199)
+        # Each snapshot's energy field matches a from-scratch recompute of its
+        # own configuration (incremental-accumulation drift class)
+        for i in (1, 50, 100, 150, 200)
+            E_re = interacting_energy(configs[i].configuration, hardening_lj,
+                                      configs[i].list_num_par, configs[i].frozen) +
+                   configs[i].energy_frozen_part
+            @test isapprox(configs[i].energy, E_re; atol=1e-9u"eV")
+            @test configs[i].energy == energies[i]
+        end
+        # Walk-only path: every acceptance changes the configuration, exactly
+        @test accepted == count_changepoints(configs, hardening_at)
+    end
+
+    @testset "Null-move accounting (MCMixedMoves single channel draw)" begin
+        n_steps = 2000
+        energies, configs, accepted = nvt_monte_carlo(
+            MCMixedMoves(5, 1), deepcopy(hardening_at), hardening_lj, 300.0, n_steps, 0.4, 777)
+        # Accepted identity swaps (same atom drawn twice in the swap channel)
+        # are the only legal accepted-without-change steps; the historical
+        # double-draw loop added a 5/36 null-move channel on top. See the
+        # calibration ledger above.
+        surplus = (accepted - count_changepoints(configs, hardening_at)) / n_steps
+        @test 0.0 <= surplus <= 0.09
+        @test all(configs[i] !== configs[j] for i in 1:20 for j in (i + 1):20)
+        for i in (1, 1000, 2000)
+            @test configs[i].energy == energies[i]
+        end
+    end
+
+    @testset "Equilibration and production streams are independent" begin
+        # Lattice driver wiring: the production leg must reproduce an explicit
+        # nvt_monte_carlo call seeded with random_seed + 1 from the
+        # equilibration end configuration
+        lattice = SLattice{SquareLattice}(supercell_dimensions=(2, 2, 1), components=[[1, 2]])
+        ham = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+        seed = 4242
+        params = MetropolisMCParameters([300.0];
+            equilibrium_steps=60, sampling_steps=80, random_seed=seed)
+        d_energies, d_configs, d_cvs, d_rates = monte_carlo_sampling(MCNewSample(), lattice, ham, params)
+        eq_e, eq_c, eq_acc = nvt_monte_carlo(MCNewSample(), lattice, ham, 300.0, 60, seed)
+        pr_e, pr_c, pr_acc = nvt_monte_carlo(MCNewSample(), eq_c[end], ham, 300.0, 80, seed + 1)
+        @test d_energies[1] == mean(pr_e)
+        @test d_rates[1] == pr_acc / 80
+        # Atomistic driver: same-seed reproducibility end to end
+        p1 = MetropolisMCParameters([500.0];
+            equilibrium_steps=100, sampling_steps=100, step_size=0.3, random_seed=99)
+        p2 = MetropolisMCParameters([500.0];
+            equilibrium_steps=100, sampling_steps=100, step_size=0.3, random_seed=99)
+        e1, ls1, cv1, r1 = monte_carlo_sampling(MCRandomWalkMaxE(), deepcopy(hardening_at), hardening_lj, p1)
+        e2, ls2, cv2, r2 = monte_carlo_sampling(MCRandomWalkMaxE(), deepcopy(hardening_at), hardening_lj, p2)
+        @test e1 == e2
+        @test cv1 == cv2
+        @test r1 == r2
+        @test ls1.walkers[1].configuration.position == ls2.walkers[1].configuration.position
+    end
+end

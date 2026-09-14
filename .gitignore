@@ -8,6 +8,7 @@ test*.*
 input*
 output*
 !test/*
+!test/**/*.jl
 *.extxyz
 *.swp
 .DS_Store

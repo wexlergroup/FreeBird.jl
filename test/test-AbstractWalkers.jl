@@ -277,7 +277,13 @@
                 periodicity = (true, true, true)
                 cutoff_radii = [1.1, 1.5, 1.8]
 
-                neighbors = AbstractWalkers.compute_neighbors(lattice_vectors, positions, periodicity, cutoff_radii)
+                # Every cutoff exceeds half the cell edge on this one-cell
+                # torus, so pairs are connected through several images: the
+                # pinned per-site counts below are the documented
+                # minimum-image convention, and the collapsed-image warning
+                # fires
+                neighbors = @test_logs (:warn, r"wrap the periodic cell") match_mode=:any AbstractWalkers.compute_neighbors(
+                    lattice_vectors, positions, periodicity, cutoff_radii)
                 
                 for i in 1:5
                     if i == 1
@@ -295,78 +301,139 @@
                     end
                 end
             end
-        end
 
-        @testset "compute_neighbors_banded function tests" begin
-
-            # compute_neighbors_banded is the AtomicLattice neighbour builder. It
-            # used to be a second method named `compute_neighbors` with identical
-            # argument types, which made the package unprecompilable on Julia 1.12
-            # ("Method overwriting is not permitted during Module precompilation").
-            #
-            # These tests pin the claim that motivated renaming rather than
-            # deleting it: for cutoff radii in increasing order — the only kind
-            # `find_n_cutoff_radii` produces, and the only kind either call site
-            # passes — banded assignment and `compute_neighbors`' first-cutoff-wins
-            # assignment partition the pairs identically. If that holds, the two
-            # implementations should be collapsed into one (MERGE_PLAN W10).
-
-            lattice_vectors = [
-                2.0 0.0 0.0;
-                0.0 2.0 0.0;
-                0.0 0.0 2.0
-            ]
-
-            @testset "agrees with compute_neighbors, non-periodic" begin
-                positions = [
+            @testset "singular 2D cell" begin
+                lattice_vectors_2d = [
+                    4.0 0.0 0.0;
+                    0.0 4.0 0.0;
+                    0.0 0.0 0.0
+                ]
+                positions_2d = [
                     0.0 0.0 0.0;
                     1.0 0.0 0.0;
                     0.0 1.0 0.0;
-                    1.0 1.0 0.0;
-                    0.0 0.0 1.0;
-                    1.0 0.0 1.0;
-                    0.0 1.0 1.0;
-                    1.0 1.0 1.0
-                    ]
-
-                periodicity = (false, false, false)
-                cutoff_radii = [1.1, 1.8]
-
-                banded = AbstractWalkers.compute_neighbors_banded(lattice_vectors, positions, periodicity, cutoff_radii)
-                plain  = AbstractWalkers.compute_neighbors(lattice_vectors, positions, periodicity, cutoff_radii)
-
-                @test length(banded) == length(plain)
-                for i in eachindex(plain)
-                    @test sort.(banded[i]) == sort.(plain[i])
-                end
-
-                # and independently, against the same expectations the
-                # compute_neighbors tests above assert
-                @test sort(banded[1][1]) == [2, 3, 5]
-                @test sort(banded[1][2]) == [4, 6, 7, 8]
-                @test sort(banded[8][1]) == [4, 6, 7]
-                @test sort(banded[8][2]) == [1, 2, 3, 5]
+                    1.0 1.0 0.0
+                ]
+                neighbors = AbstractWalkers.compute_neighbors(
+                    lattice_vectors_2d, positions_2d,
+                    (true, true, false), [1.1, 1.5])
+                @test neighbors[1] == [[2, 3], [4]]
+                @test neighbors[4] == [[2, 3], [1]]
             end
 
-            @testset "agrees with compute_neighbors, fully periodic" begin
-                positions = [
+            @testset "z-only minimum image" begin
+                lattice_vectors_z = [
+                    4.0 0.0 0.0;
+                    0.0 4.0 0.0;
+                    0.0 0.0 2.0
+                ]
+                positions_z = [
                     0.0 0.0 0.0;
-                    1.0 1.0 0.0;
-                    1.0 0.0 1.0;
-                    0.0 1.0 1.0;
-                    1.0 1.0 1.0
-                    ]
+                    0.0 0.0 1.5
+                ]
+                neighbors = AbstractWalkers.compute_neighbors(
+                    lattice_vectors_z, positions_z,
+                    (false, false, true), [0.6])
+                @test neighbors == [[[2]], [[1]]]
+            end
 
-                periodicity = (true, true, true)
-                cutoff_radii = [1.1, 1.5, 1.8]
+            @test !isdefined(AbstractWalkers, :compute_neighbors_banded)
+        end
 
-                banded = AbstractWalkers.compute_neighbors_banded(lattice_vectors, positions, periodicity, cutoff_radii)
-                plain  = AbstractWalkers.compute_neighbors(lattice_vectors, positions, periodicity, cutoff_radii)
 
-                @test length(banded) == length(plain)
-                for i in eachindex(plain)
-                    @test sort.(banded[i]) == sort.(plain[i])
+        @testset "image multiplicity and cutoff_radii validation" begin
+
+            # Full-occupancy single-component square builder
+            sq_lattice(dims, per, cutoffs; kwargs...) = MLattice{1,SquareLattice}(;
+                lattice_constant=1.0,
+                basis=[(0.0, 0.0, 0.0)],
+                supercell_dimensions=dims,
+                periodicity=per,
+                cutoff_radii=cutoffs,
+                components=[[true for _ in 1:prod(dims)]],
+                adsorptions=:full,
+                kwargs...)
+
+            @testset "wrapped 4x4 three-shell coordination pins" begin
+                # The third shell (distance 2 = L/2) wraps: the +2 and -2
+                # images of the same site collapse to one entry under the
+                # minimum-image convention ...
+                lat_def = @test_logs (:warn, r"wrap the periodic cell") match_mode=:any sq_lattice(
+                    (4, 4, 1), (true, true, false), [1.1, 1.5, 2.1])
+                @test all(length.(lat_def.neighbors[i]) == [4, 4, 2] for i in 1:16)
+                # ... while multiplicity restores the bulk-tiled coordination,
+                # with no warning
+                lat_mult = @test_logs min_level=Base.CoreLogging.Warn sq_lattice(
+                    (4, 4, 1), (true, true, false), [1.1, 1.5, 2.1], image_multiplicity=true)
+                @test all(length.(lat_mult.neighbors[i]) == [4, 4, 4] for i in 1:16)
+                # Element-pinned lists for the corner site: entries ascending
+                # in j, multiplicity entries grouped by j
+                @test lat_def.neighbors[1] == [[2, 4, 5, 13], [6, 8, 14, 16], [3, 9]]
+                @test lat_mult.neighbors[1] == [[2, 4, 5, 13], [6, 8, 14, 16], [3, 3, 9, 9]]
+            end
+
+            @testset "L = 2r degeneracy and warning content: triangular (4, 2, 1)" begin
+                # The a2 circumference 2√3 equals exactly twice the
+                # second-neighbor distance √3, so the degenerate image
+                # distances are bit-identical — no tolerance involved — and
+                # the warning names the wrapped shell with its exact
+                # collapsed-image count
+                warnpat = r"neighbor shell\(s\) \[2 \(cutoff 1\.8\): 16 collapsed image bond\(s\)\] wrap the periodic cell"
+                lat_def = @test_logs (:warn, warnpat) match_mode=:any MLattice{1,TriangularLattice}()
+                M = length(lat_def.components[1])
+                @test M == 16
+                @test all(length(lat_def.neighbors[i][1]) == 6 for i in 1:M)
+                @test all(length(lat_def.neighbors[i][2]) == 5 for i in 1:M)
+
+                lat_mult = @test_logs min_level=Base.CoreLogging.Warn MLattice{1,TriangularLattice}(
+                    image_multiplicity=true)
+                @test all(length(lat_mult.neighbors[i][1]) == 6 for i in 1:M)
+                @test all(length(lat_mult.neighbors[i][2]) == 6 for i in 1:M)
+                # Exactly one second-shell neighbor per site — the a2-wrapped
+                # one — is doubled
+                @test all(length(unique(lat_mult.neighbors[i][2])) == 5 for i in 1:M)
+                # The faithful first shell agrees between the conventions
+                @test all(lat_mult.neighbors[i][1] == lat_def.neighbors[i][1] for i in 1:M)
+            end
+
+            @testset "1D chains, periodicity (true, false, false)" begin
+                # (4,1,1): the second shell (distance 2 = L/2) wraps
+                ch_def = @test_logs (:warn, r"wrap the periodic cell") match_mode=:any sq_lattice(
+                    (4, 1, 1), (true, false, false), [1.1, 2.1])
+                @test [n[1] for n in ch_def.neighbors] == [[2, 4], [1, 3], [2, 4], [1, 3]]
+                @test [n[2] for n in ch_def.neighbors] == [[3], [4], [1], [2]]
+                ch_mult = @test_logs min_level=Base.CoreLogging.Warn sq_lattice(
+                    (4, 1, 1), (true, false, false), [1.1, 2.1], image_multiplicity=true)
+                @test [n[1] for n in ch_mult.neighbors] == [[2, 4], [1, 3], [2, 4], [1, 3]]
+                @test [n[2] for n in ch_mult.neighbors] == [[3, 3], [4, 4], [1, 1], [2, 2]]
+
+                # (2,1,1): first-shell multiplicity 2 through the ±1 images of
+                # the other site, plus two second-shell self-image entries
+                # (j == i) through the ±2 self-images
+                ch2_def = @test_logs (:warn, r"wrap the periodic cell") match_mode=:any sq_lattice(
+                    (2, 1, 1), (true, false, false), [1.1, 2.1])
+                @test ch2_def.neighbors == [[[2], Int[]], [[1], Int[]]]
+                ch2_mult = @test_logs min_level=Base.CoreLogging.Warn sq_lattice(
+                    (2, 1, 1), (true, false, false), [1.1, 2.1], image_multiplicity=true)
+                @test ch2_mult.neighbors == [[[2, 2], [1, 1]], [[1, 1], [2, 2]]]
+            end
+
+            @testset "ArgumentError on invalid cutoff_radii ladders" begin
+                lv = [4.0 0.0 0.0; 0.0 4.0 0.0; 0.0 0.0 1.0]
+                pos = [0.0 0.0 0.0; 1.0 0.0 0.0]
+                per = (true, true, false)
+                for bad in ([1.5, 1.1], [1.1, 1.1], [-1.0], Float64[], [Inf], [1.1, Inf], [NaN])
+                    @test_throws ArgumentError AbstractWalkers.compute_neighbors(lv, pos, per, bad)
                 end
+                err = try
+                    AbstractWalkers.compute_neighbors(lv, pos, per, [1.5, 1.1])
+                catch e
+                    e
+                end
+                @test occursin("nested cutoff ladder", err.msg)
+                # ... and the validation is reached through the constructors
+                @test_throws ArgumentError MLattice{1,SquareLattice}(cutoff_radii=[1.5, 1.1])
+                @test_throws ArgumentError MLattice{1,TriangularLattice}(cutoff_radii=Float64[])
             end
         end
 
@@ -689,7 +756,10 @@
                     adsorptions=custom_adsorptions
                 )
                 
-                @test lattice.lattice_vectors ≈ [2.0 0.0 0.0; 0.0 2.0 0.0; 0.0 0.0 1.0]
+                # Isotropic default: the stored third diagonal now follows
+                # lattice_constant (at d3 = 1 the z axis never enters
+                # positions, so the geometry is unchanged)
+                @test lattice.lattice_vectors ≈ [2.0 0.0 0.0; 0.0 2.0 0.0; 0.0 0.0 2.0]
                 @test lattice.basis == custom_basis
                 @test lattice.supercell_dimensions == custom_dims
                 @test lattice.periodicity == custom_periodicity
@@ -708,7 +778,9 @@
                 @test lattice.basis == [(0.0, 0.0, 0.0), (1/2, sqrt(3)/2, 0.0)]
                 @test lattice.supercell_dimensions == (4, 2, 1)
                 @test lattice.periodicity == (true, true, false)
-                @test lattice.cutoff_radii == [1.1, 1.5]
+                # Triangular default is [1.1, 1.8]: the second-neighbor
+                # distance √3 ≈ 1.732 lies beyond the square-lattice 1.5
+                @test lattice.cutoff_radii == [1.1, 1.8]
                 @test length(lattice.neighbors) == 16
                 @test length(lattice.components) == 2
                 @test length(lattice.adsorptions) == 16
@@ -730,13 +802,307 @@
                     adsorptions=custom_adsorptions
                 )
             
-                @test lattice.lattice_vectors ≈ [2.0 0.0 0.0; 0.0 2.0*sqrt(3) 0.0; 0.0 0.0 1.0]
+                # Isotropic default: see the square-constructor twin above
+                @test lattice.lattice_vectors ≈ [2.0 0.0 0.0; 0.0 2.0*sqrt(3) 0.0; 0.0 0.0 2.0]
                 @test lattice.basis == custom_basis
                 @test lattice.supercell_dimensions == custom_dims
                 @test lattice.periodicity == custom_periodicity
                 @test length(lattice.neighbors) == 4
                 @test length(lattice.components) == 2
                 @test count(lattice.adsorptions) == 2
+            end
+
+            @testset "Interlayer spacing" begin
+                # Isotropic fix: with lattice_constant = 2.0 the out-of-plane
+                # spacing now follows it, so the nearest-neighbor shell mixes
+                # in-plane and interlayer bonds at the same distance 2.0
+                # (previously the interlayer bonds sat at 1.0, silently)
+                iso = MLattice{1,SquareLattice}(
+                    lattice_constant=2.0,
+                    supercell_dimensions=(3, 3, 2),
+                    cutoff_radii=[2.2],
+                    components=[[false for _ in 1:18]]
+                )
+                @test iso.lattice_vectors[3, 3] == 2.0
+                # lattice_positions ordering: dimension 3 outermost, so the
+                # second layer is the second block of 9 sites
+                @test iso.positions[:, 3] == vcat(zeros(9), fill(2.0, 9))
+                # 4 in-plane + 1 axial on the two-layer slab (z non-periodic)
+                @test all(length(iso.neighbors[s][1]) == 5 for s in 1:18)
+                @test all((s + 9) in iso.neighbors[s][1] for s in 1:9)
+
+                # Old-geometry reproduction: interlayer_spacing = 1.0 restores
+                # the pre-change mixed-scale positions exactly
+                old = MLattice{1,SquareLattice}(
+                    lattice_constant=2.0,
+                    interlayer_spacing=1.0,
+                    supercell_dimensions=(3, 3, 2),
+                    cutoff_radii=[2.2],
+                    components=[[false for _ in 1:18]]
+                )
+                @test old.lattice_vectors[3, 3] == 1.0
+                @test old.positions[:, 3] == vcat(zeros(9), ones(9))
+
+                # Tetragonal shell separation: a = 1.0, c = 1.25 with the
+                # ladder [1.1, 1.35] puts in-plane bonds alone in shell 1 and
+                # interlayer bonds alone in shell 2 (next distance sqrt(2) ≈
+                # 1.414 excluded); construction is silent (in-plane
+                # circumference 3 > 2*1.1, no collapsed images; no empty shell)
+                tet = @test_logs min_level = Base.CoreLogging.Warn MLattice{1,SquareLattice}(
+                    lattice_constant=1.0,
+                    interlayer_spacing=1.25,
+                    supercell_dimensions=(3, 3, 2),
+                    cutoff_radii=[1.1, 1.35],
+                    components=[[false for _ in 1:18]]
+                )
+                @test all(length(tet.neighbors[s][1]) == 4 for s in 1:18)
+                @test all(length(tet.neighbors[s][2]) == 1 for s in 1:18)
+                @test all(tet.neighbors[s][2] == [s + 9] for s in 1:9)
+                # Three layers: the middle layer has axial neighbors both ways
+                tet3 = MLattice{1,SquareLattice}(
+                    lattice_constant=1.0,
+                    interlayer_spacing=1.25,
+                    supercell_dimensions=(3, 3, 3),
+                    cutoff_radii=[1.1, 1.35],
+                    components=[[false for _ in 1:27]]
+                )
+                @test all(length(tet3.neighbors[s][2]) == 1 for s in 1:9)
+                @test all(length(tet3.neighbors[s][2]) == 2 for s in 10:18)
+                @test all(length(tet3.neighbors[s][2]) == 1 for s in 19:27)
+
+                # Default-path no-change: an explicit spacing equal to
+                # lattice_constant reproduces the default element for element
+                expl = MLattice{1,SquareLattice}(
+                    lattice_constant=2.0,
+                    interlayer_spacing=2.0,
+                    supercell_dimensions=(3, 3, 2),
+                    cutoff_radii=[2.2],
+                    components=[[false for _ in 1:18]]
+                )
+                @test expl.positions == iso.positions
+                @test expl.neighbors == iso.neighbors
+
+                # Guard paths: finite and strictly positive
+                @test_throws ArgumentError MLattice{1,SquareLattice}(
+                    interlayer_spacing=0.0, components=[[false for _ in 1:16]])
+                @test_throws ArgumentError MLattice{1,SquareLattice}(
+                    interlayer_spacing=-1.0, components=[[false for _ in 1:16]])
+                @test_throws ArgumentError MLattice{1,SquareLattice}(
+                    interlayer_spacing=Inf, components=[[false for _ in 1:16]])
+                @test_throws ArgumentError MLattice{1,TriangularLattice}(
+                    interlayer_spacing=0.0, components=[[false for _ in 1:16]])
+
+                # Triangular acceptance: keyword lands in the third vector
+                tri = MLattice{1,TriangularLattice}(
+                    supercell_dimensions=(4, 2, 2),
+                    interlayer_spacing=1.25,
+                    cutoff_radii=[1.1, 1.3],
+                    components=[[false for _ in 1:32]]
+                )
+                @test tri.lattice_vectors ≈ [1.0 0.0 0.0; 0.0 sqrt(3) 0.0; 0.0 0.0 1.25]
+            end
+
+            @testset "Layer offset and stacking" begin
+                # Offset-stacked layers: interlayer spacing h in units of the
+                # in-plane lattice constant (the c/(3a) ratio of a
+                # representative O3-type layered host) and the triangle-centre
+                # offset Δ = (1/2, √3/6), for which 3Δ = t₁ + t₂ is an
+                # in-plane lattice vector, so three layers close the
+                # periodic repeat
+                h = 4.683 / 2.816
+                S3 = sqrt(3.0)
+                Δ = (0.5, S3 / 6)
+                tri_basis = [(0.0, 0.0, 0.0), (0.5, S3 / 2, 0.0)]
+                # Shipped-geometry reference: the positional inner
+                # constructor with an explicit third lattice vector (dx, dy, c)
+                function inner_tri(dims, dx, dy, c, per3, cutoffs)
+                    lv = [1.0 0.0 dx; 0.0 S3 dy; 0.0 0.0 c]
+                    M = 2 * prod(dims)
+                    MLattice{1,TriangularLattice}(lv, tri_basis, dims,
+                        (true, true, per3), cutoffs,
+                        [[false for _ in 1:M]], ones(Bool, M))
+                end
+                # Per-axis fractional wrap of the separation and its |Δz|:
+                # equal to the minimum image for every pair asserted here
+                # (|Δz| ≤ h dominates any in-plane ambiguity), not a general
+                # minimum-image routine on a skewed cell
+                function minimg(lat, i, j)
+                    dims = lat.supercell_dimensions
+                    scv = hcat([lat.lattice_vectors[:, k] .* dims[k] for k in 1:3]...)
+                    f = inv(scv) * (lat.positions[j, :] .- lat.positions[i, :])
+                    for k in 1:3
+                        lat.periodicity[k] && (f[k] -= round(f[k]))
+                    end
+                    d = scv * f
+                    return sqrt(sum(abs2, d)), abs(d[3])
+                end
+
+                # Default path unchanged: no stacking keyword, stacking=:aligned
+                # and layer_offset=(0.0, 0.0) all reproduce the shipped
+                # vertical-c geometry field for field, on the default single
+                # layer and on an aligned three-layer cell
+                for (dims, c, per3, cutoffs, kw) in [
+                        ((4, 2, 1), 1.0, false, [1.1], (;)),
+                        ((4, 4, 3), h, true, [1.05, 1.80], (; interlayer_spacing=h))]
+                    ref = inner_tri(dims, 0.0, 0.0, c, per3, cutoffs)
+                    for extra in ((;), (; stacking=:aligned), (; layer_offset=(0.0, 0.0)))
+                        lat = MLattice{1,TriangularLattice}(
+                            supercell_dimensions=dims,
+                            periodicity=(true, true, per3),
+                            cutoff_radii=cutoffs,
+                            components=[[false for _ in 1:2*prod(dims)]];
+                            kw..., extra...)
+                        @test lat.lattice_vectors == ref.lattice_vectors
+                        @test lat.positions == ref.positions
+                        @test lat.neighbors == ref.neighbors
+                    end
+                end
+
+                # stacking=:abc on (4, 4, 3) equals the inner-constructor
+                # build with the skewed third vector (Δx, Δy, h) field for
+                # field; the ladder [1.05, 1.745, 1.80] isolates the in-plane
+                # first and second shells and the adjacent-layer shell at
+                # √(1/3 + h²) ≈ 1.760, and construction is silent
+                ref = inner_tri((4, 4, 3), Δ[1], Δ[2], h, true, [1.05, 1.745, 1.80])
+                abc = @test_logs min_level = Base.CoreLogging.Warn MLattice{1,TriangularLattice}(
+                    interlayer_spacing=h,
+                    supercell_dimensions=(4, 4, 3),
+                    periodicity=(true, true, true),
+                    cutoff_radii=[1.05, 1.745, 1.80],
+                    components=[[false for _ in 1:96]],
+                    stacking=:abc)
+                for field in fieldnames(typeof(abc))
+                    @test getfield(abc, field) == getfield(ref, field)
+                end
+                # An explicit layer_offset=Δ, with or without stacking=:aligned
+                # spelled out, is the same object
+                for extra in ((; layer_offset=Δ), (; layer_offset=Δ, stacking=:aligned))
+                    expl = MLattice{1,TriangularLattice}(
+                        interlayer_spacing=h,
+                        supercell_dimensions=(4, 4, 3),
+                        periodicity=(true, true, true),
+                        cutoff_radii=[1.05, 1.745, 1.80],
+                        components=[[false for _ in 1:96]];
+                        extra...)
+                    @test expl.lattice_vectors == abc.lattice_vectors
+                    @test expl.positions == abc.positions
+                    @test expl.neighbors == abc.neighbors
+                end
+                # lattice_constant scales the :abc offset with the cell
+                a2 = MLattice{1,TriangularLattice}(
+                    lattice_constant=2.0,
+                    interlayer_spacing=2h,
+                    supercell_dimensions=(4, 4, 3),
+                    periodicity=(true, true, true),
+                    cutoff_radii=[2.1],
+                    components=[[false for _ in 1:96]],
+                    stacking=:abc)
+                @test a2.lattice_vectors ≈ [2.0 0.0 1.0; 0.0 2S3 S3/3; 0.0 0.0 2h]
+
+                # No layer-count condition: the supercell's third vector is
+                # d3 times the skewed a₃, a lattice vector of the stacked
+                # crystal for every d3, so every layer count is a valid
+                # periodic supercell with the same site geometry. Under the
+                # all-images convention the (4, 4, 2) and (4, 4, 1) :abc
+                # cells with a periodic third axis reproduce the bulk
+                # coordination [6, 6, 6] of the three-rung ladder; on the
+                # one-layer (rhombohedral primitive) cell the adjacent-layer
+                # partners include the site's own images
+                for (d3, expect_self) in ((2, false), (1, true))
+                    per = @test_logs min_level = Base.CoreLogging.Warn MLattice{1,TriangularLattice}(
+                        interlayer_spacing=h,
+                        supercell_dimensions=(4, 4, d3),
+                        periodicity=(true, true, true),
+                        cutoff_radii=[1.05, 1.745, 1.80],
+                        components=[[false for _ in 1:32*d3]],
+                        stacking=:abc,
+                        image_multiplicity=true)
+                    @test all(length.(per.neighbors[s]) == [6, 6, 6] for s in 1:32*d3)
+                    @test all((s in per.neighbors[s][3]) == expect_self for s in 1:32*d3)
+                    @test !any(s in per.neighbors[s][shell] for s in 1:32*d3 for shell in 1:2)
+                end
+                six = MLattice{1,TriangularLattice}(
+                    interlayer_spacing=h,
+                    supercell_dimensions=(4, 4, 6),
+                    periodicity=(true, true, true),
+                    cutoff_radii=[1.05],
+                    components=[[false for _ in 1:192]],
+                    stacking=:abc)
+                @test six.lattice_vectors[:, 3] == [Δ[1], Δ[2], h]
+                @test six.positions[:, 3] == vcat([fill((k - 1) * h, 32) for k in 1:6]...)
+                open2 = MLattice{1,TriangularLattice}(
+                    interlayer_spacing=h,
+                    supercell_dimensions=(4, 4, 2),
+                    periodicity=(true, true, false),
+                    cutoff_radii=[1.05],
+                    components=[[false for _ in 1:64]],
+                    stacking=:abc)
+                @test open2.lattice_vectors[:, 3] == [Δ[1], Δ[2], h]
+                @test open2.positions[33:64, 1:2] ≈ open2.positions[1:32, 1:2] .+ [Δ[1] Δ[2]]
+                # A generic explicit offset is accepted at any layer count
+                for d3 in (2, 3)
+                    @test MLattice{1,TriangularLattice}(
+                        interlayer_spacing=h,
+                        supercell_dimensions=(4, 4, d3),
+                        periodicity=(true, true, true),
+                        cutoff_radii=[1.05],
+                        components=[[false for _ in 1:32*d3]],
+                        layer_offset=(0.5, 0.0)).lattice_vectors[:, 3] == [0.5, 0.0, h]
+                end
+                # Keyword validation: finite offsets, known stacking, and
+                # not both at once
+                @test_throws ArgumentError MLattice{1,TriangularLattice}(
+                    layer_offset=(NaN, 0.0), components=[[false for _ in 1:16]])
+                @test_throws ArgumentError MLattice{1,TriangularLattice}(
+                    layer_offset=(0.0, Inf), components=[[false for _ in 1:16]])
+                @test_throws ArgumentError MLattice{1,TriangularLattice}(
+                    stacking=:abab, components=[[false for _ in 1:16]])
+                @test_throws ArgumentError MLattice{1,TriangularLattice}(
+                    stacking=:abc, layer_offset=Δ, components=[[false for _ in 1:16]])
+
+                # Positions on the :abc (4, 4, 3) cell: layer k at (k − 1)·Δ
+                # in-plane and (k − 1)·h out of plane
+                @test abc.positions[33:64, 1:2] ≈ abc.positions[1:32, 1:2] .+ [Δ[1] Δ[2]]
+                @test abc.positions[65:96, 1:2] ≈ abc.positions[1:32, 1:2] .+ 2 .* [Δ[1] Δ[2]]
+                @test abc.positions[:, 3] == vcat(zeros(32), fill(h, 32), fill(2h, 32))
+                # Third-axis minimum image: shell 3 is the adjacent-layer
+                # shell, six partners per site at √(1/3 + h²) with |Δz| = h;
+                # the in-plane shells have |Δz| = 0
+                d_I1 = sqrt(1 / 3 + h^2)
+                @test all(length(abc.neighbors[s][3]) == 6 for s in 1:96)
+                @test all(isapprox(minimg(abc, s, j)[1], d_I1; atol=1e-12)
+                          for s in 1:96 for j in abc.neighbors[s][3])
+                @test all(isapprox(minimg(abc, s, j)[2], h; atol=1e-12)
+                          for s in 1:96 for j in abc.neighbors[s][3])
+                @test all(isapprox(minimg(abc, s, j)[2], 0.0; atol=1e-12)
+                          for s in 1:96 for shell in 1:2 for j in abc.neighbors[s][shell])
+                # The nearest layer-2 and layer-3 sites of a layer-1 site are
+                # both adjacent-layer partners (the periodic image of layer 3
+                # sits one layer below layer 1), and the wrapped |Δz| of every
+                # pair is 0 or h (the third-axis wrap alone decides it)
+                @test minimum(minimg(abc, 1, j)[1] for j in 33:64) ≈ d_I1 atol = 1e-12
+                @test minimum(minimg(abc, 1, j)[1] for j in 65:96) ≈ d_I1 atol = 1e-12
+                dz = sort(unique(round.([minimg(abc, i, j)[2] for i in 1:96, j in 1:96]; digits=9)))
+                @test dz ≈ [0.0, h] atol = 1e-8
+
+                # Bulk coordination on the :abc (6, 6, 3) cell under the
+                # image-multiplicity convention: a fourteen-rung ladder that
+                # isolates the six in-plane shells (1, √3, 2, √7, 3, 2√3) and
+                # the eight interlayer shells between them reproduces the
+                # bulk counts on every site, with no self-image entries
+                ladder = [1.05, 1.745, 1.80, 2.012, 2.10, 2.40, 2.655, 2.75,
+                          2.90, 3.008, 3.06, 3.35, 3.40, 3.470]
+                bulk = [6, 6, 6, 6, 6, 12, 12, 12, 6, 6, 12, 6, 6, 6]
+                big = @test_logs min_level = Base.CoreLogging.Warn MLattice{1,TriangularLattice}(
+                    interlayer_spacing=h,
+                    supercell_dimensions=(6, 6, 3),
+                    periodicity=(true, true, true),
+                    cutoff_radii=ladder,
+                    components=[[false for _ in 1:216]],
+                    stacking=:abc,
+                    image_multiplicity=true)
+                @test all(length.(big.neighbors[s]) == bulk for s in 1:216)
+                @test !any(s in vcat(big.neighbors[s]...) for s in 1:216)
             end
 
             @testset "Error handling" begin
@@ -1164,90 +1530,221 @@
             end
         end
     end
-    
 
-    @testset "AtomicLattice basics" begin
-        # feature/AtomicLattice shipped with no tests at all; this is the first.
-        # Construction reaches ASE through ASEconvert, so a failure here is
-        # either the type or the Python environment, not the assertions.
-        lat = AtomicLattice{1,SquareLattice}(
-            lattice_atom="Pd",
-            supercell_dimensions=(4, 4, 1),
-            lattice_constant=3.947,
-            periodicity=(true, true, false),
-            adsorbate_atoms=["O"],
-            coverage=0.25,
-            num_nearest_neighbors=2,
-            type_of_sites=["hollow"]
-        )
+    @testset "empty-configuration handling tests" begin
+        box = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]]u"Å"
+        pbc = (true, true, true)
+        at1 = FastSystem(atomic_system([:Ar => [1.0, 1.0, 1.0]u"Å"], box, pbc))
+        empty_at = FastSystem(cell_vectors(at1), periodicity(at1),
+                              empty(position(at1, :)), empty(species(at1, :)), empty(mass(at1, :)))
+        at2 = FastSystem(atomic_system([:Ar => [1.0, 1.0, 1.0]u"Å", :Ar => [3.0, 3.0, 3.0]u"Å"], box, pbc))
 
-        @test lat isa AtomicLattice{1,SquareLattice}
-        @test num_lattice_components(lat) == 1
+        @testset "helpers on empty systems and zero-count components" begin
+            comps = split_components(empty_at, [0])
+            @test length(comps) == 1
+            @test length(comps[1]) == 0
+            @test cell_vectors(comps[1]) == cell_vectors(empty_at)
+            @test periodicity(comps[1]) == periodicity(empty_at)
 
-        # num_sites counts adsorption sites, not the substrate grid. The
-        # generic AbstractLattice method would reach for `basis`, which this
-        # type does not have.
-        @test num_sites(lat) == length(lat.all_sites)
-        @test num_sites(lat) > 0
-        @test !hasproperty(lat, :basis)
+            mixed = split_components(at2, [0, 2])
+            @test map(length, mixed) == [0, 2]
+            @test position(mixed[2], :) == position(at2, :)
+            @test species(mixed[2], :) == species(at2, :)
 
-        # The point of the shim: every LatticeWalker(::AtomicLattice) was a
-        # MethodError until num_lattice_components had a method here, because
-        # LatticeWalker's inner constructor calls it to fix its own type
-        # parameter.
-        w = LatticeWalker(lat)
-        @test w isa LatticeWalker{1}
-        @test w.configuration === lat
-        @test w.iter == 0
-        @test w.energy == 0.0u"eV"
+            @test AbstractWalkers.split_components_by_chemical_species(empty_at) == FastSystem[]
+
+            list_num_par, sorted = sort_components_by_atomic_number(empty_at)
+            @test isempty(list_num_par)
+            @test length(sorted) == 0
+            @test cell_vectors(sorted) == cell_vectors(empty_at)
+
+            list_num_par_nm, sorted_nm = sort_components_by_atomic_number(empty_at, merge_same_species=false)
+            @test isempty(list_num_par_nm)
+            @test length(sorted_nm) == 0
+        end
+
+        @testset "nonempty outputs unchanged by the retyped helpers" begin
+            mixed_at = FastSystem(atomic_system([:H => [1.0, 1.0, 1.0]u"Å",
+                                                 :O => [2.0, 2.0, 2.0]u"Å",
+                                                 :H => [3.0, 3.0, 3.0]u"Å"], box, pbc))
+            comps = AbstractWalkers.split_components_by_chemical_species(mixed_at)
+            @test map(length, comps) == [2, 1]  # H (Z = 1) before O (Z = 8)
+            @test position(comps[1], 1) == position(mixed_at, 1)
+            @test position(comps[1], 2) == position(mixed_at, 3)
+            @test position(comps[2], 1) == position(mixed_at, 2)
+        end
+
+        @testset "zero-particle AtomWalker{1} round-trip" begin
+            w = AtomWalker{1}(empty_at)
+            @test w.list_num_par == [0]
+            @test w.frozen == [false]
+            lj = LJParameters()
+            @test interacting_energy(w.configuration, lj) == 0.0u"eV"
+            @test interacting_energy(w.configuration, lj, w.list_num_par, w.frozen) == 0.0u"eV"
+            @test frozen_energy(w.configuration, lj, w.list_num_par, [true]) == 0.0u"eV"
+        end
+
+        @testset "convenience constructor rejects empty input legibly" begin
+            @test_throws ArgumentError AtomWalker(empty_at)
+        end
+
+        @testset "liveset accepts a zero-particle walker" begin
+            w0 = AtomWalker{1}(empty_at)
+            w2 = AtomWalker{1}(at2)
+            ls = LJAtomWalkers([w0, w2], LJParameters())
+            @test length(ls.walkers) == 2
+            @test ls.walkers[1].energy == 0.0u"eV"
+            @test isfinite(ustrip(ls.walkers[2].energy))
+        end
     end
 
-    @testset "AtomicLattice occupancy is index-keyed" begin
-        lat = AtomicLattice{1,SquareLattice}(
-            lattice_atom="Pd",
-            supercell_dimensions=(4, 4, 1),
-            lattice_constant=3.947,
-            periodicity=(true, true, false),
-            adsorbate_atoms=["O"],
-            coverage=0.25,
-            num_nearest_neighbors=2,
-            type_of_sites=["hollow"]
-        )
-        n_ase_adsorbates(l) =
-            length(FreeBird.AbstractWalkers.get_adsorbate_indicies(l.ase_lattice))
+    @testset "shared-geometry walkers and clones" begin
+        using Random
+        using Unitful
+        using DataFrames
 
-        # Occupancy is a mask over all_sites, not an ordering of it.
-        @test length(lat.occupations) == length(lat.all_sites)
-        @test sum(lat.occupations) == round(Int, 0.25 * length(lat.all_sites))
-        @test coverage(lat) ≈ sum(lat.occupations) / length(lat.all_sites)
+        sg_lat() = MLattice{1,SquareLattice}(lattice_constant=1.0,
+            basis=[(0.0, 0.0, 0.0)], supercell_dimensions=(4, 4, 1),
+            periodicity=(true, true, false), cutoff_radii=[1.1],
+            components=[[false for _ in 1:16]], adsorptions=:full)
+        sg_ham = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
 
-        # The site list is geometry: every site distinct, so nothing has been
-        # overwritten. The old walk assigned adsorbate positions into all_sites
-        # and would eventually violate this.
-        @test length(unique(lat.all_sites)) == length(lat.all_sites)
+        @testset "share_geometry constructor" begin
+            src = sg_lat()
+            Random.seed!(98001)
+            for i in 1:16
+                src.components[1][i] = rand() < 0.5
+            end
+            occ = [copy(v) for v in src.components]
+            cp = MLattice{1,SquareLattice}(Val(:share_geometry), src, occ)
+            @test cp.lattice_vectors === src.lattice_vectors
+            @test cp.positions === src.positions
+            @test cp.basis === src.basis
+            @test cp.supercell_dimensions === src.supercell_dimensions
+            @test cp.periodicity === src.periodicity
+            @test cp.cutoff_radii === src.cutoff_radii
+            @test cp.neighbors === src.neighbors
+            @test cp.adsorptions === src.adsorptions
+            @test cp.components !== src.components
+            @test cp.components[1] !== src.components[1]
+            @test interacting_energy(cp, sg_ham) ==
+                  interacting_energy(src, sg_ham)
+            @test_throws ArgumentError MLattice{1,SquareLattice}(
+                Val(:share_geometry), src, Vector{Bool}[])
+        end
 
-        # The ASE frame is a cache, and starts in agreement.
-        @test lat.ase_dirty == false
-        @test n_ase_adsorbates(lat) == sum(lat.occupations)
+        @testset "replicate_walkers" begin
+            tmpl = sg_lat()
+            ws = replicate_walkers(tmpl, 5)
+            @test length(ws) == 5
+            @test all(w.configuration.neighbors === tmpl.neighbors
+                      for w in ws)
+            @test all(w.configuration.positions === tmpl.positions
+                      for w in ws)
+            @test length(unique(objectid(w.configuration.components[1])
+                                for w in ws)) == 5
+            @test all(w.energy == 0.0u"eV" && w.iter == 0 for w in ws)
+            # independent occupancies: mutating one walker leaves the rest
+            ws[1].configuration.components[1][1] = true
+            @test !ws[2].configuration.components[1][1]
+        end
 
-        # A move changes occupancy, conserves the adsorbate count, leaves the
-        # geometry alone, and flags the cache rather than paying a Python round
-        # trip on every proposal.
-        before = copy(lat.occupations)
-        sites_before = copy(lat.all_sites)
-        lattice_random_walk!(lat)
-        @test sum(lat.occupations) == sum(before)
-        @test count(lat.occupations .!= before) == 2   # one vacated, one filled
-        @test lat.all_sites == sites_before
-        @test lat.ase_dirty == true
+        @testset "same-seed driver equivalence and aliasing safety" begin
+            # A replicate_walkers live set matches the deepcopy idiom
+            # digit-for-digit: both drivers re-initialize occupancies on
+            # entry, so the random streams coincide
+            sg_save = SaveEveryN("t_sg.csv", "t_sg.traj", "t_sg.ls",
+                                 1000000, 1000000, 1000000)
+            sg_cleanup() = rm.(["t_sg.csv", "t_sg.traj", "t_sg.ls"],
+                               force=true)
+            function sg_run(build)
+                Random.seed!(98002)
+                tmpl = sg_lat()
+                ws = build(tmpl)
+                ls = LatticeGasWalkers(ws, sg_ham; assign_energy=false)
+                p = IdealGasReferencedGCNSParameters(mc_steps=20,
+                    reference_fugacity=1.0, energy_perturbation=1e-9)
+                d, lsx, _ = ideal_gas_referenced_nested_sampling(ls, p,
+                    Int64(50), MCGrandCanonicalMoves(), sg_save)
+                sg_cleanup()
+                return d, lsx
+            end
+            dS, lsS = sg_run(t -> replicate_walkers(t, 10))
+            dD, lsD = sg_run(t -> [LatticeWalker(deepcopy(t),
+                                                 energy=0.0u"eV", iter=0)
+                                   for _ in 1:10])
+            @test dS.iter == dD.iter
+            @test dS.emax == dD.emax
+            @test dS.num_particles == dD.num_particles
+            @test [w.energy.val for w in lsS.walkers] ==
+                  [w.energy.val for w in lsD.walkers]
+            # aliasing safety: after the run every live walker still shares
+            # the one geometry (nothing rebinds or copies it back)
+            nb1 = lsS.walkers[1].configuration.neighbors
+            @test all(w.configuration.neighbors === nb1
+                      for w in lsS.walkers)
+        end
 
-        # ... and the cache is brought back into agreement on demand.
-        sync_ase_lattice!(lat)
-        @test lat.ase_dirty == false
-        @test n_ase_adsorbates(lat) == sum(lat.occupations)
-
-        # Syncing twice is a no-op rather than a second round of adsorbates.
-        sync_ase_lattice!(lat)
-        @test n_ase_adsorbates(lat) == sum(lat.occupations)
+        @testset "clone allocation guard" begin
+            # Compile-warmed shared clone at M = 4096 under a generous fixed
+            # byte ceiling (never time-based): the payload is one occupancy
+            # vector plus constant-size shells
+            big = MLattice{1,SquareLattice}(lattice_constant=1.0,
+                basis=[(0.0, 0.0, 0.0)], supercell_dimensions=(64, 64, 1),
+                periodicity=(true, true, false), cutoff_radii=[1.1],
+                components=[[false for _ in 1:4096]], adsorptions=:full)
+            wk = LatticeWalker(big, energy=0.0u"eV", iter=0)
+            FreeBird.SamplingSchemes._clone_walker_shared_geometry(wk)
+            bytes = @allocated FreeBird.SamplingSchemes._clone_walker_shared_geometry(wk)
+            @test bytes < 50_000
+        end
     end
+
+    @testset "AtomicLattice interface" begin
+        periodic = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O"], coverage=0.25,
+            num_nearest_neighbors=2, type_of_sites=["hollow"])
+        finite = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(false, false, false),
+            adsorbate_atoms=["O"], coverage=0.25,
+            num_nearest_neighbors=2, type_of_sites=["hollow"])
+
+        @test num_sites(periodic) == 16
+        @test num_sites(finite) == 9
+        @test num_lattice_components(periodic) == 1
+        @test n_occupied(periodic) == sum(periodic.occupations)
+        @test sort(vcat(occupied_indices(periodic), empty_indices(periodic))) ==
+              collect(1:num_sites(periodic))
+
+        sync_ase_lattice!(periodic)
+        before = copy(periodic.occupations)
+        sites_before = copy(periodic.all_sites)
+        lattice_random_walk!(periodic)
+        @test sum(periodic.occupations) == sum(before)
+        @test periodic.all_sites == sites_before
+
+        # A random hop pair may legitimately be a no-op (the same site, or
+        # two sites with the same occupancy).  Exercise the mutation and ASE
+        # invalidation contract with a deterministic occupied/empty pair.
+        sync_ase_lattice!(periodic)
+        before = copy(periodic.occupations)
+        swap_sites!(periodic,
+                    first(occupied_indices(periodic)),
+                    first(empty_indices(periodic)))
+        @test count(periodic.occupations .!= before) == 2
+        @test periodic.ase_dirty
+
+        sync_ase_lattice!(periodic)
+        @test !periodic.ase_dirty
+        @test_throws ArgumentError neighbor_shell(periodic, 1)
+
+        walker = LatticeWalker(periodic)
+        @test walker isa LatticeWalker{1}
+        @test !isempty(sprint(show, walker))
+        @test !isempty(sprint(show, [walker]))
+    end
+
 end

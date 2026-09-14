@@ -189,7 +189,7 @@ Run the Wang-Landau simulation.
 energies_wl, configs, wl_params, S, H = wang_landau(initial_lattice, h, wl_params)
 ```
 
-### Metroplis Monte Carlo
+### Metropolis Monte Carlo
 
 Let's make a Metropolis Monte Carlo simulation on the same lattice system.
 
@@ -221,6 +221,52 @@ Run the Monte Carlo simulation.
 ```julia
 mc_energies, mc_configs, mc_cvs, acceptance_rates = monte_carlo_sampling(mc_lattice, h, mc_params)
 ```
+
+### Grand-canonical Metropolis Monte Carlo
+
+Fixed-site lattice μVT sampling uses an `AtomicLattice`, an energy model that
+implements `interacting_energy(::AtomicLattice, ...)`, and the existing
+`MCGrandCanonicalMoves` routine. For example, an ICET cluster expansion can be
+sampled as follows:
+
+```julia
+gc_lattice = AtomicLattice{1,SquareLattice}(
+    lattice_atom="Pd",
+    type_of_sites=["hollow"],
+    coverage=0.5,
+    adsorbate_atoms=["O"],
+    supercell_dimensions=(6, 6, 1),
+    lattice_constant=3.947,
+    periodicity=(true, true, false),
+    num_nearest_neighbors=4,
+)
+
+gc_hamiltonian = ICETHamiltonian("cluster_expansion.ce", gc_lattice)
+gc_moves = MCGrandCanonicalMoves(p_move=1 / 3, p_insert=1 / 3)
+gc_parameters = MetropolisMCParameters(
+    [300.0, 600.0, 900.0];
+    equilibrium_steps=10_000,
+    sampling_steps=100_000,
+    chemical_potentials=[-0.2, -0.1, 0.0],
+    random_seed=20260914,
+)
+
+gc_results, final_lattices = monte_carlo_sampling(
+    gc_moves,
+    gc_lattice,
+    gc_hamiltonian,
+    gc_parameters;
+    sampling_interval=num_sites(gc_lattice),
+)
+```
+
+The `energy` column is the bare interaction energy E. Chemical potential enters
+the acceptance rule through Δ(E−μN), while `c_omega` reports
+Var(E−μN)/(k_B T²). Uniform insertions and deletions include their reverse-
+proposal ratio. The lattice μVT driver currently rejects biased insertions,
+cluster moves and incremental-energy mode rather than silently sampling with
+an unsupported rule. `sampling_interval` controls how often configurations are
+retained for statistics and always preserves the final state.
 
 ### Nested Sampling
 
@@ -296,4 +342,3 @@ ns_energies, ls, _ = nested_sampling(ls, ns_params, 10_000, mc, save) # src
 ---
 
 *This page was generated using [Literate.jl](https://github.com/fredrikekre/Literate.jl).*
-

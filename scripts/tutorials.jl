@@ -113,8 +113,10 @@ dof = 18
 cvs = cv(energies, β, dof, 120);
 
 # Let's plot the heat capacity as a function of temperature
-using Plots
-plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", label="LJ\$_6\$")
+#md # ```julia
+#md # using Plots
+#md # plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", label="LJ\$_6\$")
+#md # ```
 
 # The plot should show the heat capacity as a function of temperature for the 6-particle Lennard-Jones system, with a main peak around 400 K, representing the phase transition, and some fluctuations at low temperatures, and tailing off to zero at high temperatures.
 
@@ -211,8 +213,10 @@ dof = 0
 cvs = [cv(β, ω_1, es, dof) for β in βs];
 
 # Let's plot the heat capacity as a function of temperature
-using Plots
-plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", label="Square Lattice")
+#md # ```julia
+#md # using Plots
+#md # plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", label="Square Lattice")
+#md # ```
 # You should expect to see a single peak in the heat capacity curve around 40 K, and tailing off to zero at high temperatures.
 
 # That's it! You have successfully run an exact enumeration simulation using the FreeBird.jl package.

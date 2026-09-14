@@ -195,10 +195,10 @@ nothing #hide
 
 Let's plot the heat capacity as a function of temperature
 
-````@example quick_start
+```julia
 using Plots
 plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", label="LJ\$_6\$")
-````
+```
 
 The plot should show the heat capacity as a function of temperature for the 6-particle Lennard-Jones system, with a main peak around 400 K, representing the phase transition, and some fluctuations at low temperatures, and tailing off to zero at high temperatures.
 
@@ -343,10 +343,10 @@ nothing #hide
 
 Let's plot the heat capacity as a function of temperature
 
-````@example quick_start
+```julia
 using Plots
 plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", label="Square Lattice")
-````
+```
 
 You should expect to see a single peak in the heat capacity curve around 40 K, and tailing off to zero at high temperatures.
 
@@ -355,4 +355,3 @@ That's it! You have successfully run an exact enumeration simulation using the F
 ---
 
 *This page was generated using [Literate.jl](https://github.com/fredrikekre/Literate.jl).*
-

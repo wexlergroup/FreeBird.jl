@@ -165,29 +165,23 @@ function nvt_monte_carlo(
     random_seed::Int64;
     kb::Float64 = 8.617_333_262e-5  # eV K⁻¹
 )
-    # Import Python's copy module
-    py_copy = pyimport("copy")
-    
     Random.seed!(random_seed)
-    
+
     energies = Vector{Float64}(undef, num_steps)
     configurations = Vector{typeof(lattice)}(undef, num_steps)
     accepted_steps = 0
-    
+
     current_lattice = deepcopy(lattice)
-    # ase_lattice is a cache of `occupations`; sync before anything reads it.
-    current_energy = interacting_energy(sync_ase_lattice!(current_lattice).ase_lattice, calc).val
-    
+    current_energy = interacting_energy(current_lattice, calc).val
+
     beta = 1.0 / (kb * temperature)
     for i in 1:num_steps
         # Propose new configuration
         proposed_lattice = deepcopy(current_lattice)
-        proposed_lattice.ase_lattice = py_copy.deepcopy(current_lattice.ase_lattice)
-        
+
         lattice_random_walk!(proposed_lattice)
-        # The move updated `occupations` and flagged the frame stale.
-        proposed_energy = interacting_energy(sync_ase_lattice!(proposed_lattice).ase_lattice, calc).val
-        
+        proposed_energy = interacting_energy(proposed_lattice, calc).val
+
         # Metropolis-Hastings acceptance
         ΔE = proposed_energy - current_energy
         if ΔE < 0 || rand() < exp(-ΔE * beta)
@@ -195,15 +189,14 @@ function nvt_monte_carlo(
             current_energy = proposed_energy
             accepted_steps += 1
         end
-        
+
         # Store configuration
         saved_lattice = deepcopy(current_lattice)
-        saved_lattice.ase_lattice = py_copy.deepcopy(current_lattice.ase_lattice)
-        
+
         energies[i] = current_energy
         configurations[i] = saved_lattice
     end
-    
+
     return energies, configurations, accepted_steps
 end
 
@@ -516,14 +509,16 @@ function monte_carlo_sampling(
         @info "Temperature: $temp K, Equilibration energy: $equi_mean, Variance: $(round(equi_var; sigdigits=4)), Acceptance rate: $(round(equi_rate; sigdigits=4))"
 
 
-        # Sample the lattice
+        # Sample the lattice from a distinct random stream. Reusing the
+        # equilibration seed would replay correlated proposals from the
+        # equilibrated configuration.
         sampling_energies, sampling_configurations, sampling_accepted_steps = nvt_monte_carlo(
             mc_routine,
             equilibration_configurations[end],
             calc,
             temp,
             mc_params.sampling_steps,
-            mc_params.random_seed
+            mc_params.random_seed + 1
         )
 
         # Compute the heat capacity

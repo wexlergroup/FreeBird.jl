@@ -59,6 +59,34 @@
             @test accepted1 == accepted2
         end
     end
+
+    @testset "AtomicLattice Python-calculator snapshots are independent" begin
+        lattice = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        ase_lj = FreeBird.EnergyEval.pyimport(
+            "ase.calculators.lj").LennardJones()
+        calc = PyMLPotential(
+            FreeBird.AbstractPotentials.ASEcalculator(ase_lj))
+
+        energies, configs, accepted = nvt_monte_carlo(
+            MCNewSample(), lattice, calc, 300.0, Int64(5), Int64(42))
+
+        @test length(energies) == 5
+        @test all(isfinite, energies)
+        @test 0 <= accepted <= 5
+        @test all(!FreeBird.AbstractWalkers.pyis(
+            lattice.ase_lattice, config.ase_lattice) for config in configs)
+        @test all(!FreeBird.AbstractWalkers.pyis(
+            configs[i].ase_lattice, configs[j].ase_lattice)
+            for i in eachindex(configs) for j in (i + 1):length(configs))
+    end
 end
 
 @testset "nvt Monte Carlo atomistic version" begin

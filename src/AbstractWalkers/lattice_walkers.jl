@@ -863,6 +863,26 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
 end
 
 """
+    deepcopy(lattice::AtomicLattice)
+
+Copy an `AtomicLattice`, including an independent Python copy of its cached ASE
+frame. PythonCall's `Py` wrapper is otherwise copied without cloning the Python
+object it refers to, which lets synchronization or an MLIP evaluation through
+one Julia copy mutate another copy's cache.
+
+The occupancy vector remains the source of truth. A dirty source produces a
+dirty copy whose independent ASE cache is rebuilt on its next
+`sync_ase_lattice!` call.
+"""
+function Base.deepcopy_internal(lattice::AtomicLattice, stackdict::IdDict)
+    haskey(stackdict, lattice) && return stackdict[lattice]
+
+    copied = invoke(Base.deepcopy_internal, Tuple{Any, IdDict}, lattice, stackdict)
+    copied.ase_lattice = _PY_COPY.deepcopy(lattice.ase_lattice)
+    return copied
+end
+
+"""
     coverage(lattice::AtomicLattice)
 
 Fractional coverage, derived from `occupations`.

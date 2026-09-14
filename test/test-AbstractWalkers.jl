@@ -1741,6 +1741,28 @@
         @test !periodic.ase_dirty
         @test_throws ArgumentError neighbor_shell(periodic, 1)
 
+        @testset "deepcopy owns its ASE cache" begin
+            copied = deepcopy(periodic)
+            @test copied.occupations == periodic.occupations
+            @test copied.occupations !== periodic.occupations
+            @test !FreeBird.AbstractWalkers.pyis(
+                copied.ase_lattice, periodic.ase_lattice)
+
+            original_atom_count = FreeBird.AbstractWalkers.pyconvert(
+                Int, periodic.ase_lattice.__len__())
+            copied.ase_lattice.pop()
+            @test FreeBird.AbstractWalkers.pyconvert(
+                Int, periodic.ase_lattice.__len__()) == original_atom_count
+
+            set_occupied!(periodic, first(empty_indices(periodic)), true)
+            @test periodic.ase_dirty
+            dirty_copy = deepcopy(periodic)
+            @test dirty_copy.ase_dirty
+            sync_ase_lattice!(dirty_copy)
+            @test !dirty_copy.ase_dirty
+            @test periodic.ase_dirty
+        end
+
         walker = LatticeWalker(periodic)
         @test walker isa LatticeWalker{1}
         @test !isempty(sprint(show, walker))

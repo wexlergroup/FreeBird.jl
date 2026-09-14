@@ -15,6 +15,12 @@ using PythonCall
 using ..AbstractPotentials
 using ..AbstractHamiltonians
 
+const _PY_COPY = PythonCall.pynew()
+
+function __init__()
+    PythonCall.pycopy!(_PY_COPY, pyimport("copy"))
+end
+
 export AbstractWalker
 export AbstractLattice
 export AtomWalker

@@ -1571,6 +1571,8 @@ function _shared_geometry_walker(w::LatticeWalker, cfg::MLattice{C,G}) where {C,
     return LatticeWalker(shared, energy=w.energy, iter=w.iter)
 end
 
+_shared_geometry_walker(w::LatticeWalker, cfg::AtomicLattice) = deepcopy(w)
+
 """
     _perturbation_energy_bound(h, lattice) -> Union{Float64,Nothing}
 

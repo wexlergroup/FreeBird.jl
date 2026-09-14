@@ -301,6 +301,43 @@
                     end
                 end
             end
+
+            @testset "singular 2D cell" begin
+                lattice_vectors_2d = [
+                    4.0 0.0 0.0;
+                    0.0 4.0 0.0;
+                    0.0 0.0 0.0
+                ]
+                positions_2d = [
+                    0.0 0.0 0.0;
+                    1.0 0.0 0.0;
+                    0.0 1.0 0.0;
+                    1.0 1.0 0.0
+                ]
+                neighbors = AbstractWalkers.compute_neighbors(
+                    lattice_vectors_2d, positions_2d,
+                    (true, true, false), [1.1, 1.5])
+                @test neighbors[1] == [[2, 3], [4]]
+                @test neighbors[4] == [[2, 3], [1]]
+            end
+
+            @testset "z-only minimum image" begin
+                lattice_vectors_z = [
+                    4.0 0.0 0.0;
+                    0.0 4.0 0.0;
+                    0.0 0.0 2.0
+                ]
+                positions_z = [
+                    0.0 0.0 0.0;
+                    0.0 0.0 1.5
+                ]
+                neighbors = AbstractWalkers.compute_neighbors(
+                    lattice_vectors_z, positions_z,
+                    (false, false, true), [0.6])
+                @test neighbors == [[[2]], [[1]]]
+            end
+
+            @test !isdefined(AbstractWalkers, :compute_neighbors_banded)
         end
 
 

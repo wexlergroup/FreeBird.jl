@@ -82,7 +82,19 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
     a1 = supercell_lattice_vectors[:, 1]
     a2 = supercell_lattice_vectors[:, 2]
     a3 = supercell_lattice_vectors[:, 3]
-    reciprocal_lattice_vectors = inv([a1 a2 a3])
+    # A genuinely two-dimensional cell may carry a zero third lattice vector.
+    # In that case the full 3x3 cell is singular even though its in-plane
+    # lattice is valid. Build the reciprocal map from the 2x2 in-plane block;
+    # the non-periodic Cartesian z displacement is restored after the
+    # minimum-image round trip below.
+    singular_2d = !periodicity[3] && all(iszero, a3)
+    if singular_2d
+        reciprocal_lattice_vectors = zeros(3, 3)
+        reciprocal_lattice_vectors[1:2, 1:2] =
+            inv([a1[1:2] a2[1:2]])
+    else
+        reciprocal_lattice_vectors = inv([a1 a2 a3])
+    end
 
     layers_of_neighbors = length(cutoff_radii)
     r_max = last(cutoff_radii)
@@ -147,6 +159,7 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
                 end
             end
             dr_c = supercell_lattice_vectors * fractional_dr
+            singular_2d && (dr_c[3] = dr[3])
 
             if image_multiplicity
                 # Push j once per in-cutoff periodic image (self-images
@@ -295,111 +308,6 @@ function find_n_cutoff_radii(positions::Matrix{Float64}, num_nearest_neighbors::
         cutoff_radii[i] = radii
     end
     return cutoff_radii
-end
-
-"""
-    compute_neighbors_banded(supercell_lattice_vectors::Matrix{Float64},
-                             positions::Matrix{Float64},
-                             periodicity::Tuple{Bool, Bool, Bool},
-                             cutoff_radii::Vector{Float64})
-
-Compute neighbour shells for an `AtomicLattice`, assigning each pair to the shell
-whose *band* contains it: shell `k` holds `cutoff_radii[k-1] < d <= cutoff_radii[k]`
-(with a lower bound of `0.0` for the first shell).
-
-Named apart from `compute_neighbors` deliberately. It was introduced with
-the same name **and the same argument types** as `compute_neighbors`, which on
-Julia >= 1.12 is not a shadowing subtlety but a hard failure: precompiling the
-package aborted with
-
-    WARNING: Method definition compute_neighbors(...) in module AbstractWalkers
-             at lattice_walkers.jl:20 overwritten at lattice_walkers.jl:170.
-    ERROR: Method overwriting is not permitted during Module precompilation.
-
-so `using FreeBird` could not load this branch at all.
-
-How it differs from `compute_neighbors`, so the two can be reconciled later on
-evidence rather than guesswork:
-
-  1. Shell assignment. `compute_neighbors` takes the *first* shell whose cutoff
-     the distance clears (`d <= cutoff_radii[i]`, then `break`). For cutoff radii
-     in increasing order — which is what `find_n_cutoff_radii` produces — that is
-     the same partition as the bands here, so on every current call site the two
-     agree. They diverge only for unsorted `cutoff_radii`.
-  2. Singular cells. This version builds a 2x2 reciprocal matrix when
-     `!periodicity[3] && all(a3 .== 0)`, where `inv([a1 a2 a3])` would throw.
-     Note the `AtomicLattice` constructor passes `a3 = [0, 0, 1] * nz`, so that
-     branch is not reached from there today.
-  3. Minimum image. This version applies the convention only when
-     `periodicity[1] || periodicity[2]`, so a z-only-periodic cell would silently
-     skip it; `compute_neighbors` always applies it (a no-op round trip when
-     nothing is periodic). `compute_neighbors` is the more correct of the two here.
-
-Test coverage pins claim 1 in `test/test-AbstractWalkers.jl`. If that equivalence
-holds, the two functions should be collapsed into one — see MERGE_PLAN W10.
-"""
-function compute_neighbors_banded(supercell_lattice_vectors::Matrix{Float64},
-                           positions::Matrix{Float64},
-                           periodicity::Tuple{Bool, Bool, Bool},
-                           cutoff_radii::Vector{Float64})
-    neighbors = Vector{Vector{Vector{Int}}}(undef, size(positions, 1))
-    num_atoms = size(positions, 1)
-
-    # Extract lattice vectors
-    a1 = supercell_lattice_vectors[:, 1]
-    a2 = supercell_lattice_vectors[:, 2]
-    a3 = supercell_lattice_vectors[:, 3]
-
-    # Handle 2D case: only invert the non-zero part
-    if !periodicity[3] && all(a3 .== 0)
-        # 2D system - construct 2x2 inverse for x,y only
-        lattice_2d = [a1[1:2] a2[1:2]]
-        inv_lattice_2d = inv(lattice_2d)
-        reciprocal_lattice_vectors = zeros(3, 3)
-        reciprocal_lattice_vectors[1:2, 1:2] = inv_lattice_2d
-    else
-        # 3D system
-        reciprocal_lattice_vectors = inv([a1 a2 a3])
-    end
-
-    layers_of_neighbors = length(cutoff_radii)
-
-    for i in 1:num_atoms
-        nth_neighbors = [Int[] for _ in 1:layers_of_neighbors]
-        pos_i = positions[i, :]
-
-        for j in 1:num_atoms
-            if i != j
-                pos_j = positions[j, :]
-                dr = pos_j - pos_i
-
-                # Apply minimum image convention
-                if periodicity[1] || periodicity[2]
-                    fractional_dr = reciprocal_lattice_vectors * dr
-                    for k in 1:3
-                        if periodicity[k]
-                            fractional_dr[k] -= round(fractional_dr[k])
-                        end
-                    end
-                    dr = supercell_lattice_vectors * fractional_dr
-                end
-
-                distance = norm(dr)
-
-                # Assign to neighbor shell
-                for layer in 1:layers_of_neighbors
-                    lower = layer == 1 ? 0.0 : cutoff_radii[layer - 1]
-                    upper = cutoff_radii[layer]
-                    if lower < distance <= upper
-                        push!(nth_neighbors[layer], j)
-                        break
-                    end
-                end
-            end
-        end
-        neighbors[i] = nth_neighbors
-    end
-    return neighbors
 end
 
 function get_ontop_sites(positions)
@@ -944,7 +852,8 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
         lattice_positions = get_lattice_positions(lattice_vectors, supercell_dimensions)
         cutoff_radii = find_n_cutoff_radii(lattice_positions, num_nearest_neighbors)
         supercell_lattice_vectors = lattice_vectors * Diagonal([supercell_dimensions[1], supercell_dimensions[2], supercell_dimensions[3]])
-        neighbors = compute_neighbors_banded(supercell_lattice_vectors, lattice_positions, periodicity, cutoff_radii)
+        neighbors = compute_neighbors(supercell_lattice_vectors, lattice_positions,
+                                      periodicity, cutoff_radii)
         return new{C,G}(lattice_atom, adsorbate_atoms, supercell_dimensions,
                         lattice_constant, periodicity, lattice_positions,
                         num_nearest_neighbors, neighbors, type_of_sites,

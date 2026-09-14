@@ -197,3 +197,302 @@ function monte_carlo_sampling(system, potential_or_hamiltonian, mc_params::MuVTM
         "Example: monte_carlo_sampling(MCAtomGrandCanonicalMoves(), walker, potential, params)"
     ))
 end
+
+
+# ======================================================================
+# Fixed-site lattice-gas μVT Metropolis sampling
+# ======================================================================
+
+function _validate_lattice_muvt_routine(mc_routine::MCGrandCanonicalMoves)
+    mc_routine.p_insert > 0.0 ||
+        throw(ArgumentError("lattice μVT sampling requires p_insert > 0"))
+    p_delete = 1.0 - mc_routine.p_move - mc_routine.p_insert
+    p_delete > 0.0 ||
+        throw(ArgumentError("lattice μVT sampling requires a nonzero deletion probability"))
+    mc_routine.clusters_freq == 0 ||
+        throw(ArgumentError("AtomicLattice cluster moves are not implemented for μVT Metropolis sampling; use clusters_freq=0"))
+    mc_routine.p_bias == 0.0 ||
+        throw(ArgumentError("biased insertions are not implemented for μVT Metropolis sampling; use p_bias=0"))
+    !mc_routine.incremental ||
+        throw(ArgumentError("incremental lattice energies are not implemented for μVT Metropolis sampling; use incremental=false"))
+    (mc_routine.p_move == 0.0 || mc_routine.swaps_freq > 0) ||
+        throw(ArgumentError("p_move > 0 requires swaps_freq > 0 when clusters_freq=0"))
+    return p_delete
+end
+
+_lattice_muvt_energy(lattice::AtomicLattice, h::ClassicalHamiltonian) =
+    ustrip(u"eV", interacting_energy(lattice, h))
+
+_lattice_muvt_energy(lattice::AtomicLattice, calc::PyMLPotential) =
+    ustrip(u"eV", interacting_energy(sync_ase_lattice!(lattice).ase_lattice, calc))
+
+function _lattice_muvt_copy(lattice::AtomicLattice, python_copy)
+    copied = deepcopy(lattice)
+    if !isnothing(python_copy)
+        copied.ase_lattice = python_copy.deepcopy(lattice.ase_lattice)
+    end
+    return copied
+end
+
+"""
+    _lattice_muvt_acceptance_probability(ΔΩ, β, move_type, n, n_sites,
+                                          p_insert, p_delete)
+
+Internal Metropolis-Hastings acceptance probability for a uniform-site lattice
+gas proposal. Insertions include
+`(p_delete/p_insert) * (n_sites-n)/(n+1)` and deletions its reciprocal; fixed-N
+moves are symmetric. Computing in log space avoids overflow at low temperature.
+"""
+function _lattice_muvt_acceptance_probability(
+    delta_omega::Real,
+    beta::Real,
+    move_type::Symbol,
+    n::Int,
+    n_sites::Int,
+    p_insert::Real,
+    p_delete::Real,
+)
+    log_q_ratio = if move_type === :insert
+        log(p_delete) - log(p_insert) + log(n_sites - n) - log(n + 1)
+    elseif move_type === :delete
+        log(p_insert) - log(p_delete) + log(n) - log(n_sites - n + 1)
+    elseif move_type === :move
+        0.0
+    else
+        throw(ArgumentError("unknown lattice μVT move type :$move_type"))
+    end
+    return exp(min(0.0, -beta * delta_omega + log_q_ratio))
+end
+
+"""
+    metropolis_hastings(mc_routine, current_lattice, current_energy,
+                        proposed_lattice, h, beta, mu, move_type)
+
+Internal acceptance helper for lattice μVT sampling. `current_energy` and the
+returned energy are bare interaction energies in eV; μ enters only through
+`ΔΩ = Δ(E-μN)`. The insert/delete proposal ratio is included explicitly.
+"""
+function metropolis_hastings(
+    mc_routine::MCGrandCanonicalMoves,
+    current_lattice::AtomicLattice,
+    current_energy::Float64,
+    proposed_lattice::AtomicLattice,
+    h::Union{ClassicalHamiltonian,PyMLPotential},
+    beta::Float64,
+    mu::Float64,
+    move_type::Symbol,
+)
+    proposed_energy = _lattice_muvt_energy(proposed_lattice, h)
+    n = n_occupied(current_lattice)
+    n_proposed = n_occupied(proposed_lattice)
+    delta_omega = (proposed_energy - current_energy) - mu * (n_proposed - n)
+    p_delete = 1.0 - mc_routine.p_move - mc_routine.p_insert
+    acceptance = _lattice_muvt_acceptance_probability(
+        delta_omega, beta, move_type, n, num_sites(current_lattice),
+        mc_routine.p_insert, p_delete)
+
+    if acceptance == 1.0 || rand() < acceptance
+        return proposed_lattice, proposed_energy, 1, coverage(proposed_lattice)
+    end
+    return current_lattice, current_energy, 0, coverage(current_lattice)
+end
+
+"""
+    μvt_monte_carlo(mc_routine::MCGrandCanonicalMoves,
+                    lattice::AtomicLattice,
+                    h::Union{ClassicalHamiltonian,PyMLPotential},
+                    temperature, num_steps, random_seed;
+                    kb=8.617333262e-5, μ=0.0, record_interval=1)
+
+Run fixed-temperature grand-canonical Metropolis sampling on an
+`AtomicLattice`. Energies are always recorded as bare E; the acceptance test
+uses Δ(E-μN). Uniform insertions and deletions carry the reverse-proposal ratio
+required for detailed balance. `record_interval` thins stored configurations
+and always retains the final step, avoiding the prototype's requirement to
+copy the full lattice on every long production step.
+
+Returns `(energies, configurations, coverages, accepted_steps)` at the recorded
+steps. Invalid full-lattice insertions and empty-lattice deletions are guard
+skips and remain in the acceptance-rate denominator.
+"""
+function μvt_monte_carlo(
+    mc_routine::MCGrandCanonicalMoves,
+    lattice::AtomicLattice,
+    h::Union{ClassicalHamiltonian,PyMLPotential},
+    temperature::Real,
+    num_steps::Integer,
+    random_seed::Integer;
+    kb::Float64=8.617_333_262e-5,
+    μ::Real=0.0,
+    record_interval::Integer=1,
+)
+    temperature > 0 || throw(ArgumentError("temperature must be positive"))
+    num_steps >= 0 || throw(ArgumentError("num_steps must be non-negative"))
+    record_interval > 0 || throw(ArgumentError("record_interval must be positive"))
+    kb > 0.0 || throw(ArgumentError("kb must be positive"))
+    isfinite(μ) || throw(ArgumentError("μ must be finite"))
+    _validate_lattice_muvt_routine(mc_routine)
+
+    Random.seed!(random_seed)
+    beta = 1.0 / (kb * Float64(temperature))
+    mu = Float64(μ)
+    python_copy = h isa PyMLPotential ? pyimport("copy") : nothing
+    current_lattice = _lattice_muvt_copy(lattice, python_copy)
+    current_energy = _lattice_muvt_energy(current_lattice, h)
+    energies = Float64[]
+    configurations = Vector{typeof(lattice)}()
+    coverages = Float64[]
+    accepted_steps = 0
+    p_delete = 1.0 - mc_routine.p_move - mc_routine.p_insert
+
+    for step in 1:num_steps
+        proposed_lattice = _lattice_muvt_copy(current_lattice, python_copy)
+        n = n_occupied(proposed_lattice)
+        r = rand()
+        move_type = :none
+        valid_move = true
+
+        if r < mc_routine.p_move
+            if mc_routine.swap_mode === :occupied_empty
+                if n == 0 || n == num_sites(proposed_lattice)
+                    valid_move = false
+                else
+                    from = rand(occupied_indices(proposed_lattice))
+                    to = rand(empty_indices(proposed_lattice))
+                    set_occupied!(proposed_lattice, from, false)
+                    set_occupied!(proposed_lattice, to, true)
+                end
+            else
+                lattice_random_walk!(proposed_lattice)
+            end
+            move_type = :move
+        elseif r < mc_routine.p_move + mc_routine.p_insert
+            valid_move, _, _ = lattice_insert_particle!(proposed_lattice)
+            move_type = :insert
+        else
+            p_delete > 0.0 || error("unreachable zero-probability deletion branch")
+            valid_move, _, _ = lattice_delete_particle!(proposed_lattice)
+            move_type = :delete
+        end
+
+        if valid_move
+            current_lattice, current_energy, accepted, _ = metropolis_hastings(
+                mc_routine, current_lattice, current_energy, proposed_lattice,
+                h, beta, mu, move_type)
+            accepted_steps += accepted
+        end
+
+        if step % record_interval == 0 || step == num_steps
+            push!(energies, current_energy)
+            push!(configurations, _lattice_muvt_copy(current_lattice, python_copy))
+            push!(coverages, coverage(current_lattice))
+        end
+    end
+
+    return energies, configurations, coverages, accepted_steps
+end
+
+"""
+    monte_carlo_sampling(mc_routine::MCGrandCanonicalMoves,
+                         lattice::AtomicLattice,
+                         h::Union{ClassicalHamiltonian,PyMLPotential},
+                         mc_params::MetropolisMCParameters;
+                         kb=8.617333262e-5, sampling_interval=1)
+
+Run lattice μVT Metropolis sampling over every chemical potential and
+temperature in `mc_params`. Each μ starts from the supplied lattice; within a μ
+the final configuration at one temperature seeds the next. Equilibration and
+production use distinct deterministic seeds for every `(μ,T)` rung.
+
+Returns a result `DataFrame` with bare mean energy, `c_omega`, coverage and
+acceptance rate, plus a dictionary containing the final lattice for each μ.
+"""
+function _lattice_muvt_sampling(
+    mc_routine::MCGrandCanonicalMoves,
+    lattice::AtomicLattice,
+    h::Union{ClassicalHamiltonian,PyMLPotential},
+    mc_params::MetropolisMCParameters;
+    kb::Float64=8.617_333_262e-5,
+    sampling_interval::Integer=1,
+)
+    mus = mc_params.chemical_potentials
+    isnothing(mus) && throw(ArgumentError(
+        "MCGrandCanonicalMoves requires chemical_potentials in MetropolisMCParameters"))
+    mc_params.equilibrium_steps >= 0 ||
+        throw(ArgumentError("equilibrium_steps must be non-negative"))
+    mc_params.sampling_steps > 0 ||
+        throw(ArgumentError("sampling_steps must be positive"))
+    sampling_interval > 0 ||
+        throw(ArgumentError("sampling_interval must be positive"))
+    _validate_lattice_muvt_routine(mc_routine)
+
+    rows = NamedTuple[]
+    final_configs = Dict{Float64,typeof(lattice)}()
+    n_temperatures = length(mc_params.temperatures)
+    python_copy = h isa PyMLPotential ? pyimport("copy") : nothing
+
+    for (mu_index, mu) in enumerate(mus)
+        current_lattice = _lattice_muvt_copy(lattice, python_copy)
+        for (temp_index, temp) in enumerate(mc_params.temperatures)
+            rung = (mu_index - 1) * n_temperatures + temp_index
+            eq_seed = mc_params.random_seed + 2 * (rung - 1)
+            if mc_params.equilibrium_steps > 0
+                _, eq_configs, _, _ = μvt_monte_carlo(
+                    mc_routine, current_lattice, h, temp,
+                    mc_params.equilibrium_steps, eq_seed;
+                    kb=kb, μ=mu,
+                    record_interval=max(mc_params.equilibrium_steps, 1))
+                current_lattice = eq_configs[end]
+            end
+
+            sample_energies, sample_configs, sample_coverages, accepted =
+                μvt_monte_carlo(
+                    mc_routine, current_lattice, h, temp,
+                    mc_params.sampling_steps, eq_seed + 1;
+                    kb=kb, μ=mu, record_interval=sampling_interval)
+            particle_counts = n_occupied.(sample_configs)
+            omega = sample_energies .- mu .* particle_counts
+            c_omega = var(omega; corrected=false) / (kb * temp^2)
+            acceptance_rate = accepted / mc_params.sampling_steps
+            current_lattice = sample_configs[end]
+
+            push!(rows, (
+                temperature=Float64(temp),
+                energy=mean(sample_energies),
+                c_omega=c_omega,
+                cov=mean(sample_coverages),
+                acceptance_rate=acceptance_rate,
+                chemical_potential=mu,
+            ))
+        end
+        final_configs[mu] = _lattice_muvt_copy(current_lattice, python_copy)
+    end
+
+    return DataFrame(rows), final_configs
+end
+
+function monte_carlo_sampling(
+    mc_routine::MCGrandCanonicalMoves,
+    lattice::AtomicLattice,
+    h::ClassicalHamiltonian,
+    mc_params::MetropolisMCParameters;
+    kb::Float64=8.617_333_262e-5,
+    sampling_interval::Integer=1,
+)
+    return _lattice_muvt_sampling(
+        mc_routine, lattice, h, mc_params;
+        kb=kb, sampling_interval=sampling_interval)
+end
+
+function monte_carlo_sampling(
+    mc_routine::MCGrandCanonicalMoves,
+    lattice::AtomicLattice,
+    calc::PyMLPotential,
+    mc_params::MetropolisMCParameters;
+    kb::Float64=8.617_333_262e-5,
+    sampling_interval::Integer=1,
+)
+    return _lattice_muvt_sampling(
+        mc_routine, lattice, calc, mc_params;
+        kb=kb, sampling_interval=sampling_interval)
+end

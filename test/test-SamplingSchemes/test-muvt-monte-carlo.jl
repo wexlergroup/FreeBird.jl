@@ -7,6 +7,14 @@
 #   cutoff 2.5 so r_c = 5.0 A = L/2, guard-clean; b2 = +1.2458 A^3 at 300 K,
 #   N_ref = 0.80159 at zV = 0.8), seeds 96001/96002/96003: max dev 0.00968;
 #   gate 0.03.
+struct LatticeMuVTFieldHamiltonian <: ClassicalHamiltonian
+    epsilon::Float64
+end
+
+FreeBird.EnergyEval.interacting_energy(
+    lattice::AtomicLattice, h::LatticeMuVTFieldHamiltonian) =
+    h.epsilon * n_occupied(lattice) * u"eV"
+
 @testset "muVT Metropolis sampling driver" begin
     using Random
 
@@ -137,5 +145,88 @@
         @test_logs (:warn, r"minimum-image") match_mode = :any begin
             monte_carlo_sampling(MCAtomGrandCanonicalMoves(), w, over, params)
         end
+    end
+end
+
+
+@testset "AtomicLattice muVT Metropolis sampling driver" begin
+    lattice = AtomicLattice{1,SquareLattice}(
+        lattice_atom="Pd",
+        type_of_sites=["hollow"],
+        coverage=0.25,
+        adsorbate_atoms=["O"],
+        supercell_dimensions=(2, 2, 1),
+        lattice_constant=3.947,
+        periodicity=(true, true, false),
+        num_nearest_neighbors=2,
+    )
+    h = LatticeMuVTFieldHamiltonian(0.02)
+    routine = MCGrandCanonicalMoves(p_move=0.5, p_insert=0.25)
+
+    @testset "parameter and option validation" begin
+        params = MetropolisMCParameters(
+            [600.0]; equilibrium_steps=100, sampling_steps=200,
+            chemical_potentials=[-0.03, 0.0])
+        @test params.chemical_potentials == [-0.03, 0.0]
+        @test_throws ArgumentError MetropolisMCParameters(
+            [600.0]; chemical_potentials=Float64[])
+        @test_throws ArgumentError MetropolisMCParameters(
+            [600.0]; chemical_potentials=[NaN])
+        @test_throws ArgumentError monte_carlo_sampling(
+            routine, lattice, h, MetropolisMCParameters([600.0]))
+        @test_throws ArgumentError μvt_monte_carlo(
+            MCGrandCanonicalMoves(p_bias=0.5), lattice, h, 600.0, 10, 1)
+        @test_throws ArgumentError μvt_monte_carlo(
+            MCGrandCanonicalMoves(clusters_freq=1), lattice, h, 600.0, 10, 1)
+    end
+
+    @testset "reverse-proposal detailed balance" begin
+        beta = 1 / (8.617_333_262e-5 * 600.0)
+        p_insert = 0.2
+        p_delete = 0.3
+        n = 1
+        n_sites = 4
+        delta_omega = 0.017
+        a_forward = FreeBird.SamplingSchemes._lattice_muvt_acceptance_probability(
+            delta_omega, beta, :insert, n, n_sites, p_insert, p_delete)
+        a_reverse = FreeBird.SamplingSchemes._lattice_muvt_acceptance_probability(
+            -delta_omega, beta, :delete, n + 1, n_sites,
+            p_insert, p_delete)
+        q_forward = p_insert / (n_sites - n)
+        q_reverse = p_delete / (n + 1)
+        @test isapprox(q_forward * a_forward,
+                       exp(-beta * delta_omega) * q_reverse * a_reverse;
+                       rtol=1e-14)
+    end
+
+    @testset "thinned trajectory stores bare energy" begin
+        energies, configs, coverages, accepted = μvt_monte_carlo(
+            routine, lattice, h, 600.0, 23, 20260914;
+            μ=-0.03, record_interval=5)
+        @test length(energies) == length(configs) == length(coverages) == 5
+        @test 0 <= accepted <= 23
+        @test all(energies .== 0.02 .* n_occupied.(configs))
+        @test all(coverages .== n_occupied.(configs) ./ num_sites(lattice))
+    end
+
+    @testset "independent-site exact mean and high-level schema" begin
+        temperature = 600.0
+        mu = -0.03
+        params = MetropolisMCParameters(
+            [temperature]; equilibrium_steps=5_000, sampling_steps=50_000,
+            chemical_potentials=[mu], random_seed=20260915)
+        df, finals = monte_carlo_sampling(
+            routine, lattice, h, params; sampling_interval=5)
+        exact_coverage = 1 / (1 + exp((h.epsilon - mu) /
+                                     (8.617_333_262e-5 * temperature)))
+        @test nrow(df) == 1
+        @test names(df) == ["temperature", "energy", "c_omega", "cov",
+                            "acceptance_rate", "chemical_potential"]
+        @test abs(df.cov[1] - exact_coverage) < 0.03
+        @test isapprox(df.energy[1], h.epsilon * num_sites(lattice) * df.cov[1];
+                       atol=1e-12)
+        @test isfinite(df.c_omega[1]) && df.c_omega[1] >= 0.0
+        @test 0.0 <= df.acceptance_rate[1] <= 1.0
+        @test haskey(finals, mu)
     end
 end

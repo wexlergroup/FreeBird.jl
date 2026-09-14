@@ -12,6 +12,8 @@ Parameters for the Metropolis Monte Carlo algorithm.
 - `step_size_up::Float64`: The upper bound of the step size.
 - `accept_range::Tuple{Float64, Float64}`: The range of acceptance rates for adjusting the step size.
 e.g. (0.25, 0.75) means that the step size will decrease if the acceptance rate is below 0.25 and increase if it is above 0.75.
+- `chemical_potentials::Union{Vector{Float64}, Nothing}`: Optional chemical-
+  potential grid, in eV, for lattice μVT sampling. Leave as `nothing` for NVT.
 - `random_seed::Int64`: The seed for the random number generator. The `monte_carlo_sampling`
 drivers seed the equilibration phase with `random_seed` and the production phase with
 `random_seed + 1`, so the two phases never share a random stream.
@@ -24,6 +26,7 @@ mutable struct MetropolisMCParameters <: SamplingParameters
     step_size_lo::Float64
     step_size_up::Float64
     accept_range::Tuple{Float64, Float64}
+    chemical_potentials::Union{Vector{Float64}, Nothing}
     random_seed::Int64
     function MetropolisMCParameters(
         temperatures;
@@ -33,9 +36,15 @@ mutable struct MetropolisMCParameters <: SamplingParameters
         step_size_lo::Float64=0.001,
         step_size_up::Float64=1.0,
         accept_range::Tuple{Float64, Float64}=(0.25, 0.75),
+        chemical_potentials::Union{AbstractVector{<:Real}, Nothing}=nothing,
         random_seed::Int64=1234
     )
-        new(temperatures, equilibrium_steps, sampling_steps, step_size, step_size_lo, step_size_up, accept_range, random_seed)
+        mus = isnothing(chemical_potentials) ? nothing :
+              collect(Float64, chemical_potentials)
+        !isnothing(mus) && (isempty(mus) || any(x -> !isfinite(x), mus)) &&
+            throw(ArgumentError("chemical_potentials must be non-empty and finite when provided"))
+        new(temperatures, equilibrium_steps, sampling_steps, step_size,
+            step_size_lo, step_size_up, accept_range, mus, random_seed)
     end
 end
 

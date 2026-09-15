@@ -986,7 +986,7 @@ builders and determines whether `G` is `SquareLattice`, `TriangularLattice`, or
         supercell_dimensions::Tuple{Int64, Int64, Int64},
         lattice_constant::Float64,
         periodicity::Tuple{Bool, Bool, Bool},
-        adsorbate_atoms::Vector{String}=[""],
+        adsorbate_atoms::Vector{String},
         coverage::Float64 = 0.5,
         components::Union{Nothing,Vector{Int},Vector{Vector{Bool}}}=nothing,
         num_nearest_neighbors::Int64,
@@ -1014,7 +1014,7 @@ constructor argument.
 - `supercell_dimensions::Tuple{Int64, Int64, Int64}`: Size of supercell in (x, y, z) directions.
 - `lattice_constant::Float64`: Lattice constant in Ångströms.
 - `periodicity::Tuple{Bool, Bool, Bool}`: Periodic boundary conditions for each dimension.
-- `adsorbate_atoms::Vector{String}`: Chemical symbols of adsorbates (default: `[""]`).
+- `adsorbate_atoms::Vector{String}`: Chemical symbols of adsorbates.
 - `coverage::Float64`: Fractional surface coverage (default: `0.5`).
 - `components`: Optional per-species particle counts, or explicit Boolean
   masks over the adsorption sites. When supplied, this overrides `coverage`.
@@ -1052,7 +1052,7 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
         supercell_dimensions::Tuple{Int64, Int64, Int64},
         lattice_constant::Float64,
         periodicity::Tuple{Bool, Bool, Bool},
-        adsorbate_atoms::Vector{String}=[""],
+        adsorbate_atoms::Vector{String},
         coverage::Float64 = 0.5,
         components::Union{Nothing,Vector{Int},Vector{Vector{Bool}}}=nothing,
         num_nearest_neighbors::Int64,

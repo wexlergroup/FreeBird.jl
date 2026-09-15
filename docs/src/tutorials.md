@@ -1,7 +1,3 @@
-```@meta
-EditURL = "../../scripts/tutorials.jl"
-```
-
 # FreeBird.jl Tutorial
 
 This is a tutorial to using the FreeBird.jl package.
@@ -9,7 +5,8 @@ It covers the basic functionalities of the package, such as
 generating atomistic and lattice walkers, defining a potential energy function or
 Hamiltonian, and running a sampling simulation.
 For more detailed information, please refer to the documentation of the package.
-You can find the runnable version of this script in the `scripts` directory of the package.
+This page is maintained directly in `docs/src/tutorials.md`; its executable
+examples are run when the documentation is built.
 
 ## Atomistic walkers and nested sampling
 
@@ -427,7 +424,3 @@ expansion. Use [`PyMLPotential`](@ref) when an ASE calculator should evaluate
 the complete atomic structure. [Using Machine Learning Interatomic Potentials
 (MLIPs) in FreeBird](@ref) shows how to configure an MLIP for
 fixed-particle-number lattice sampling.
-
----
-
-*This page was generated using [Literate.jl](https://github.com/fredrikekre/Literate.jl).*

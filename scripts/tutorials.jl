@@ -1,3 +1,7 @@
+# Legacy runnable examples. The authoritative, tested tutorial is maintained in
+# docs/src/tutorials.md; do not use Literate to overwrite that page from this
+# shorter historical script.
+
 # # FreeBird.jl Tutorial
 
 # This is a tutorial to using the FreeBird.jl package.

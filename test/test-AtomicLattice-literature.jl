@@ -2,11 +2,10 @@ using LinearAlgebra
 using Test
 using FreeBird
 
-# These tests intentionally validate quantities that AtomicLattice can
-# reproduce without a fitted potential: crystallographic site geometry,
-# overlayer coverage/periodicity, and measured bond geometry.  Adsorption
-# energies and transition temperatures belong in a separate model-validation
-# suite because they require the paper's Hamiltonian or an equivalent MLIP.
+# These deterministic tests validate crystallographic geometry and the direct
+# evaluation of published Hamiltonian coefficients on AtomicLattice.  They do
+# not duplicate the external exact-enumeration/GCMC workflow or make a
+# stochastic transition-temperature claim.
 
 const _LIT_AW = FreeBird.AbstractWalkers
 
@@ -46,6 +45,32 @@ function _lit_minimum_occupied_distance(lattice::AtomicLattice)
         push!(distances, norm(inplane * delta))
     end
     return minimum(distances)
+end
+
+"""Zhang et al.'s optimum nine-figure O/Pd(100) lattice-gas expansion."""
+function _lit_zhang_atomic_hamiltonian(lattice::AtomicLattice)
+    # PRB 75, 235406 (2007), Fig. 1 and Table III.  The paper reports
+    # positive binding energies and negative values for repulsion, so every
+    # coefficient is negated for FreeBird's ordinary potential-energy sign.
+    motifs = (
+        t1=[(0, 0), (1, 0), (2, 0)],
+        t2=[(0, 0), (1, 0), (0, 1)],
+        t3=[(0, 1), (1, 0), (2, 0)],
+        t6=[(0, 0), (1, 1), (2, 2)],
+        q2=[(0, 0), (1, 0), (2, 0), (1, 1)])
+    couplings = (t1=0.168, t2=-0.060, t3=0.048, t6=0.051, q2=-0.120)
+    embeddings_per_site = (t1=2, t2=4, t3=8, t6=2, q2=4)
+    spacing = nn_distance(lattice)
+    nsites = num_sites(lattice)
+
+    clusters = [ClusterInteraction(couplings[key] * u"eV",
+                    enumerate_motif_embeddings(lattice,
+                        [(spacing * x, spacing * y) for (x, y) in motifs[key]];
+                        expected_count=embeddings_per_site[key] * nsites))
+                for key in keys(motifs)]
+    pairs = GenericLatticeHamiltonian(
+        -1.249, [0.292, 0.090, -0.050, -0.010], u"eV")
+    return ClusterLatticeHamiltonian(pairs, clusters)
 end
 
 @testset "AtomicLattice literature validation" begin
@@ -119,6 +144,54 @@ end
         @test bragg_amplitude(p2x2, 2, 0) ≈ 1 / 4 atol=1e-12
         @test bragg_amplitude(p2x2, 0, 2) ≈ 1 / 4 atol=1e-12
         @test bragg_amplitude(p2x2, 2, 2) ≈ 1 / 4 atol=1e-12
+    end
+
+    @testset "O/Pd(100) published nine-figure Hamiltonian" begin
+        # This is an energetic reproduction, rather than only a geometry
+        # check.  The 12x12 cell is large enough that every published motif
+        # is enumerated without winding around the periodic boundary.
+        L = 12
+        base = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", surface=:fcc100,
+            supercell_dimensions=(L, L, 5), lattice_constant=3.947,
+            periodicity=(true, true, false), adsorbate_atoms=["O"],
+            components=[fill(false, L * L)], num_nearest_neighbors=4,
+            type_of_sites=["hollow"])
+        hamiltonian = _lit_zhang_atomic_hamiltonian(base)
+
+        sparse = _lit_configuration(base, (i, j) -> i % 3 == 0 && j % 3 == 0)
+        p2x2 = _lit_configuration(base, (i, j) -> iseven(i) && iseven(j))
+        c2x2 = _lit_configuration(base, (i, j) -> iseven(i + j))
+        p2x1 = _lit_configuration(base, (i, j) -> iseven(i))
+        full = _lit_configuration(base, (i, j) -> true)
+
+        # Independent closed forms from the per-adsorbate figure
+        # multiplicities pin the AtomicLattice neighbour shells, motif
+        # embeddings, sign conversion, and energy evaluator together.
+        @test interacting_energy(sparse, hamiltonian).val ≈
+              16 * (-1.249) atol=1e-10
+        @test interacting_energy(p2x2, hamiltonian).val ≈
+              36 * (-1.249 + 2 * (-0.050)) atol=1e-10
+        @test interacting_energy(c2x2, hamiltonian).val ≈
+              72 * (-1.249 + 2 * 0.090 + 2 * (-0.050) + 2 * 0.051) atol=1e-10
+        @test interacting_energy(p2x1, hamiltonian).val ≈
+              72 * (-1.249 + 0.292 + 2 * (-0.050) +
+                    2 * (-0.010) + 0.168) atol=1e-10
+        @test interacting_energy(full, hamiltonian).val ≈
+              144 * (-1.249 +
+                     2 * 0.292 + 2 * 0.090 + 2 * (-0.050) + 4 * (-0.010) +
+                     2 * 0.168 + 4 * (-0.060) + 8 * 0.048 + 2 * 0.051 +
+                     4 * (-0.120)) atol=1e-10
+
+        # The three low-coverage ordered adlayers reproduce Table I's DFT
+        # binding energies to at most 2 meV/O, matching the paper's fitted
+        # nine-figure expansion.
+        for (lattice, binding_energy) in
+                ((sparse, 1.249), (p2x2, 1.348), (c2x2, 1.069))
+            nadsorbates = n_occupied(lattice)
+            predicted = -interacting_energy(lattice, hamiltonian).val / nadsorbates
+            @test isapprox(predicted, binding_energy; atol=0.003)
+        end
     end
 
     @testset "Cl/Ni(111) sqrt(3) adsorption geometry" begin

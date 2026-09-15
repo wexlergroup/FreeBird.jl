@@ -184,12 +184,12 @@ Fundamentally, using other MLIPs follows the same procedure as above. Be aware o
 
 ### Lattice sampling on an `AtomicLattice`
 
-A `PyMLPotential` can also supply the energy model for lattice sampling when
-the configurations are `AtomicLattice` objects. This includes fixed-N NVT and
-nested sampling, grand-canonical nested sampling, fixed-composition exact
-enumeration, and Wang–Landau sampling. The occupation masks remain the Monte
-Carlo state; FreeBird synchronizes the derived ASE structure before each
-Python-calculator energy evaluation.
+A `PyMLPotential` can evaluate configurations of an [`AtomicLattice`](@ref).
+FreeBird turns each site-occupancy pattern into the corresponding ASE
+structure before asking the calculator for its energy.
+
+This example performs a short fixed-particle-number Monte Carlo calculation
+for one oxygen atom on a 2×2 Pd(100) surface:
 
 ```julia
 using FreeBird
@@ -205,40 +205,30 @@ lattice = AtomicLattice{1,SquareLattice}(
     lattice_constant=3.947,
     periodicity=(true, true, false),
     adsorbate_atoms=["O"],
-    coverage=0.0,
+    components=[1],
     num_nearest_neighbors=2,
     type_of_sites=["hollow"],
 )
 
-walkers = [LatticeWalker(deepcopy(lattice)) for _ in 1:8]
-ls = LatticeGasWalkers(walkers, mlp; assign_energy=false)
-params = GrandCanonicalNestedSamplingParameters(
-    mc_steps=10,
-    chemical_potential=-5.7,
-    energy_perturbation=1e-9,
+params = MetropolisMCParameters(
+    [300.0],
+    equilibrium_steps=10,
+    sampling_steps=20,
+    random_seed=42,
 )
-moves = MCGrandCanonicalMoves(p_move=1 / 3, p_insert=1 / 3)
-save = SaveEveryN(n_traj=10, n_snap=100, n_info=10)
 
-df, ls, params = grand_canonical_nested_sampling(
-    ls, params, Int64(100), moves, save)
+energies, configurations, heat_capacities, acceptance_rates =
+    monte_carlo_sampling(MCNewSample(), lattice, mlp, params)
 ```
 
-Vector chemical potentials and multi-species `AtomicLattice` configurations
-use the same grand-canonical route. A `PyMLPotential` cannot be paired with
-`MLattice`, which has no atomic structure for an ASE calculator; that
-combination is rejected at the relevant entry point. MLIP
-lattice proposals currently recompute the complete energy, so the
-classical-Hamiltonian `incremental=true` optimization does not apply. These
-serial Python calls are appropriate for smoke tests and small calculations;
-production MLIP lattice sampling can be substantially more expensive than a
-classical lattice Hamiltonian.
+`MCNewSample` moves the adsorbate between lattice sites while keeping its
+particle count fixed. Fixed-composition exact enumeration, fixed-N nested
+sampling, and Wang–Landau sampling can use the same lattice and potential.
+Multi-species lattices are also supported when the underlying calculator can
+evaluate every listed element.
 
-Existing `MLattice` workflows are unchanged: they continue to use
-`ClassicalHamiltonian` models. `AtomicLattice` adds the atomic structure needed
-by ASE calculators and supports the same uniform swaps, geometric-cluster
-moves, and neighbor-guided biased insertions used by the lattice samplers.
-`ICETHamiltonian` is also a `ClassicalHamiltonian`; its current mapper is
-limited to a one-species fcc(100) adsorption lattice, while a
-`PyMLPotential` can evaluate any supported `AtomicLattice` surface and species
-set accepted by its underlying calculator.
+MLIP lattice moves evaluate the complete atomic structure for every proposed
+configuration, so calculations can be much slower than a lattice Hamiltonian.
+Start with a small surface and short run when checking a new model. Use
+`MLattice` with a `ClassicalHamiltonian` when no explicit atomic structure is
+needed; a `PyMLPotential` requires an `AtomicLattice`.

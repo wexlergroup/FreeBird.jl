@@ -45,6 +45,18 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
         gc_params3 = GrandCanonicalNestedSamplingParameters(n_max=Int64(5))
         @test gc_params3.n_max == 5
 
+        gc_params4 = GrandCanonicalNestedSamplingParameters(
+            chemical_potential=[-0.1, 0.2])
+        @test gc_params4.chemical_potential == [-0.1, 0.2]
+        @test eltype(gc_params4.chemical_potential) == Float64
+        @test gc_params4.init_occupation_p == 2 / 3
+        @test_throws ArgumentError GrandCanonicalNestedSamplingParameters(
+            chemical_potential=Float64[])
+        @test_throws ArgumentError GrandCanonicalNestedSamplingParameters(
+            chemical_potential=[0.0, Inf])
+        @test_throws ArgumentError GrandCanonicalNestedSamplingParameters(
+            chemical_potential=[0.0, 0.0], init_occupation_p=0.5)
+
         # Test mutability
         gc_params.fail_count = 5
         @test gc_params.fail_count == 5
@@ -249,6 +261,90 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
     end
 
     # ================================================================
+    @testset "multi-species AtomicLattice grand-canonical walk" begin
+        atomic = AtomicLattice{2,SquareLattice}(
+            lattice_atom="Pd", surface=:fcc100,
+            supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+            periodicity=(true, true, false), adsorbate_atoms=["O", "H"],
+            components=[0, 0], num_nearest_neighbors=1,
+            type_of_sites=["hollow"])
+        zero_ham = GenericLatticeHamiltonian(0.0, [0.0], u"eV")
+        multi_ham = MLatticeHamiltonian(2, [zero_ham, zero_ham, zero_ham])
+        walker = LatticeWalker(atomic)
+        assign_energy!(walker, multi_ham)
+
+        # With single-site exclusion and reference activities z1,z2, every
+        # site independently has probabilities (1,z1,z2)/(1+z1+z2).
+        # Sampling the one-step kernel repeatedly therefore gives the exact
+        # means M*z_c/(1+z1+z2), independently of any energy model.
+        z = [0.5, 1.5]
+        mus = [0.0, 0.0]
+        Random.seed!(20260914)
+        for _ in 1:5_000
+            MC_grand_canonical_walk!(
+                1, walker, multi_ham, 1.0, mus;
+                p_move=0.0, p_insert=0.5, z0=z)
+        end
+        count_sum = zeros(Float64, 2)
+        n_samples = 50_000
+        for _ in 1:n_samples
+            MC_grand_canonical_walk!(
+                1, walker, multi_ham, 1.0, mus;
+                p_move=0.0, p_insert=0.5, z0=z)
+            count_sum .+= occupied_site_count(walker.configuration)
+        end
+        sampled_means = count_sum ./ n_samples
+        exact_means = num_sites(atomic) .* z ./ (1 + sum(z))
+        @test sampled_means ≈ exact_means atol=0.06
+        @test walker.energy == interacting_energy(walker.configuration, multi_ham)
+        @test all(sum(component[site] for component in
+                      walker.configuration.components) <= 1
+                  for site in 1:num_sites(walker.configuration))
+
+        # Fixed-N moves exchange complete site states, including unlike
+        # species, without changing either component count.
+        before = occupied_site_count(walker.configuration)
+        MC_grand_canonical_walk!(
+            100, walker, multi_ham, 1.0, mus;
+            p_move=1.0, p_insert=0.0, z0=z,
+            clusters_freq=1, swaps_freq=1)
+        @test occupied_site_count(walker.configuration) == before
+
+        @test_throws DimensionMismatch MC_grand_canonical_walk!(
+            1, walker, multi_ham, 1.0, [0.0]; z0=z)
+        @test_throws DimensionMismatch MC_grand_canonical_walk!(
+            1, walker, multi_ham, 1.0, mus; z0=[1.0])
+        @test_throws ArgumentError MC_grand_canonical_walk!(
+            1, walker, multi_ham, 1.0, mus; z0=[1.0, 0.0])
+        @test_throws ArgumentError MC_grand_canonical_walk!(
+            1, walker, multi_ham, 1.0, mus; z0=z, incremental=true)
+
+        # The same vector-μ kernel is available to existing multi-component
+        # MLattice models, with global (not per-component) empty-site checks.
+        mlattice = MLattice{2,SquareLattice}(
+            lattice_constant=1.0, basis=[(0.0, 0.0, 0.0)],
+            supercell_dimensions=(2, 2, 1),
+            periodicity=(true, true, false), cutoff_radii=[1.1],
+            components=[[true, false, false, false],
+                        [false, true, false, false]],
+            adsorptions=:full)
+        inserted, _, inserted_site = lattice_insert_particle!(mlattice, 2)
+        @test inserted
+        @test inserted_site in (3, 4)
+        deleted, _, deleted_site = lattice_delete_particle!(mlattice, 1)
+        @test deleted
+        @test deleted_site == 1
+        ml_walker = LatticeWalker(mlattice)
+        assign_energy!(ml_walker, multi_ham)
+        MC_grand_canonical_walk!(
+            100, ml_walker, multi_ham, 1.0, mus;
+            p_move=0.2, p_insert=0.4, z0=z)
+        @test all(sum(component[site] for component in
+                      ml_walker.configuration.components) <= 1
+                  for site in 1:num_sites(ml_walker.configuration))
+    end
+
+    # ================================================================
     @testset "MC_grand_canonical_walk! counters: exact bookkeeping" begin
         ham0 = GenericLatticeHamiltonian(0.0, [0.0, 0.0], u"eV")
         # Skip-free by construction: N starts at 8, |dN| <= 1 per step, so
@@ -431,6 +527,50 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
         rm("atomic_gcns.ls.extxyz", force=true)
     end
 
+    @testset "multi-species AtomicLattice GCNS ledger" begin
+        template = AtomicLattice{2,SquareLattice}(
+            lattice_atom="Pd", surface=:fcc100,
+            supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+            periodicity=(true, true, false), adsorbate_atoms=["O", "H"],
+            components=[0, 0], num_nearest_neighbors=1,
+            type_of_sites=["hollow"])
+        zero_ham = GenericLatticeHamiltonian(0.0, [0.0], u"eV")
+        multi_ham = MLatticeHamiltonian(2, [zero_ham, zero_ham, zero_ham])
+        walkers = [LatticeWalker(deepcopy(template)) for _ in 1:8]
+        liveset = LatticeGasWalkers(walkers, multi_ham)
+        params = GrandCanonicalNestedSamplingParameters(
+            mc_steps=20, chemical_potential=[-0.02, 0.01],
+            energy_perturbation=1e-9, random_seed=20260914, n_max=3)
+        save = SaveEveryN("atomic_multi_gcns.csv",
+                          "atomic_multi_gcns.traj.extxyz",
+                          "atomic_multi_gcns.ls.extxyz", 1000, 1000, 1000)
+
+        Random.seed!(params.random_seed)
+        df, final_liveset, _ = grand_canonical_nested_sampling(
+            liveset, params, Int64(50), MCGrandCanonicalMoves(), save)
+
+        @test nrow(df) > 0
+        @test names(df) == ["iter", "omega", "energy", "num_particles",
+                            "num_particles_1", "num_particles_2"]
+        @test df.num_particles == df.num_particles_1 .+ df.num_particles_2
+        @test all(df.num_particles .<= 3)
+        @test all(final_liveset.walkers) do walker
+            configuration = walker.configuration
+            all(sum(component[site] for component in configuration.components) <= 1
+                for site in 1:num_sites(configuration)) &&
+            sum(occupied_site_count(configuration)) <= 3
+        end
+
+        bad_params = GrandCanonicalNestedSamplingParameters(
+            chemical_potential=-0.1)
+        @test_throws DimensionMismatch SamplingSchemes._init_gc_walkers!(
+            final_liveset, bad_params)
+
+        rm("atomic_multi_gcns.csv", force=true)
+        rm("atomic_multi_gcns.traj.extxyz", force=true)
+        rm("atomic_multi_gcns.ls.extxyz", force=true)
+    end
+
     # ================================================================
     @testset "move_stats: accumulated per run, reset between runs" begin
         walkers_ms = [LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV", iter=0) for _ in 1:10]
@@ -483,7 +623,52 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
         @test_throws DimensionMismatch gc_thermodynamic_stats(
             1.0, [0.5], [0.0, 1.0], [0.0, 1.0], [0, 1], 0.0)
     end
- 
+
+    @testset "multi-species gc_thermodynamic_stats" begin
+        β = 1.7
+        kb = 1.0
+        ωi = [0.2, 0.3, 0.5]
+        Es = [0.0, 1.0, 2.0]
+        Ns = [0 0; 1 0; 0 1]
+        mus = [0.1, -0.2]
+        grand_es = Es .- Ns * mus
+
+        mean_E, cv, mean_N = gc_thermodynamic_stats(
+            β, ωi, grand_es, Es, Ns, mus; kb=kb)
+        weights = ωi .* exp.(-β .* grand_es)
+        weights ./= sum(weights)
+        expected_E = sum(weights .* Es)
+        expected_N = vec(sum(weights .* Ns; dims=1))
+        expected_E2 = sum(weights .* Es.^2)
+        expected_EN = vec(sum((weights .* Es) .* Ns; dims=1))
+        expected_cv = kb * β^2 * (
+            expected_E2 - expected_E^2 -
+            sum(mus .* (expected_EN .- expected_E .* expected_N)))
+        @test mean_E ≈ expected_E
+        @test mean_N ≈ expected_N
+        @test cv ≈ expected_cv
+
+        df = DataFrame(iter=1:3, omega=grand_es, energy=Es,
+                       num_particles=vec(sum(Ns; dims=2)),
+                       num_particles_1=Ns[:, 1], num_particles_2=Ns[:, 2])
+        ω_ns = ωᵢ(df.iter, 10)
+        direct = gc_thermodynamic_stats(
+            β, ω_ns, grand_es, Es, Ns, mus; kb=kb)
+        wrapped = gc_thermodynamic_stats(df, [β], 10, mus; kb=kb)
+        @test wrapped[1][1] ≈ direct[1]
+        @test wrapped[2][1] ≈ direct[2]
+        @test vec(wrapped[3]) ≈ direct[3]
+
+        @test_throws DimensionMismatch gc_thermodynamic_stats(
+            β, ωi, grand_es, Es, Ns[:, 1:1], mus; kb=kb)
+        @test_throws ArgumentError gc_thermodynamic_stats(
+            select(df, Not(:num_particles_2)), [β], 10, mus; kb=kb)
+        bad_totals = copy(df)
+        bad_totals.num_particles[1] += 1
+        @test_throws ArgumentError gc_thermodynamic_stats(
+            bad_totals, [β], 10, mus; kb=kb)
+    end
+
     # ================================================================
     @testset "Validation against exact grand-canonical enumeration" begin
         # 4x4 lattice, NN interactions only, single component
@@ -1060,6 +1245,8 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
         ls_v = LatticeGasWalkers(ws_v, ll_ham; assign_energy=false)
         @test_throws ArgumentError SamplingSchemes._validate_observables(
             [:swap_attempted => cfg -> 0.0], ls_v)
+        @test_throws ArgumentError SamplingSchemes._validate_observables(
+            [:num_particles_1 => cfg -> 0.0], ls_v)
 
         # Swap-acceptance decay diagnostic, post-accounting-fix semantics:
         # the effective (null-excluded) swap acceptance in the final descent

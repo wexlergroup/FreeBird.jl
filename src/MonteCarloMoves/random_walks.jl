@@ -982,7 +982,7 @@ end
 
 """
     MC_grand_canonical_walk!(n_steps::Int, lattice::LatticeWalker{1},
-                             h::ClassicalHamiltonian, omega_max::Float64,
+                             h, omega_max::Float64,
                              mu::Float64;
                              p_move::Float64=0.5, p_insert::Float64=0.25,
                              energy_perturb::Float64=0.0, n_max::Int=typemax(Int),
@@ -1017,7 +1017,8 @@ Cluster moves are symmetric (no Metropolis correction), accepted if Ω < Ω_max.
 # Arguments
 - `n_steps::Int`: Number of MCMC steps.
 - `lattice::LatticeWalker{1}`: The walker (single component).
-- `h::ClassicalHamiltonian`: The lattice Hamiltonian.
+- `h`: A `ClassicalHamiltonian`, or a `PyMLPotential` when the walker contains
+  an `AtomicLattice`.
 - `omega_max::Float64`: Upper bound on grand potential Ω = E − μN (unitless).
 - `mu::Float64`: Chemical potential (unitless, in same energy units as Hamiltonian).
 - `p_move::Float64=0.5`: Probability of a fixed-N move.
@@ -1072,7 +1073,7 @@ Cluster moves are symmetric (no Metropolis correction), accepted if Ω < Ω_max.
 """
 function MC_grand_canonical_walk!(n_steps::Int,
                                   lattice::LatticeWalker{1},
-                                  h::ClassicalHamiltonian,
+                                  h::Union{ClassicalHamiltonian,PyMLPotential},
                                   omega_max::Float64,
                                   mu::Float64;
                                   p_move::Float64=0.5,
@@ -1088,6 +1089,11 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                   bias_shells::Int=1,
                                   incremental::Bool=false,
                                   swap_mode::Symbol=:uniform_pair)
+    if h isa PyMLPotential && !(lattice.configuration isa AtomicLattice)
+        throw(ArgumentError(
+            "PyMLPotential lattice walks require an AtomicLattice " *
+            "configuration; got $(typeof(lattice.configuration))"))
+    end
     if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
         throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
     end
@@ -1163,7 +1169,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
     # back to the shipped full recompute, which also re-anchors the
     # accumulator exactly. The default path computes the identical arithmetic
     # in the identical order and draws the identical random stream.
-    use_deltas = incremental && supports_site_deltas(h)
+    use_deltas = incremental && h isa ClassicalHamiltonian &&
+                 supports_site_deltas(h)
     zero_e = 0.0 * unit(lattice.energy)
     # The unperturbed-energy anchor serves two consumers: the incremental
     # path advances it by exact deltas, and a detected null swap carries it
@@ -1479,7 +1486,7 @@ re-evaluated after each non-null proposal.
 function MC_grand_canonical_walk!(
     n_steps::Int,
     lattice::LatticeWalker{C},
-    h::ClassicalHamiltonian,
+    h::Union{ClassicalHamiltonian,PyMLPotential},
     omega_max::Float64,
     chemical_potentials::AbstractVector{<:Real};
     p_move::Float64=0.5,
@@ -1496,6 +1503,11 @@ function MC_grand_canonical_walk!(
     incremental::Bool=false,
     swap_mode::Symbol=:uniform_pair,
 ) where C
+    if h isa PyMLPotential && !(lattice.configuration isa AtomicLattice)
+        throw(ArgumentError(
+            "PyMLPotential lattice walks require an AtomicLattice " *
+            "configuration; got $(typeof(lattice.configuration))"))
+    end
     length(chemical_potentials) == C || throw(DimensionMismatch(
         "chemical_potentials must contain one value per lattice component " *
         "($C), got $(length(chemical_potentials))"))

@@ -527,6 +527,86 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
         rm("atomic_gcns.ls.extxyz", force=true)
     end
 
+    @testset "AtomicLattice PyMLPotential GCNS" begin
+        template = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", surface=:fcc100,
+            supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+            periodicity=(true, true, false), adsorbate_atoms=["O"],
+            coverage=0.25, num_nearest_neighbors=1,
+            type_of_sites=["hollow"], adsorbate_height=2.0)
+        ase_lj = FreeBird.EnergyEval.pyimport(
+            "ase.calculators.lj").LennardJones()
+        potential = PyMLPotential(
+            FreeBird.AbstractPotentials.ASEcalculator(ase_lj))
+        walkers = [LatticeWalker(deepcopy(template)) for _ in 1:6]
+        liveset = LatticeGasWalkers(walkers, potential)
+
+        @test liveset.hamiltonian === potential
+        @test all(isfinite(walker.energy.val) for walker in liveset.walkers)
+
+        Random.seed!(20260914)
+        accepted, rate, walked, _, _, move_stats = MC_grand_canonical_walk!(
+            12, deepcopy(first(walkers)), potential, 1.0e12, 0.0;
+            energy_perturb=1e-9, clusters_freq=1, swaps_freq=1)
+        @test accepted
+        @test 0.0 <= rate <= 1.0
+        @test isfinite(walked.energy.val)
+        @test sum(values(move_stats)) >= 1
+
+        params = GrandCanonicalNestedSamplingParameters(
+            mc_steps=8, chemical_potential=-0.02,
+            energy_perturbation=1e-9, random_seed=20260914)
+        save = SaveEveryN("atomic_pyml_gcns.csv",
+                          "atomic_pyml_gcns.traj.extxyz",
+                          "atomic_pyml_gcns.ls.extxyz", 1000, 1000, 1000)
+        Random.seed!(params.random_seed)
+        df, final_liveset, _ = grand_canonical_nested_sampling(
+            liveset, params, Int64(12), MCGrandCanonicalMoves(), save)
+
+        @test nrow(df) > 0
+        @test names(df) == ["iter", "omega", "energy", "num_particles"]
+        @test all(isfinite, df.energy)
+        @test all(walker.configuration isa AtomicLattice
+                  for walker in final_liveset.walkers)
+
+        multi_template = AtomicLattice{2,SquareLattice}(
+            lattice_atom="Pd", surface=:fcc100,
+            supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+            periodicity=(true, true, false), adsorbate_atoms=["O", "H"],
+            components=[1, 1], num_nearest_neighbors=1,
+            type_of_sites=["hollow"], adsorbate_height=2.0)
+        multi_liveset = LatticeGasWalkers(
+            [LatticeWalker(deepcopy(multi_template)) for _ in 1:6], potential)
+        multi_params = GrandCanonicalNestedSamplingParameters(
+            mc_steps=6, chemical_potential=[-0.02, 0.01],
+            energy_perturbation=1e-9, random_seed=20260915, n_max=3)
+        Random.seed!(multi_params.random_seed)
+        multi_df, multi_final, _ = grand_canonical_nested_sampling(
+            multi_liveset, multi_params, Int64(8), MCGrandCanonicalMoves(), save)
+
+        @test nrow(multi_df) > 0
+        @test names(multi_df) == ["iter", "omega", "energy", "num_particles",
+                                  "num_particles_1", "num_particles_2"]
+        @test all(isfinite, multi_df.energy)
+        @test multi_df.num_particles ==
+              multi_df.num_particles_1 .+ multi_df.num_particles_2
+        @test all(multi_final.walkers) do walker
+            cfg = walker.configuration
+            all(sum(component[site] for component in cfg.components) <= 1
+                for site in 1:num_sites(cfg))
+        end
+
+        ml_walker = LatticeWalker(deepcopy(square_lattice))
+        @test_throws ArgumentError LatticeGasWalkers([ml_walker], potential;
+                                                     assign_energy=false)
+        @test_throws ArgumentError MC_grand_canonical_walk!(
+            1, ml_walker, potential, 1.0e12, 0.0)
+
+        rm("atomic_pyml_gcns.csv", force=true)
+        rm("atomic_pyml_gcns.traj.extxyz", force=true)
+        rm("atomic_pyml_gcns.ls.extxyz", force=true)
+    end
+
     @testset "multi-species AtomicLattice GCNS ledger" begin
         template = AtomicLattice{2,SquareLattice}(
             lattice_atom="Pd", surface=:fcc100,

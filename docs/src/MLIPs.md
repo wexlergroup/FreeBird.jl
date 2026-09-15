@@ -181,3 +181,53 @@ energies, liveset, _ = nested_sampling(ls, ns_params, 10_000, mc, save)
 ```
 
 Fundamentally, using other MLIPs follows the same procedure as above. Be aware of the computational costs with MLIPS, one typically needs to use GPU for fast energy evaluations, or massively parallel CPU computations to distribute the workload.
+
+### Grand-canonical sampling on an `AtomicLattice`
+
+A `PyMLPotential` can also supply the energy model for lattice
+grand-canonical nested sampling when the configurations are `AtomicLattice`
+objects. The occupation masks remain the Monte Carlo state; FreeBird
+synchronizes the derived ASE structure before each Python-calculator energy
+evaluation.
+
+```julia
+using FreeBird
+
+mlp = mace_model(
+    model="small", device="cpu",
+    default_dtype="float32", enable_cueq=false)
+
+lattice = AtomicLattice{1,SquareLattice}(
+    lattice_atom="Pd",
+    surface=:fcc100,
+    supercell_dimensions=(2, 2, 1),
+    lattice_constant=3.947,
+    periodicity=(true, true, false),
+    adsorbate_atoms=["O"],
+    coverage=0.0,
+    num_nearest_neighbors=2,
+    type_of_sites=["hollow"],
+)
+
+walkers = [LatticeWalker(deepcopy(lattice)) for _ in 1:8]
+ls = LatticeGasWalkers(walkers, mlp; assign_energy=false)
+params = GrandCanonicalNestedSamplingParameters(
+    mc_steps=10,
+    chemical_potential=-5.7,
+    energy_perturbation=1e-9,
+)
+moves = MCGrandCanonicalMoves(p_move=1 / 3, p_insert=1 / 3)
+save = SaveEveryN(n_traj=10, n_snap=100, n_info=10)
+
+df, ls, params = grand_canonical_nested_sampling(
+    ls, params, Int64(100), moves, save)
+```
+
+Vector chemical potentials and multi-species `AtomicLattice` configurations
+use the same route. A `PyMLPotential` cannot be paired with `MLattice`, which
+has no atomic structure for an ASE calculator; that combination raises an
+`ArgumentError` at liveset construction. MLIP lattice proposals currently
+recompute the complete energy, so the classical-Hamiltonian
+`incremental=true` optimization does not apply. These serial Python calls are
+appropriate for smoke tests and small calculations; production MLIP GCNS can
+be substantially more expensive than a classical lattice Hamiltonian.

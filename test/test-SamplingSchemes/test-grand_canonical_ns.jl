@@ -600,6 +600,20 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
         @test isfinite(walked.energy.val)
         @test sum(values(move_stats)) >= 1
 
+        # The neighbor-guided insertion channel is available with the same
+        # AtomicLattice/PyMLPotential pairing. Force its channel draw so this
+        # remains a dispatch-and-energy-evaluation test rather than a
+        # probabilistic coverage assertion.
+        biased_walker = deepcopy(first(walkers))
+        Random.seed!(20260916)
+        _, _, biased_walker, _, _, biased_stats = MC_grand_canonical_walk!(
+            1, biased_walker, potential, 1.0e12, 0.0;
+            p_move=0.0, p_insert=1.0, p_bias=1.0,
+            bias_predicate=:contact, bias_shells=1)
+        @test biased_stats.insert_biased_attempted == 1
+        @test biased_stats.insert_uniform_attempted == 0
+        @test isfinite(biased_walker.energy.val)
+
         params = GrandCanonicalNestedSamplingParameters(
             mc_steps=8, chemical_potential=-0.02,
             energy_perturbation=1e-9, random_seed=20260914)
@@ -624,6 +638,12 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
             type_of_sites=["hollow"], adsorbate_height=2.0)
         multi_liveset = LatticeGasWalkers(
             [LatticeWalker(deepcopy(multi_template)) for _ in 1:6], potential)
+        multi_accepted, multi_rate, multi_walker = MC_random_walk!(
+            4, deepcopy(first(multi_liveset.walkers)), potential, 1.0e12;
+            energy_perturb=1e-9)
+        @test multi_accepted
+        @test 0.0 <= multi_rate <= 1.0
+        @test occupied_site_count(multi_walker.configuration) == [1, 1]
         multi_params = GrandCanonicalNestedSamplingParameters(
             mc_steps=6, chemical_potential=[-0.02, 0.01],
             energy_perturbation=1e-9, random_seed=20260915, n_max=3)

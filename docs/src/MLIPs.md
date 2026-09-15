@@ -233,3 +233,12 @@ classical-Hamiltonian `incremental=true` optimization does not apply. These
 serial Python calls are appropriate for smoke tests and small calculations;
 production MLIP lattice sampling can be substantially more expensive than a
 classical lattice Hamiltonian.
+
+Existing `MLattice` workflows are unchanged: they continue to use
+`ClassicalHamiltonian` models. `AtomicLattice` adds the atomic structure needed
+by ASE calculators and supports the same uniform swaps, geometric-cluster
+moves, and neighbor-guided biased insertions used by the lattice samplers.
+`ICETHamiltonian` is also a `ClassicalHamiltonian`; its current mapper is
+limited to a one-species fcc(100) adsorption lattice, while a
+`PyMLPotential` can evaluate any supported `AtomicLattice` surface and species
+set accepted by its underlying calculator.

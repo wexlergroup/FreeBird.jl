@@ -825,11 +825,13 @@ Set each site occupied independently with probability `p`, producing a
 variable-N configuration suitable for grand-canonical sampling.
 
 # Arguments
-- `lattice::SLattice`: The single-component lattice to randomize.
+- `lattice::AbstractLattice`: The lattice to randomize. Multi-species
+  `AtomicLattice` configurations assign an occupied site to one uniformly
+  selected component while preserving single-site exclusion.
 - `p::Float64=0.5`: Per-site occupation probability.
 
 # Returns
-- `lattice::SLattice`: The mutated lattice with a random microstate.
+- `lattice::AbstractLattice`: The mutated lattice with a random microstate.
 """
 function random_microstate!(lattice::AbstractLattice; p::Float64=0.5)
     for i in 1:num_sites(lattice)

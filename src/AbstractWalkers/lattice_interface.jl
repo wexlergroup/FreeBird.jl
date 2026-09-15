@@ -1,11 +1,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # The AbstractLattice occupancy interface
 #
-# Sampling code that works for one lattice type should work for both. Today it
-# does not: the grand-canonical sampler, the Monte Carlo moves and the I/O paths
-# reach into `lattice.components[1]` directly, which is an `MLattice` field, so
-# every one of those call sites is `MLattice`-only by construction rather than
-# by intent.
+# Sampling code that works for one lattice type should work for both. These
+# accessors replaced the type-specific occupation reads that previously made
+# the grand-canonical sampler and Monte Carlo moves `MLattice`-only by
+# construction rather than by intent.
 #
 # These accessors are the contract that replaces those reads. They are
 # deliberately small and deliberately boring: each one is a field access for

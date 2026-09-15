@@ -52,6 +52,9 @@ function ICETHamiltonian(ce_path::String, base_lattice::AtomicLattice)
     base_lattice.periodicity[1:2] == (true, true) || throw(ArgumentError(
         "ICETHamiltonian repeats a periodic cluster-expansion model and requires " *
         "periodicity=(true, true, ...) on the AtomicLattice"))
+    base_lattice.surface == :fcc100 || throw(ArgumentError(
+        "ICETHamiltonian currently maps the existing fcc(100) ICET models and " *
+        "requires surface=:fcc100; got surface=$(base_lattice.surface)"))
 
     icet = pyimport("icet")
     mcham = pyimport("mchammer.calculators")

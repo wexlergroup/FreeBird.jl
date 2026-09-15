@@ -244,6 +244,7 @@ end
         frames = read_configs(filename)
         @test length(frames) == 1
         @test frames[1].data[:freebird_walker] == "AtomicLattice"
+        @test frames[1].data[:ase_surface] == "fcc100"
         @test frames[1].data[:occupations] == "bits=1000010000100000"
         @test frames[1].data[:component_occupations] == "bits=1000010000100000"
 
@@ -287,5 +288,21 @@ end
         @test multi_restored.energy == multi_walker.energy
         @test multi_restored.iter == multi_walker.iter
         rm(multi_filename, force=true)
+
+        triangular = AtomicLattice{1,TriangularLattice}(
+            lattice_atom="Pd", surface=:fcc111,
+            supercell_dimensions=(3, 3, 2), lattice_constant=3.947,
+            periodicity=(true, true, false), adsorbate_atoms=["O"],
+            coverage=0.0, num_nearest_neighbors=1,
+            type_of_sites=["fcc"])
+        triangular.components[1][[1, 5, 9]] .= true
+        triangular.ase_dirty = true
+        triangular_filename = "atomic_lattice_fcc111.traj.extxyz"
+        write_single_walker(triangular_filename, LatticeWalker(triangular))
+        triangular_restored = read_single_walker(triangular_filename)
+        @test triangular_restored.configuration isa AtomicLattice{1,TriangularLattice}
+        @test triangular_restored.configuration.surface == :fcc111
+        @test triangular_restored.configuration.components == triangular.components
+        rm(triangular_filename, force=true)
     end
 end

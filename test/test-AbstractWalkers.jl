@@ -1777,11 +1777,93 @@
             FreeBird.MonteCarloMoves._apply_cluster_pairs!(cluster, pairs)
             @test cluster.components == cluster_before
         end
-        @test_throws ArgumentError AtomicLattice{1,TriangularLattice}(
-            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
-            lattice_constant=3.947, periodicity=(true, true, false),
-            adsorbate_atoms=["O"], coverage=0.25,
-            num_nearest_neighbors=2, type_of_sites=["hollow"])
+        @testset "ASE surface builders" begin
+            cases = [
+                (:fcc110, GenericLattice,    "Pd", (4, 4, 2), "hollow",     16),
+                (:fcc111, TriangularLattice, "Pd", (4, 4, 2), "fcc",        16),
+                (:fcc211, GenericLattice,    "Pd", (6, 4, 3), "ontop",       8),
+                (:bcc100, SquareLattice,     "Fe", (4, 4, 2), "bridge",     32),
+                (:bcc110, GenericLattice,    "Fe", (4, 4, 2), "shortbridge",16),
+                (:bcc111, TriangularLattice, "Fe", (4, 4, 3), "hollow",     16),
+                (:hcp0001, TriangularLattice,"Ti", (4, 4, 2), "hcp",        16),
+                (:hcp10m10, GenericLattice,  "Ti", (4, 4, 2), "ontop",      16),
+                (:diamond100, SquareLattice, "C",  (4, 4, 4), "ontop",      16),
+                (:diamond111, TriangularLattice,"C",(4, 4, 6), "ontop",     16),
+            ]
+            for (surface, geometry, atom, dims, site, expected_sites) in cases
+                lattice_type = AtomicLattice{1,geometry}
+                lattice = lattice_type(
+                    lattice_atom=atom, surface=surface,
+                    supercell_dimensions=dims, lattice_constant=4.0,
+                    periodicity=(true, true, false), adsorbate_atoms=["H"],
+                    coverage=0.25, num_nearest_neighbors=1,
+                    type_of_sites=[site])
+                @test lattice.surface == surface
+                @test num_sites(lattice) == expected_sites
+                @test n_occupied(lattice) == round(Int, 0.25 * expected_sites)
+                @test nn_distance(lattice) > 0
+                @test size(lattice.reflection_table) ==
+                      (expected_sites, expected_sites)
+                count_before = n_occupied(lattice)
+                geometric_cluster_swap!(lattice, 0.35)
+                @test n_occupied(lattice) == count_before
+            end
+
+            triangular = AtomicLattice{1,TriangularLattice}(
+                lattice_atom="Pd", surface="FCC(111)",
+                supercell_dimensions=(4, 4, 2), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=1,
+                type_of_sites=["bridge", "fcc", "hcp"])
+            @test triangular.surface == :fcc111
+            @test num_sites(triangular) == 5 * 4 * 4
+
+            triangular_multi = AtomicLattice{2,TriangularLattice}(
+                lattice_atom="Pd", surface=:fcc111,
+                supercell_dimensions=(4, 4, 2), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O", "H"],
+                components=[3, 5], num_nearest_neighbors=1,
+                type_of_sites=["fcc"])
+            multi_counts = occupied_site_count(triangular_multi)
+            for _ in 1:20
+                lattice_random_walk!(triangular_multi)
+            end
+            geometric_cluster_swap!(triangular_multi, 0.35)
+            @test occupied_site_count(triangular_multi) == multi_counts
+            @test all(sum(component[i] for component in triangular_multi.components) <= 1
+                      for i in 1:num_sites(triangular_multi))
+
+            @test_throws ArgumentError AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc111,
+                supercell_dimensions=(4, 4, 2), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.25, num_nearest_neighbors=1,
+                type_of_sites=["fcc"])
+            @test_throws ArgumentError AtomicLattice{1,TriangularLattice}(
+                lattice_atom="Pd", surface=:fcc111,
+                supercell_dimensions=(4, 4, 2), lattice_constant=3.947,
+                periodicity=(false, true, false), adsorbate_atoms=["O"],
+                coverage=0.25, num_nearest_neighbors=1,
+                type_of_sites=["fcc"])
+            @test_throws ArgumentError AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:not_a_surface,
+                supercell_dimensions=(4, 4, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.25, num_nearest_neighbors=1,
+                type_of_sites=["hollow"])
+            @test_throws ArgumentError AtomicLattice{1,GenericLattice}(
+                lattice_atom="Pd", surface=:fcc211,
+                supercell_dimensions=(4, 4, 2), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.25, num_nearest_neighbors=1,
+                type_of_sites=["ontop"])
+            @test_throws ArgumentError AtomicLattice{1,GenericLattice}(
+                lattice_atom="Ti", surface=:hcp10m10,
+                supercell_dimensions=(4, 3, 2), lattice_constant=2.95,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.25, num_nearest_neighbors=1,
+                type_of_sites=["ontop"])
+        end
         @test_throws ArgumentError AtomicLattice{1,SquareLattice}(
             lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
             lattice_constant=3.947, periodicity=(true, true, false),

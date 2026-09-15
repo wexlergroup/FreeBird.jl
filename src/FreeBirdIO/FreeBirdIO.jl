@@ -103,9 +103,11 @@ function convert_system_to_atomic_lattice_walker(at::FlexibleSystem, resume::Boo
     length(pbc) == 3 || throw(ArgumentError("lattice_periodicity must contain three booleans"))
 
     geometry = _atomic_lattice_geometry(string(data[:lattice_geometry]))
+    surface = haskey(data, :ase_surface) ? string(data[:ase_surface]) : "fcc100"
     lattice_type = AtomicLattice{length(adsorbates),geometry}
     lattice = lattice_type(
         lattice_atom=string(data[:lattice_atom]),
+        surface=surface,
         supercell_dimensions=dims,
         lattice_constant=Float64(data[:lattice_constant]),
         periodicity=pbc,
@@ -302,6 +304,7 @@ function convert_walker_to_system(at::LatticeWalker)
         freebird_walker="AtomicLattice",
         lattice_geometry=geometry,
         lattice_atom=lattice.lattice_atom,
+        ase_surface=string(lattice.surface),
         adsorbate_atoms=join(lattice.adsorbate_atoms, ','),
         supercell_dimensions=join(lattice.supercell_dimensions, ','),
         lattice_constant=lattice.lattice_constant,

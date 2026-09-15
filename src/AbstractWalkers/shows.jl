@@ -58,7 +58,8 @@ end
 
 function Base.show(io::IO, lattice::AtomicLattice)
     println(io, typeof(lattice))
-    println(io, "    lattice_vectors      : ", lattice.lattice_atom)
+    println(io, "    lattice atom         : ", lattice.lattice_atom)
+    println(io, "    ASE surface          : ", lattice.surface)
     println(io, "    positions            : ", length(lattice.lattice_positions[:,1]), " grid points")
     println(io, "    supercell_dimensions : ", lattice.supercell_dimensions)
     println(io, "    periodicity          : ", lattice.periodicity)

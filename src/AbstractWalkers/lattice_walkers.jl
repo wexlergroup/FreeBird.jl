@@ -461,6 +461,129 @@ function find_fcc_lattice_sites(slab, nn, tol)
     return vcat(ontop, bridge, hollow)
 end
 
+# ASE's named elemental surface builders.  The second entry is the FreeBird
+# geometry of a translational adsorption-site orbit on that surface.  The
+# stepped/rectangular faces deliberately use GenericLattice: calling them
+# square merely because ASE happens to return an orthogonal cell would give
+# them square-lattice order parameters that have no physical meaning.
+const _ATOMIC_SURFACE_GEOMETRIES = Dict{Symbol,Symbol}(
+    :fcc100     => :SquareLattice,
+    :fcc110     => :GenericLattice,
+    :fcc111     => :TriangularLattice,
+    :fcc211     => :GenericLattice,
+    :bcc100     => :SquareLattice,
+    :bcc110     => :GenericLattice,
+    :bcc111     => :TriangularLattice,
+    :hcp0001    => :TriangularLattice,
+    :hcp10m10   => :GenericLattice,
+    :diamond100 => :SquareLattice,
+    :diamond111 => :TriangularLattice,
+)
+
+"""Normalize and validate an ASE elemental surface-builder name."""
+function _atomic_surface(surface::Union{Symbol,AbstractString})
+    normalized = Symbol(lowercase(replace(string(surface), r"[()_\-]" => "")))
+    haskey(_ATOMIC_SURFACE_GEOMETRIES, normalized) || throw(ArgumentError(
+        "unsupported ASE surface '$surface'; expected one of " *
+        join(sort!(string.(collect(keys(_ATOMIC_SURFACE_GEOMETRIES)))), ", ")))
+    return normalized
+end
+
+"""Construct one of ASE's named elemental slabs."""
+function _build_atomic_surface(surface::Symbol, lattice_atom::String,
+                               dimensions::Tuple{Int64,Int64,Int64},
+                               lattice_constant::Float64)
+    builder = ase.build.__getattribute__(string(surface))
+    return builder(lattice_atom, dimensions; a=lattice_constant)
+end
+
+"""
+Return the symmetry-equivalent offsets of an ASE named adsorption site.
+
+ASE stores one representative position per named site.  Square-surface bridge
+sites have two rotationally equivalent orientations and close-packed
+triangular surfaces have three; all other names in the supported builders are
+already distinct translational orbits (for example `longbridge` versus
+`shortbridge`, and `fcc` versus `hcp`).
+"""
+function _surface_site_offsets(surface::Symbol, site::String,
+                               representative::Tuple{Float64,Float64})
+    if site == "bridge" && surface in (:fcc100, :bcc100)
+        return [(0.5, 0.0), (0.0, 0.5)]
+    elseif site == "bridge" && surface in (:fcc111, :hcp0001)
+        return [(0.5, 0.0), (0.0, 0.5), (0.5, 0.5)]
+    end
+    return [representative]
+end
+
+"""Fold and de-duplicate Cartesian in-plane sites in an ASE slab cell."""
+function _fold_surface_sites(sites::Vector{Tuple{Float64,Float64}},
+                             cell::Matrix{Float64}; tol::Float64=1e-8)
+    inplane = [cell[1, 1] cell[2, 1]; cell[1, 2] cell[2, 2]]
+    reciprocal = inv(inplane)
+    fractional = Tuple{Float64,Float64}[]
+    for (x, y) in sites
+        f = mod.(reciprocal * [x, y], 1.0)
+        any(g -> norm(f .- collect(g) .- round.(f .- collect(g))) <= tol,
+            fractional) || push!(fractional, (f[1], f[2]))
+    end
+    return map(fractional) do f
+        xy = inplane * collect(f)
+        (xy[1], xy[2])
+    end
+end
+
+"""
+Build adsorption sites from the metadata supplied by ASE's surface builder.
+
+Each selected name contributes its complete translational orbit.  Rotationally
+equivalent `bridge` orientations are expanded explicitly.  `fcc211` is the one
+ASE elemental builder without named sites, so FreeBird exposes its top-layer
+atoms as `ontop` sites only.
+"""
+function _ase_surface_sites(slab, surface::Symbol,
+                            dimensions::Tuple{Int64,Int64,Int64},
+                            type_of_sites::Vector{String})
+    positions = get_positions(slab)
+    cell = pyconvert(Matrix{Float64}, slab.get_cell())
+
+    if surface == :fcc211
+        type_of_sites == ["ontop"] || throw(ArgumentError(
+            "ASE's fcc211 builder provides no named adsorption sites; " *
+            "AtomicLattice supports type_of_sites=[\"ontop\"] for fcc211"))
+        z_top = maximum(p[3] for p in positions)
+        sites = [(p[1], p[2]) for p in positions if isapprox(p[3], z_top; atol=1e-8)]
+        return _fold_surface_sites(sites, cell)
+    end
+
+    info = slab.info["adsorbate_info"]
+    named = info["sites"]
+    available = sort!(pyconvert(Vector{String}, pylist(named.keys())))
+    invalid = filter(site -> site ∉ available, type_of_sites)
+    isempty(invalid) || throw(ArgumentError(
+        "adsorption site type(s) $(invalid) are not available on $surface; " *
+        "ASE provides $(available)"))
+
+    unit_cell = pyconvert(Matrix{Float64}, info["cell"])
+    nx, ny, _ = dimensions
+    sites = Tuple{Float64,Float64}[]
+    for site in type_of_sites
+        raw = pyconvert(Vector{Float64}, named[site])
+        representative = (raw[1], raw[2])
+        for offset in _surface_site_offsets(surface, site, representative)
+            for j in 0:(ny - 1), i in 0:(nx - 1)
+                u, v = i + offset[1], j + offset[2]
+                push!(sites,
+                      (u * unit_cell[1, 1] + v * unit_cell[2, 1],
+                       u * unit_cell[1, 2] + v * unit_cell[2, 2]))
+            end
+        end
+    end
+    isempty(sites) && throw(ArgumentError(
+        "type_of_sites must select at least one adsorption-site family"))
+    return _fold_surface_sites(sites, cell)
+end
+
 function get_adsorbate_indicies(slab)
     adsorbate_indices = [i for i in 0:length(slab) - 1 if pyconvert(Int64, slab[i].tag) == 0]
     return adsorbate_indices
@@ -830,11 +953,14 @@ A mutable struct representing an atomic adsorption lattice using ASE
 (Atomic Simulation Environment).
 
 Multiple adsorbate species use the same mutually-exclusive component masks as
-`MLattice`. `G == SquareLattice` is currently required because the ASE builder
-constructs an fcc(100) square surface.
+`MLattice`. The `surface` keyword selects one of ASE's named elemental surface
+builders and determines whether `G` is `SquareLattice`, `TriangularLattice`, or
+`GenericLattice`.
 
 # Fields
 - `lattice_atom::String`: The chemical symbol of the lattice substrate atom.
+- `surface::Symbol`: ASE surface builder used for the substrate (for example
+  `:fcc100`, `:fcc111`, or `:bcc110`).
 - `adsorbate_atoms::Vector{String}`: The chemical symbols of the adsorbate species.
 - `all_sites::Vector{Tuple{Float64, Float64}}`: Coordinates of every adsorption site, in geometric order.
 - `components::Vector{Vector{Bool}}`: **The ground truth.** One mask per
@@ -856,6 +982,7 @@ constructs an fcc(100) square surface.
 # Constructor
     AtomicLattice{C,G}(;
         lattice_atom::String,
+        surface::Union{Symbol,AbstractString}=:fcc100,
         supercell_dimensions::Tuple{Int64, Int64, Int64},
         lattice_constant::Float64,
         periodicity::Tuple{Bool, Bool, Bool},
@@ -868,9 +995,9 @@ constructs an fcc(100) square surface.
     ) where {C,G}
 
 Creates an `AtomicLattice` instance with the specified parameters. The constructor performs the following steps:
-1. Validates the supported square-surface model and its scalar
-   and collection arguments.
-2. Constructs an FCC(100) slab using ASE with the specified lattice atom and dimensions.
+1. Validates the selected ASE surface, its matching FreeBird geometry, and its
+   scalar and collection arguments.
+2. Constructs the selected elemental slab using ASE with the specified lattice atom and dimensions.
 3. Sets the periodic boundary conditions on the slab.
 4. Adds adsorbates to the surface at the specified sites with the given coverage.
 5. Computes the lattice positions and neighbor lists.
@@ -880,6 +1007,10 @@ constructor argument.
 
 # Arguments
 - `lattice_atom::String`: Chemical symbol for the substrate (e.g., "Pt", "Cu").
+- `surface`: ASE elemental surface builder. Supported values are `fcc100`,
+  `fcc110`, `fcc111`, `fcc211`, `bcc100`, `bcc110`, `bcc111`, `hcp0001`,
+  `hcp10m10`, `diamond100`, and `diamond111`. Parentheses, underscores, and
+  hyphens in string values are ignored.
 - `supercell_dimensions::Tuple{Int64, Int64, Int64}`: Size of supercell in (x, y, z) directions.
 - `lattice_constant::Float64`: Lattice constant in Ångströms.
 - `periodicity::Tuple{Bool, Bool, Bool}`: Periodic boundary conditions for each dimension.
@@ -896,6 +1027,7 @@ constructor argument.
 
 mutable struct AtomicLattice{C,G} <: AbstractLattice
     lattice_atom::String
+    surface::Symbol
     adsorbate_atoms::Vector{String}
     supercell_dimensions::Tuple{Int64, Int64, Int64}
     lattice_constant::Float64
@@ -916,6 +1048,7 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
 
     function AtomicLattice{C,G}(;
         lattice_atom::String,
+        surface::Union{Symbol,AbstractString}=:fcc100,
         supercell_dimensions::Tuple{Int64, Int64, Int64},
         lattice_constant::Float64,
         periodicity::Tuple{Bool, Bool, Bool},
@@ -928,13 +1061,31 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
     ) where {C,G}
 
         C > 0 || throw(ArgumentError("AtomicLattice requires at least one component"))
-        G === SquareLattice || throw(ArgumentError(
-            "AtomicLattice currently constructs an ASE fcc(100) square surface " *
-            "only; got geometry $G"))
+        surface = _atomic_surface(surface)
+        expected_geometry_name = _ATOMIC_SURFACE_GEOMETRIES[surface]
+        expected_geometry = getfield(@__MODULE__, expected_geometry_name)
+        G === expected_geometry || throw(ArgumentError(
+            "ASE surface $surface uses $expected_geometry_name in AtomicLattice, " *
+            "but the requested geometry is $(nameof(G))"))
+        if surface != :fcc100 && !(periodicity[1] && periodicity[2])
+            throw(ArgumentError(
+                "AtomicLattice surface $surface currently requires periodic " *
+                "x and y boundaries so ASE named adsorption sites form a " *
+                "complete lattice; got periodicity=$periodicity"))
+        end
         isfinite(lattice_constant) && lattice_constant > 0 || throw(ArgumentError(
             "lattice_constant must be finite and positive, got $lattice_constant"))
         all(>(0), supercell_dimensions) || throw(ArgumentError(
             "supercell_dimensions must be positive, got $supercell_dimensions"))
+        if surface == :fcc211 && supercell_dimensions[1] % 3 != 0
+            throw(ArgumentError(
+                "ASE fcc211 requires supercell_dimensions[1] divisible by 3; " *
+                "got $(supercell_dimensions[1])"))
+        elseif surface == :hcp10m10 && isodd(supercell_dimensions[2])
+            throw(ArgumentError(
+                "ASE hcp10m10 requires an even supercell_dimensions[2]; " *
+                "got $(supercell_dimensions[2])"))
+        end
         isfinite(coverage) && 0.0 <= coverage <= 1.0 || throw(ArgumentError(
             "coverage must be finite and between 0 and 1, got $coverage"))
         isfinite(adsorbate_height) || throw(ArgumentError(
@@ -949,20 +1100,51 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
         end
         all(!isempty, adsorbate_atoms) || throw(ArgumentError(
             "adsorbate atom symbols must be non-empty"))
-        allowed_site_types = ("ontop", "bridge", "hollow")
-        invalid_site_types = filter(t -> t ∉ allowed_site_types, type_of_sites)
-        isempty(invalid_site_types) || throw(ArgumentError(
-            "unknown adsorption site type(s) $(invalid_site_types); expected " *
-            "only ontop, bridge, or hollow"))
+        isempty(type_of_sites) && throw(ArgumentError(
+            "type_of_sites must select at least one adsorption-site family"))
+        length(unique(type_of_sites)) == length(type_of_sites) || throw(ArgumentError(
+            "type_of_sites may not contain duplicates, got $type_of_sites"))
 
-        slab = ase.build.fcc100(lattice_atom, supercell_dimensions, a=lattice_constant)
+        slab = _build_atomic_surface(
+            surface, lattice_atom, supercell_dimensions, lattice_constant)
+        # Most ASE surface builders tag substrate layers with positive integers,
+        # but fcc211 leaves every substrate atom at tag 0.  FreeBird reserves
+        # tag 0 for atoms added by `add_adsorbate`, so normalize any untagged
+        # substrate atoms before the ASE frame becomes a mutable cache.
+        substrate_tags = pyconvert(Vector{Int}, slab.get_tags())
+        any(==(0), substrate_tags) &&
+            slab.set_tags([tag == 0 ? 1 : tag for tag in substrate_tags])
         slab.set_pbc(periodicity)
 
-        ase_lattice, all_sites, occupied = add_adsorbates!(
-            slab, adsorbate_atoms, type_of_sites;
-            height=adsorbate_height,
-            coverage=components === nothing ? coverage : 0.0,
-            nn=lattice_constant / sqrt(2), tol=0.1)
+        if surface == :fcc100
+            positions = get_positions(slab)
+            z_top = maximum(p[3] for p in positions)
+            top = filter(p -> isapprox(p[3], z_top; atol=1e-8), positions)
+            all_sites = Tuple{Float64,Float64}[]
+            "ontop" in type_of_sites && append!(all_sites, get_ontop_sites(top))
+            "bridge" in type_of_sites && append!(all_sites,
+                get_bridge_sites(top, lattice_constant / sqrt(2)))
+            if "hollow" in type_of_sites
+                cell = pyconvert(Matrix{Float64}, slab.get_cell())
+                append!(all_sites, get_hollow_sites(
+                    top, lattice_constant / sqrt(2), 0.1, cell, periodicity))
+            end
+            invalid = filter(t -> t ∉ ("ontop", "bridge", "hollow"), type_of_sites)
+            isempty(invalid) || throw(ArgumentError(
+                "adsorption site type(s) $(invalid) are not available on fcc100; " *
+                "ASE provides [\"bridge\", \"hollow\", \"ontop\"]"))
+            isempty(all_sites) && throw(ArgumentError(
+                "no adsorption sites produced for type_of_sites=$type_of_sites"))
+        else
+            all_sites = _ase_surface_sites(
+                slab, surface, supercell_dimensions, type_of_sites)
+        end
+        ase_lattice = slab
+        occupied = falses(length(all_sites))
+        if components === nothing
+            n_occupied = round(Int, coverage * length(all_sites))
+            occupied[randperm(length(all_sites))[1:n_occupied]] .= true
+        end
 
         cell = pyconvert(Matrix{Float64}, slab.get_cell())
         lattice_positions = hcat(first.(all_sites), last.(all_sites),
@@ -1006,7 +1188,7 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
                 throw(ArgumentError("AtomicLattice component masks may not overlap"))
         end
 
-        lattice = new{C,G}(lattice_atom, adsorbate_atoms, supercell_dimensions,
+        lattice = new{C,G}(lattice_atom, surface, adsorbate_atoms, supercell_dimensions,
                            lattice_constant, periodicity, lattice_positions,
                            num_nearest_neighbors, cutoff_radii, neighbors,
                            type_of_sites, all_sites, component_masks,
@@ -1051,14 +1233,26 @@ coverage(lattice::AtomicLattice) =
 """
     nn_distance(lattice::AtomicLattice)
 
-Surface nearest-neighbour distance, `a / sqrt(2)` for an fcc(100) termination.
+Shortest primitive in-plane translation of the selected ASE surface.
 
 The constructor previously passed a hardcoded `nn = 2.791` to `add_adsorbates!`.
 That is `3.947 / sqrt(2)` — the value for palladium — so the site-finding
 geometry was silently correct for exactly one `lattice_constant` and wrong for
 every other, with no error, just a different (or empty) set of adsorption sites.
 """
-nn_distance(lattice::AtomicLattice) = lattice.lattice_constant / sqrt(2)
+function nn_distance(lattice::AtomicLattice)
+    if lattice.surface == :fcc211
+        cell = pyconvert(Matrix{Float64}, lattice.ase_lattice.get_cell())
+        nx, ny, _ = lattice.supercell_dimensions
+        return min(norm(view(cell, 1, 1:2)) / nx,
+                   norm(view(cell, 2, 1:2)) / ny)
+    end
+    info = lattice.ase_lattice.info["adsorbate_info"]
+    primitive = pyconvert(Matrix{Float64}, info["cell"])
+    a = collect(view(primitive, 1, :))
+    b = collect(view(primitive, 2, :))
+    return minimum((norm(a), norm(b), norm(a - b), norm(a + b)))
+end
 
 """
     sync_ase_lattice!(lattice::AtomicLattice)
@@ -1078,7 +1272,7 @@ rather than a convention.
 
 Adsorbates are identified by ASE tag 0, which is what `ase.build.add_adsorbate`
 assigns and what `get_adsorbate_indicies` already relies on; the substrate keeps
-the layer tags `fcc100` gave it. Deletion goes in reverse index order because
+the layer tags its ASE surface builder gave it. Deletion goes in reverse index order because
 removing an atom renumbers everything after it.
 """
 function sync_ase_lattice!(lattice::AtomicLattice)

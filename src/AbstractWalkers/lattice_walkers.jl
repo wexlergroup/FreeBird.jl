@@ -1024,7 +1024,6 @@ constructor argument.
 # Returns
 - `AtomicLattice{C,G}`: An atomic lattice object with `C` adsorbate species and geometry type `G`.
 """
-
 mutable struct AtomicLattice{C,G} <: AbstractLattice
     lattice_atom::String
     surface::Symbol

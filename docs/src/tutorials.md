@@ -254,6 +254,56 @@ You can also directly call the `SLattice`, it will give the same result:
 sl = SLattice{SquareLattice}(components=[[1,2,3,4]])
 ````
 
+### Atomic adsorption lattices
+
+Use [`AtomicLattice`](@ref) when the discrete adsorption sites should also
+carry an explicit ASE surface structure. The component masks remain the Monte
+Carlo state, while the ASE atoms object is synchronized from those masks when
+an atomic energy calculator needs it.
+
+This example creates four hollow sites above a 2×2 Pd(100) slab and places one
+oxygen atom on them:
+
+````@example quick_start
+atomic = AtomicLattice{1,SquareLattice}(
+    lattice_atom="Pd",
+    surface=:fcc100,
+    supercell_dimensions=(2, 2, 1),
+    lattice_constant=3.947,
+    periodicity=(true, true, false),
+    adsorbate_atoms=["O"],
+    components=[1],
+    num_nearest_neighbors=2,
+    type_of_sites=["hollow"],
+);
+(num_sites(atomic), occupied_site_count(atomic))
+````
+
+`components=[1]` specifies the particle count and overrides `coverage`.
+For multiple adsorbates, use one component per species; sites are mutually
+exclusive, so no two species can occupy the same site.
+
+````@example quick_start
+binary_atomic = AtomicLattice{2,SquareLattice}(
+    lattice_atom="Pd",
+    surface=:fcc100,
+    supercell_dimensions=(2, 2, 1),
+    lattice_constant=3.947,
+    periodicity=(true, true, false),
+    adsorbate_atoms=["O", "H"],
+    components=[1, 1],
+    num_nearest_neighbors=2,
+    type_of_sites=["hollow"],
+);
+occupied_site_count(binary_atomic)
+````
+
+Supported ASE surfaces include fcc, bcc, hcp, and diamond low-index faces.
+The geometry type must match the selected surface: for example, `fcc100` uses
+`SquareLattice`, `fcc111` uses `TriangularLattice`, and stepped or rectangular
+faces use `GenericLattice`. See [`AtomicLattice`](@ref) for the complete map and
+site-family names.
+
 Now, let's define a Hamiltonian for the lattice system:
 
 ````@example quick_start
@@ -270,6 +320,20 @@ the Hamiltonian. Let's run the exact enumeration:
 ````@example quick_start
 df, ls = exact_enumeration(sl, ham)
 ````
+
+The same fixed-composition enumeration and lattice Monte Carlo entry points
+accept a single-species `AtomicLattice` with this Hamiltonian:
+
+````@example quick_start
+atomic_df, atomic_ls = exact_enumeration(atomic, ham);
+length(atomic_df.energy)
+````
+
+An [`ICETHamiltonian`](@ref) can evaluate a compatible one-species fcc(100)
+atomic lattice, and a [`PyMLPotential`](@ref) can evaluate any supported atomic
+lattice accepted by its ASE calculator. See [Using Machine Learning
+Interatomic Potentials (MLIPs) in FreeBird](@ref) for an MLIP grand-canonical
+nested-sampling example.
 
 The results of the exact enumeration are stored in the `df` and `ls` variables.
 The `df` variable is a `DataFrame` that contains the list of energies, as well as the configurations.
@@ -355,4 +419,3 @@ That's it! You have successfully run an exact enumeration simulation using the F
 ---
 
 *This page was generated using [Literate.jl](https://github.com/fredrikekre/Literate.jl).*
-

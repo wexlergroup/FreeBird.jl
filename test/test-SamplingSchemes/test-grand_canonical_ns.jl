@@ -544,6 +544,53 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
         @test liveset.hamiltonian === potential
         @test all(isfinite(walker.energy.val) for walker in liveset.walkers)
 
+        random_walker = deepcopy(first(walkers))
+        random_accepted, random_rate, _ = MC_random_walk!(
+            4, random_walker, potential, 1.0e12; energy_perturb=1e-9)
+        @test random_accepted
+        @test 0.0 <= random_rate <= 1.0
+
+        new_accepted, new_walker = MC_new_sample!(
+            deepcopy(first(walkers)), potential, 1.0e12;
+            energy_perturb=1e-9)
+        @test new_accepted
+        @test isfinite(new_walker.energy.val)
+
+        rejection_walker = deepcopy(first(walkers))
+        rejection_walker.energy = 1.0e13u"eV"
+        rejection_accepted, rejection_walker = MC_rejection_sampling!(
+            rejection_walker, potential, 1.0e12; energy_perturb=1e-9,
+            max_iter=2)
+        @test rejection_accepted
+        @test isfinite(rejection_walker.energy.val)
+
+        cluster_accepted, cluster_rate, cluster_walker = MC_cluster_walk!(
+            2, deepcopy(first(walkers)), potential, 1.0e12, 0.3;
+            energy_perturb=1e-9)
+        @test cluster_accepted
+        @test 0.0 <= cluster_rate <= 1.0
+        @test isfinite(cluster_walker.energy.val)
+
+        exact_df, exact_liveset = exact_enumeration(template, potential)
+        @test nrow(exact_df) == num_sites(template)
+        @test length(exact_liveset.walkers) == num_sites(template)
+        @test all(isfinite(walker.energy.val)
+                  for walker in exact_liveset.walkers)
+
+        wl_params = WangLandauParameters(
+            num_steps=2, flatness_criterion=0.0,
+            f_initial=exp(1.0), f_min=2.0,
+            energy_min=-100.0, energy_max=100.0,
+            num_energy_bins=20, max_iter=1, random_seed=20260914)
+        wl_energies, wl_configs, _, wl_entropy, wl_histogram = wang_landau(
+            template, potential, wl_params)
+        @test !isempty(wl_energies)
+        @test all(isfinite, wl_energies)
+        @test all(config isa AtomicLattice for config in wl_configs)
+        @test length(wl_entropy) == 20
+        @test length(wl_histogram) == 20
+        rm("entropy.csv", force=true)
+
         Random.seed!(20260914)
         accepted, rate, walked, _, _, move_stats = MC_grand_canonical_walk!(
             12, deepcopy(first(walkers)), potential, 1.0e12, 0.0;

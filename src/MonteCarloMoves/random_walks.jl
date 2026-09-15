@@ -311,14 +311,14 @@ function MC_random_walk_2D!(
 end
 
 """
-    MC_random_walk!(n_steps::Int, lattice::LatticeWalker, h::ClassicalHamiltonian, emax::Float64; energy_perturb::Float64=0.0, incremental::Bool=false)
+    MC_random_walk!(n_steps::Int, lattice::LatticeWalker, energy_model, emax::Float64; energy_perturb::Float64=0.0, incremental::Bool=false)
 
 Perform a Monte Carlo random walk on the lattice system.
 
 # Arguments
 - `n_steps::Int`: The number of Monte Carlo steps to perform.
 - `lattice::LatticeWalker`: The walker to perform the random walk on.
-- `h::ClassicalHamiltonian`: The lattice gas Hamiltonian.
+- `h`: A `ClassicalHamiltonian`, or a `PyMLPotential` for an `AtomicLattice`.
 - `emax::Float64`: The maximum energy allowed for accepting a move.
 - `energy_perturb::Float64=0.0`: The energy perturbation used to make degenerate configurations distinguishable.
 - `incremental::Bool=false`: Opt-in incremental energy evaluation (default
@@ -345,11 +345,13 @@ Perform a Monte Carlo random walk on the lattice system.
 """
 function MC_random_walk!(n_steps::Int,
                          lattice::LatticeWalker{C},
-                         h::ClassicalHamiltonian,
+                         h::Union{ClassicalHamiltonian,PyMLPotential},
                          emax::Float64;
                          energy_perturb::Float64=0.0,
                          incremental::Bool=false,
                          ) where C
+
+    _check_lattice_energy_model(lattice.configuration, h)
 
     n_accept = 0
     accept_this_walker = false
@@ -360,7 +362,8 @@ function MC_random_walk!(n_steps::Int,
     # site_flip_delta sums, the pattern of MC_grand_canonical_walk!. The
     # default path below is the shipped arithmetic in the shipped order with
     # the shipped random draws; the anchor is not evaluated on it.
-    use_deltas = incremental && C == 1 && supports_site_deltas(h)
+    use_deltas = incremental && C == 1 && h isa ClassicalHamiltonian &&
+                 supports_site_deltas(h)
     zero_e = 0.0 * unit(lattice.energy)
     raw = use_deltas ? interacting_energy(lattice.configuration, h) : zero_e
     step_delta = zero_e
@@ -419,13 +422,13 @@ function MC_random_walk!(n_steps::Int,
 end
 
 """
-    MC_new_sample!(lattice::LatticeWalker, h::ClassicalHamiltonian, emax::Float64; energy_perturb::Float64=0.0)
+    MC_new_sample!(lattice::LatticeWalker, energy_model, emax::Float64; energy_perturb::Float64=0.0)
 
 Generate a new sample for the lattice system.
 
 # Arguments
 - `lattice::LatticeWalker`: The walker to generate a new sample for.
-- `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
+- `h`: A `ClassicalHamiltonian`, or a `PyMLPotential` for an `AtomicLattice`.
 - `emax::Float64`: The maximum energy allowed for accepting a move.
 - `energy_perturb::Float64=0.0`: The energy perturbation used to make degenerate configurations distinguishable.
 
@@ -435,10 +438,12 @@ Generate a new sample for the lattice system.
 
 """
 function MC_new_sample!(lattice::LatticeWalker{C},
-                        h::ClassicalHamiltonian,
+                        h::Union{ClassicalHamiltonian,PyMLPotential},
                         emax::Float64;
                         energy_perturb::Float64=0.0,
                         ) where C
+
+    _check_lattice_energy_model(lattice.configuration, h)
 
     accept_this_walker = false
     emax = emax * unit(lattice.energy)
@@ -462,13 +467,13 @@ function MC_new_sample!(lattice::LatticeWalker{C},
 end
 
 """
-    MC_rejection_sampling!(lattice::LatticeWalker, h::ClassicalHamiltonian, emax::Float64; energy_perturb::Float64=0.0, max_iter=10_000)
+    MC_rejection_sampling!(lattice::LatticeWalker, energy_model, emax::Float64; energy_perturb::Float64=0.0, max_iter=10_000)
 
 Perform a Monte Carlo rejection sampling on the lattice system.
 
 # Arguments
 - `lattice::LatticeWalker`: The walker to perform the rejection sampling on.
-- `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
+- `h`: A `ClassicalHamiltonian`, or a `PyMLPotential` for an `AtomicLattice`.
 - `emax::Float64`: The maximum energy allowed for accepting a move.
 - `energy_perturb::Float64=0.0`: The energy perturbation used to make degenerate configurations distinguishable.
 - `max_iter::Int=10_000`: The maximum number of iterations to perform.
@@ -479,11 +484,13 @@ Perform a Monte Carlo rejection sampling on the lattice system.
 
 """
 function MC_rejection_sampling!(lattice::LatticeWalker{C},
-                        h::ClassicalHamiltonian,
+                        h::Union{ClassicalHamiltonian,PyMLPotential},
                         emax::Float64;
                         energy_perturb::Float64=0.0,
                         max_iter::Int = 10_000,
                         ) where C
+
+    _check_lattice_energy_model(lattice.configuration, h)
 
     accept_this_walker = false
     emax = emax * unit(lattice.energy)
@@ -747,14 +754,14 @@ end
 
 
 """
-    MC_cluster_walk!(n_steps::Int, lattice::LatticeWalker{C}, h::ClassicalHamiltonian, emax::Float64, cluster_p::Float64; energy_perturb::Float64=0.0)
+    MC_cluster_walk!(n_steps::Int, lattice::LatticeWalker{C}, energy_model, emax::Float64, cluster_p::Float64; energy_perturb::Float64=0.0)
 
 Perform a sequence of geometric cluster moves on the lattice system, accepting each if `E < emax`.
 
 # Arguments
 - `n_steps::Int`: The number of cluster move attempts to perform.
 - `lattice::LatticeWalker{C}`: The walker to perform cluster moves on.
-- `h::ClassicalHamiltonian`: The lattice Hamiltonian.
+- `h`: A `ClassicalHamiltonian`, or a `PyMLPotential` for an `AtomicLattice`.
 - `emax::Float64`: The maximum energy allowed for accepting a move (dimensionless).
 - `cluster_p::Float64`: The growth probability for BFS cluster construction.
 - `energy_perturb::Float64=0.0`: Energy perturbation to break degeneracies.
@@ -766,10 +773,11 @@ Perform a sequence of geometric cluster moves on the lattice system, accepting e
 """
 function MC_cluster_walk!(n_steps::Int,
                           lattice::LatticeWalker{C},
-                          h::ClassicalHamiltonian,
+                          h::Union{ClassicalHamiltonian,PyMLPotential},
                           emax::Float64,
                           cluster_p::Float64;
                           energy_perturb::Float64=0.0) where C
+    _check_lattice_energy_model(lattice.configuration, h)
     n_accept = 0
     accept_this_walker = false
     emax_u = emax * unit(lattice.energy)
@@ -800,6 +808,15 @@ end
 # ======================================================================
 # Grand-canonical move primitives
 # ======================================================================
+
+_check_lattice_energy_model(::AbstractLattice, ::ClassicalHamiltonian) = nothing
+_check_lattice_energy_model(::AtomicLattice, ::PyMLPotential) = nothing
+function _check_lattice_energy_model(lattice::AbstractLattice,
+                                     ::PyMLPotential)
+    throw(ArgumentError(
+        "PyMLPotential lattice sampling requires an AtomicLattice " *
+        "configuration; got $(typeof(lattice))"))
+end
 
 """
     random_microstate!(lattice::AbstractLattice; p::Float64=0.5)
@@ -1089,11 +1106,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                   bias_shells::Int=1,
                                   incremental::Bool=false,
                                   swap_mode::Symbol=:uniform_pair)
-    if h isa PyMLPotential && !(lattice.configuration isa AtomicLattice)
-        throw(ArgumentError(
-            "PyMLPotential lattice walks require an AtomicLattice " *
-            "configuration; got $(typeof(lattice.configuration))"))
-    end
+    _check_lattice_energy_model(lattice.configuration, h)
     if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
         throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
     end
@@ -1503,11 +1516,7 @@ function MC_grand_canonical_walk!(
     incremental::Bool=false,
     swap_mode::Symbol=:uniform_pair,
 ) where C
-    if h isa PyMLPotential && !(lattice.configuration isa AtomicLattice)
-        throw(ArgumentError(
-            "PyMLPotential lattice walks require an AtomicLattice " *
-            "configuration; got $(typeof(lattice.configuration))"))
-    end
+    _check_lattice_energy_model(lattice.configuration, h)
     length(chemical_potentials) == C || throw(DimensionMismatch(
         "chemical_potentials must contain one value per lattice component " *
         "($C), got $(length(chemical_potentials))"))

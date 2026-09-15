@@ -182,13 +182,14 @@ energies, liveset, _ = nested_sampling(ls, ns_params, 10_000, mc, save)
 
 Fundamentally, using other MLIPs follows the same procedure as above. Be aware of the computational costs with MLIPS, one typically needs to use GPU for fast energy evaluations, or massively parallel CPU computations to distribute the workload.
 
-### Grand-canonical sampling on an `AtomicLattice`
+### Lattice sampling on an `AtomicLattice`
 
-A `PyMLPotential` can also supply the energy model for lattice
-grand-canonical nested sampling when the configurations are `AtomicLattice`
-objects. The occupation masks remain the Monte Carlo state; FreeBird
-synchronizes the derived ASE structure before each Python-calculator energy
-evaluation.
+A `PyMLPotential` can also supply the energy model for lattice sampling when
+the configurations are `AtomicLattice` objects. This includes fixed-N NVT and
+nested sampling, grand-canonical nested sampling, fixed-composition exact
+enumeration, and Wang–Landau sampling. The occupation masks remain the Monte
+Carlo state; FreeBird synchronizes the derived ASE structure before each
+Python-calculator energy evaluation.
 
 ```julia
 using FreeBird
@@ -224,10 +225,11 @@ df, ls, params = grand_canonical_nested_sampling(
 ```
 
 Vector chemical potentials and multi-species `AtomicLattice` configurations
-use the same route. A `PyMLPotential` cannot be paired with `MLattice`, which
-has no atomic structure for an ASE calculator; that combination raises an
-`ArgumentError` at liveset construction. MLIP lattice proposals currently
-recompute the complete energy, so the classical-Hamiltonian
-`incremental=true` optimization does not apply. These serial Python calls are
-appropriate for smoke tests and small calculations; production MLIP GCNS can
-be substantially more expensive than a classical lattice Hamiltonian.
+use the same grand-canonical route. A `PyMLPotential` cannot be paired with
+`MLattice`, which has no atomic structure for an ASE calculator; that
+combination is rejected at the relevant entry point. MLIP
+lattice proposals currently recompute the complete energy, so the
+classical-Hamiltonian `incremental=true` optimization does not apply. These
+serial Python calls are appropriate for smoke tests and small calculations;
+production MLIP lattice sampling can be substantially more expensive than a
+classical lattice Hamiltonian.

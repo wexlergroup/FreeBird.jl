@@ -1866,7 +1866,7 @@ function bragg_amplitude(lattice::MLattice{1,SquareLattice}, m::Int, n::Int)
     return abs(z) / (d1 * d2)
 end
 
-function bragg_amplitude(lattice::AtomicLattice{1,SquareLattice}, m::Int, n::Int)
+function bragg_amplitude(lattice::AtomicLattice{1}, m::Int, n::Int)
     lattice.periodicity[1] && lattice.periodicity[2] || throw(ArgumentError(
         "bragg_amplitude for AtomicLattice requires periodic x and y boundaries"))
     fractions = _atomic_site_fractions(lattice)
@@ -1876,6 +1876,50 @@ function bragg_amplitude(lattice::AtomicLattice{1,SquareLattice}, m::Int, n::Int
         z += cispi(2 * (m * f[1] + n * f[2]))
     end
     return abs(z) / num_sites(lattice)
+end
+
+"""
+    order_parameter_sqrt3(lattice::AtomicLattice{1,TriangularLattice}) -> Float64
+
+Three-sublattice order parameter for a one-site triangular adsorption lattice,
+evaluated at a K point of the primitive ASE surface cell.  A perfect
+(sqrt(3) x sqrt(3))R30-degree overlayer at coverage 1/3 returns `1/3`.
+
+The selected adsorption-site family must form exactly one translational orbit
+(`num_sites(lattice) == d1*d2`), and both in-plane dimensions must be divisible
+by three so the ordered state closes across the periodic boundaries.
+"""
+function order_parameter_sqrt3(lattice::AtomicLattice{1,TriangularLattice})
+    d1, d2, _ = lattice.supercell_dimensions
+    num_sites(lattice) == d1 * d2 || throw(ArgumentError(
+        "order_parameter_sqrt3 for AtomicLattice requires one translational " *
+        "adsorption-site orbit ($((d1 * d2)) sites), got $(num_sites(lattice))"))
+    if d1 % 3 != 0 || d2 % 3 != 0
+        throw(ArgumentError("order_parameter_sqrt3 for AtomicLattice requires " *
+            "both in-plane dimensions divisible by 3, got ($d1, $d2)"))
+    end
+    return bragg_amplitude(lattice, d1 ÷ 3, -(d2 ÷ 3))
+end
+
+"""
+    order_parameter_p2x2(lattice::AtomicLattice{1,TriangularLattice}) -> Float64
+
+Orientation-independent p(2x2) order parameter for a one-site triangular
+adsorption lattice.  It is the quadrature sum of the three primitive-cell M
+points; a perfect p(2x2) overlayer at coverage 1/4 returns `sqrt(3)/4`.
+"""
+function order_parameter_p2x2(lattice::AtomicLattice{1,TriangularLattice})
+    d1, d2, _ = lattice.supercell_dimensions
+    num_sites(lattice) == d1 * d2 || throw(ArgumentError(
+        "order_parameter_p2x2 for AtomicLattice requires one translational " *
+        "adsorption-site orbit ($((d1 * d2)) sites), got $(num_sites(lattice))"))
+    if isodd(d1) || isodd(d2)
+        throw(ArgumentError("order_parameter_p2x2 for AtomicLattice requires " *
+            "even in-plane dimensions, got ($d1, $d2)"))
+    end
+    return sqrt(bragg_amplitude(lattice, d1 ÷ 2, 0)^2 +
+                bragg_amplitude(lattice, 0, d2 ÷ 2)^2 +
+                bragg_amplitude(lattice, d1 ÷ 2, d2 ÷ 2)^2)
 end
 
 """

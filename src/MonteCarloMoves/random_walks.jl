@@ -555,6 +555,19 @@ function generate_random_new_lattice_sample!(lattice::MLattice{C}) where C
     return lattice
 end
 
+function generate_random_new_lattice_sample!(lattice::AtomicLattice{C}) where C
+    counts = sum.(lattice.components)
+    foreach(component -> fill!(component, false), lattice.components)
+    available = collect(1:num_sites(lattice))
+    for c in 1:C
+        chosen = sample(available, counts[c], replace=false, ordered=true)
+        lattice.components[c][chosen] .= true
+        filter!(site -> site ∉ chosen, available)
+    end
+    lattice.ase_dirty = true
+    return lattice
+end
+
 """
     generate_random_new_lattice_sample!(lattice::SLattice)
 
@@ -645,8 +658,11 @@ function _lattice_walk_apply!(lattice::SLattice, hop_from::Int, hop_to::Int)
 end
 
 function _lattice_walk_apply!(lattice::AtomicLattice, hop_from::Int, hop_to::Int)
-    is_occupied(lattice, hop_from) != is_occupied(lattice, hop_to) &&
-        swap_sites!(lattice, hop_from, hop_to)
+    from = ntuple(c -> is_occupied(lattice, hop_from, c),
+                  num_lattice_components(lattice))
+    to = ntuple(c -> is_occupied(lattice, hop_to, c),
+                num_lattice_components(lattice))
+    from != to && swap_sites!(lattice, hop_from, hop_to)
     return lattice
 end
 
@@ -805,6 +821,16 @@ function random_microstate!(lattice::AbstractLattice; p::Float64=0.5)
     return lattice
 end
 
+function random_microstate!(lattice::AtomicLattice{C}; p::Float64=0.5) where C
+    0.0 <= p <= 1.0 || throw(ArgumentError("p must lie in [0, 1], got $p"))
+    foreach(component -> fill!(component, false), lattice.components)
+    for site in 1:num_sites(lattice)
+        rand() < p && (lattice.components[rand(1:C)][site] = true)
+    end
+    lattice.ase_dirty = true
+    return lattice
+end
+
 """
     lattice_insert_particle!(lattice::SLattice)
 
@@ -830,6 +856,17 @@ function lattice_insert_particle!(lattice::AbstractLattice)
     empty_sites = empty_indices(lattice)
     site = rand(empty_sites)
     set_occupied!(lattice, site, true)
+    return true, lattice, site
+end
+
+function lattice_insert_particle!(lattice::AtomicLattice{C}, component::Int=1) where C
+    checkbounds(lattice.components, component)
+    empty_sites = findall(1:num_sites(lattice)) do site
+        all(c -> !is_occupied(lattice, site, c), 1:C)
+    end
+    isempty(empty_sites) && return false, lattice, 0
+    site = rand(empty_sites)
+    set_occupied!(lattice, site, true, component)
     return true, lattice, site
 end
 
@@ -859,8 +896,17 @@ function lattice_delete_particle!(lattice::AbstractLattice)
     return true, lattice, site
 end
 
+function lattice_delete_particle!(lattice::AtomicLattice{C}, component::Int=1) where C
+    checkbounds(lattice.components, component)
+    occupied_sites = occupied_indices(lattice, component)
+    isempty(occupied_sites) && return false, lattice, 0
+    site = rand(occupied_sites)
+    set_occupied!(lattice, site, false, component)
+    return true, lattice, site
+end
+
 """
-    lattice_biased_sites(lattice::SLattice; predicate::Symbol=:contact, shells::Int=1)
+    lattice_biased_sites(lattice::AbstractLattice; predicate::Symbol=:contact, shells::Int=1)
 
 Return the indices of empty sites selected by an occupancy predicate over
 neighbor shells `1:shells`:
@@ -879,7 +925,7 @@ Useful as a nested-sampling observable, e.g.
 Throws `ArgumentError` for an unknown predicate, `shells < 1`, or `shells`
 exceeding the lattice's neighbor-shell count.
 """
-function lattice_biased_sites(lattice::SLattice; predicate::Symbol=:contact, shells::Int=1)
+function lattice_biased_sites(lattice::AbstractLattice; predicate::Symbol=:contact, shells::Int=1)
     if predicate !== :contact && predicate !== :cavity
         throw(ArgumentError("unknown predicate :$predicate; expected :contact or :cavity"))
     end
@@ -894,14 +940,15 @@ function lattice_biased_sites(lattice::SLattice; predicate::Symbol=:contact, she
             "lattice provides only $n_shells (= length(cutoff_radii)); " *
             "extend cutoff_radii so every counted shell exists"))
     end
-    occ = lattice.components[1]
+    n_components = num_lattice_components(lattice)
+    occupied_at(site) = any(c -> is_occupied(lattice, site, c), 1:n_components)
     sites = Int[]
-    for site in eachindex(occ)
-        occ[site] && continue
+    for site in 1:num_sites(lattice)
+        occupied_at(site) && continue
         has_occupied_neighbor = false
         for shell in 1:shells
             for nb in neighbors[site][shell]
-                if occ[nb]
+                if occupied_at(nb)
                     has_occupied_neighbor = true
                     break
                 end

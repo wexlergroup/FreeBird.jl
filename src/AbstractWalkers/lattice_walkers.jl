@@ -530,6 +530,82 @@ function add_adsorbates!(slab, adsorbate_atoms, type_of_sites; height, coverage,
     return slab, all_sites, occupations
 end
 
+"""Return nested cutoffs for the first `n_shells` periodic site distances."""
+function _site_shell_cutoffs(positions::Matrix{Float64}, cell::Matrix{Float64},
+                             periodicity::Tuple{Bool,Bool,Bool}, n_shells::Int)
+    supercell = permutedims(cell) # ASE stores cell vectors as rows
+    # ASE surface builders leave the non-periodic third cell vector at zero
+    # unless the caller adds vacuum. Match `compute_neighbors`' 2-D reciprocal
+    # construction so a perfectly valid slab is not rejected as singular.
+    singular_2d = !periodicity[3] && all(iszero, view(supercell, :, 3))
+    if singular_2d
+        reciprocal = zeros(3, 3)
+        reciprocal[1:2, 1:2] = inv(supercell[1:2, 1:2])
+    else
+        reciprocal = inv(supercell)
+    end
+    distances = Float64[]
+    n_sites = size(positions, 1)
+    n_sites >= 2 || throw(ArgumentError(
+        "at least two adsorption sites are required to build neighbor shells"))
+    for i in 1:(n_sites - 1), j in (i + 1):n_sites
+        d = _minimum_image_distance(
+            supercell, reciprocal, periodicity,
+            view(positions, i, :), view(positions, j, :))
+        d > 1e-10 && push!(distances, d)
+    end
+    sort!(distances)
+    shells = Float64[]
+    for d in distances
+        (isempty(shells) || !isapprox(d, last(shells); rtol=1e-8, atol=1e-10)) &&
+            push!(shells, d)
+    end
+    length(shells) >= n_shells || throw(ArgumentError(
+        "requested $n_shells adsorption-site neighbor shells, but this lattice " *
+        "contains only $(length(shells)) distinct nonzero periodic distances"))
+    return shells[1:n_shells] .* (1 + 1e-8)
+end
+
+"""
+Build the site-index point-inversion table used by geometric cluster moves.
+
+An empty table means the selected adsorption-site set is not closed under
+periodic point inversion. A nonempty table is checked row-by-row as both a
+bijection and an involution before it is accepted.
+"""
+function _build_atomic_reflection_table(
+        sites::Vector{Tuple{Float64,Float64}}, cell::Matrix{Float64},
+        periodicity::Tuple{Bool,Bool,Bool}, tol::Float64)
+    periodicity[1] && periodicity[2] || return zeros(Int, 0, 0)
+    inplane = [cell[1, 1] cell[2, 1]; cell[1, 2] cell[2, 2]]
+    inv_inplane = inv(inplane)
+    fractional = [inv_inplane * [x, y] for (x, y) in sites]
+    n = length(sites)
+    table = zeros(Int, n, n)
+    for pivot in 1:n, site in 1:n
+        reflected = mod.(2 .* fractional[pivot] .- fractional[site], 1.0)
+        best = 0
+        best_distance = Inf
+        for candidate in 1:n
+            delta = fractional[candidate] .- reflected
+            delta .-= round.(delta)
+            distance = norm(inplane * delta)
+            if distance < best_distance
+                best = candidate
+                best_distance = distance
+            end
+        end
+        best_distance <= tol || return zeros(Int, 0, 0)
+        table[pivot, site] = best
+    end
+    for pivot in 1:n
+        length(unique(view(table, pivot, :))) == n || return zeros(Int, 0, 0)
+        all(table[pivot, table[pivot, site]] == site for site in 1:n) ||
+            return zeros(Int, 0, 0)
+    end
+    return table
+end
+
 """
     abstract type LatticeGeometry
 
@@ -750,23 +826,32 @@ end
 """
     mutable struct AtomicLattice{C,G} <: AbstractLattice
 
-A mutable struct representing an atomic lattice with adsorbates using ASE (Atomic Simulation Environment).
+A mutable struct representing an atomic adsorption lattice using ASE
+(Atomic Simulation Environment).
+
+Multiple adsorbate species use the same mutually-exclusive component masks as
+`MLattice`. `G == SquareLattice` is currently required because the ASE builder
+constructs an fcc(100) square surface.
 
 # Fields
 - `lattice_atom::String`: The chemical symbol of the lattice substrate atom.
 - `adsorbate_atoms::Vector{String}`: The chemical symbols of the adsorbate species.
 - `all_sites::Vector{Tuple{Float64, Float64}}`: Coordinates of every adsorption site, in geometric order.
-- `occupations::Vector{Bool}`: **The ground truth.** Indexed over `all_sites`: site `i` is filled iff `occupations[i]`.
+- `components::Vector{Vector{Bool}}`: **The ground truth.** One mask per
+  adsorbate species, indexed over `all_sites`, with at most one species per site.
+- `reflection_table::Matrix{Int}`: Validated periodic point-inversion map for
+  cluster moves; empty when the selected site set lacks that symmetry.
 - `adsorbate_height::Float64`: Height at which adsorbates are placed. Stored rather than assumed, so the constructor and `sync_ase_lattice!` cannot disagree about it.
-- `ase_dirty::Bool`: Whether `ase_lattice` is stale with respect to `occupations`.
+- `ase_dirty::Bool`: Whether `ase_lattice` is stale with respect to `components`.
 - `supercell_dimensions::Tuple{Int64, Int64, Int64}`: The dimensions of the supercell.
 - `lattice_constant::Float64`: The lattice constant of the unit cell.
 - `periodicity::Tuple{Bool, Bool, Bool}`: The periodic boundary conditions in each dimension.
-- `lattice_positions::Matrix{Float64}`: The positions of the lattice points.
-- `num_nearest_neighbors::Int64`: The number of nearest neighbors to consider.
-- `neighbors::Vector{Vector{Vector{Int}}}`: The neighbor lists for each lattice point.
+- `lattice_positions::Matrix{Float64}`: The adsorption-site positions, with z=0.
+- `num_nearest_neighbors::Int64`: The number of adsorption-site neighbor shells.
+- `cutoff_radii::Vector{Float64}`: Nested cutoffs for those shells.
+- `neighbors::Vector{Vector{Vector{Int}}}`: Neighbor lists indexed over `all_sites`.
 - `type_of_sites::Vector{String}`: The types of adsorption sites (e.g., "ontop", "bridge", "hollow").
-- `ase_lattice::Py`: The ASE atoms object. A **derived cache** of `occupations`, not a second source of truth — see `sync_ase_lattice!`.
+- `ase_lattice::Py`: The ASE atoms object. A **derived cache** of `components`, not a second source of truth — see `sync_ase_lattice!`.
 
 # Constructor
     AtomicLattice{C,G}(;
@@ -776,19 +861,22 @@ A mutable struct representing an atomic lattice with adsorbates using ASE (Atomi
         periodicity::Tuple{Bool, Bool, Bool},
         adsorbate_atoms::Vector{String}=[""],
         coverage::Float64 = 0.5,
+        components::Union{Nothing,Vector{Int},Vector{Vector{Bool}}}=nothing,
         num_nearest_neighbors::Int64,
         type_of_sites::Vector{String},
         adsorbate_height::Float64 = 1.0
     ) where {C,G}
 
 Creates an `AtomicLattice` instance with the specified parameters. The constructor performs the following steps:
-1. Validates that the number of adsorbate species matches the expected value `C`.
+1. Validates the supported square-surface model and its scalar
+   and collection arguments.
 2. Constructs an FCC(100) slab using ASE with the specified lattice atom and dimensions.
 3. Sets the periodic boundary conditions on the slab.
 4. Adds adsorbates to the surface at the specified sites with the given coverage.
 5. Computes the lattice positions and neighbor lists.
 
-Throws an `ArgumentError` if the number of adsorbate species does not match `C`.
+Throws an `ArgumentError` for an unsupported component/geometry type or invalid
+constructor argument.
 
 # Arguments
 - `lattice_atom::String`: Chemical symbol for the substrate (e.g., "Pt", "Cu").
@@ -797,8 +885,10 @@ Throws an `ArgumentError` if the number of adsorbate species does not match `C`.
 - `periodicity::Tuple{Bool, Bool, Bool}`: Periodic boundary conditions for each dimension.
 - `adsorbate_atoms::Vector{String}`: Chemical symbols of adsorbates (default: `[""]`).
 - `coverage::Float64`: Fractional surface coverage (default: `0.5`).
+- `components`: Optional per-species particle counts, or explicit Boolean
+  masks over the adsorption sites. When supplied, this overrides `coverage`.
 - `num_nearest_neighbors::Int64`: Number of nearest neighbors for neighbor list construction.
-- `type_of_sites::Vector{String}`: Adsorption site types for each adsorbate species.
+- `type_of_sites::Vector{String}`: Adsorption-site families to include.
 
 # Returns
 - `AtomicLattice{C,G}`: An atomic lattice object with `C` adsorbate species and geometry type `G`.
@@ -812,11 +902,13 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
     periodicity::Tuple{Bool, Bool, Bool}
     lattice_positions::Matrix{Float64}
     num_nearest_neighbors::Int64
+    cutoff_radii::Vector{Float64}
     neighbors::Vector{Vector{Vector{Int}}}
     type_of_sites::Vector{String}
     all_sites::Vector{Tuple{Float64, Float64}}
-    # ── ground truth ────────────────────────────────────────────────────────
-    occupations::Vector{Bool}
+    # ── ground truth and site-index geometry ───────────────────────────────
+    components::Vector{Vector{Bool}}
+    reflection_table::Matrix{Int}
     adsorbate_height::Float64
     # ── derived cache of the above; see sync_ase_lattice! ───────────────────
     ase_lattice::Py
@@ -829,36 +921,98 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
         periodicity::Tuple{Bool, Bool, Bool},
         adsorbate_atoms::Vector{String}=[""],
         coverage::Float64 = 0.5,
+        components::Union{Nothing,Vector{Int},Vector{Vector{Bool}}}=nothing,
         num_nearest_neighbors::Int64,
         type_of_sites::Vector{String},
         adsorbate_height::Float64 = 1.0
     ) where {C,G}
+
+        C > 0 || throw(ArgumentError("AtomicLattice requires at least one component"))
+        G === SquareLattice || throw(ArgumentError(
+            "AtomicLattice currently constructs an ASE fcc(100) square surface " *
+            "only; got geometry $G"))
+        isfinite(lattice_constant) && lattice_constant > 0 || throw(ArgumentError(
+            "lattice_constant must be finite and positive, got $lattice_constant"))
+        all(>(0), supercell_dimensions) || throw(ArgumentError(
+            "supercell_dimensions must be positive, got $supercell_dimensions"))
+        isfinite(coverage) && 0.0 <= coverage <= 1.0 || throw(ArgumentError(
+            "coverage must be finite and between 0 and 1, got $coverage"))
+        isfinite(adsorbate_height) || throw(ArgumentError(
+            "adsorbate_height must be finite, got $adsorbate_height"))
+        num_nearest_neighbors > 0 || throw(ArgumentError(
+            "num_nearest_neighbors must be positive, got $num_nearest_neighbors"))
 
         num_adsorbates = length(adsorbate_atoms)
 
         if num_adsorbates != C
             throw(ArgumentError("For a $C-adsorbate system, got $num_adsorbates adsorbates"))
         end
+        all(!isempty, adsorbate_atoms) || throw(ArgumentError(
+            "adsorbate atom symbols must be non-empty"))
+        allowed_site_types = ("ontop", "bridge", "hollow")
+        invalid_site_types = filter(t -> t ∉ allowed_site_types, type_of_sites)
+        isempty(invalid_site_types) || throw(ArgumentError(
+            "unknown adsorption site type(s) $(invalid_site_types); expected " *
+            "only ontop, bridge, or hollow"))
 
         slab = ase.build.fcc100(lattice_atom, supercell_dimensions, a=lattice_constant)
         slab.set_pbc(periodicity)
 
-        ase_lattice, all_sites, occupations = add_adsorbates!(
+        ase_lattice, all_sites, occupied = add_adsorbates!(
             slab, adsorbate_atoms, type_of_sites;
-            height=adsorbate_height, coverage=coverage,
+            height=adsorbate_height,
+            coverage=components === nothing ? coverage : 0.0,
             nn=lattice_constant / sqrt(2), tol=0.1)
 
-        lattice_vectors = [lattice_constant 0 0; 0 lattice_constant 0; 0 0 1]
-        lattice_positions = get_lattice_positions(lattice_vectors, supercell_dimensions)
-        cutoff_radii = find_n_cutoff_radii(lattice_positions, num_nearest_neighbors)
-        supercell_lattice_vectors = lattice_vectors * Diagonal([supercell_dimensions[1], supercell_dimensions[2], supercell_dimensions[3]])
-        neighbors = compute_neighbors(supercell_lattice_vectors, lattice_positions,
+        cell = pyconvert(Matrix{Float64}, slab.get_cell())
+        lattice_positions = hcat(first.(all_sites), last.(all_sites),
+                                 zeros(length(all_sites)))
+        cutoff_radii = _site_shell_cutoffs(
+            lattice_positions, cell, periodicity, num_nearest_neighbors)
+        neighbors = compute_neighbors(permutedims(cell), lattice_positions,
                                       periodicity, cutoff_radii)
-        return new{C,G}(lattice_atom, adsorbate_atoms, supercell_dimensions,
-                        lattice_constant, periodicity, lattice_positions,
-                        num_nearest_neighbors, neighbors, type_of_sites,
-                        all_sites, occupations, adsorbate_height,
-                        ase_lattice, false)
+        reflection_table = _build_atomic_reflection_table(
+            all_sites, cell, periodicity, first(cutoff_radii) * 1e-6)
+
+        component_masks = [falses(length(all_sites)) for _ in 1:C]
+        if components === nothing
+            for (k, site) in enumerate(findall(occupied))
+                component_masks[mod1(k, C)][site] = true
+            end
+        elseif components isa Vector{Int}
+            length(components) == C || throw(ArgumentError(
+                "For a $C-adsorbate system, got $(length(components)) component counts"))
+            all(>=(0), components) || throw(ArgumentError(
+                "component counts must be nonnegative, got $components"))
+            sum(components) <= length(all_sites) || throw(ArgumentError(
+                "component counts request $(sum(components)) occupied sites, " *
+                "but the adsorption lattice has only $(length(all_sites))"))
+            shuffled = randperm(length(all_sites))
+            cursor = 1
+            for c in 1:C
+                n = components[c]
+                component_masks[c][shuffled[cursor:(cursor + n - 1)]] .= true
+                cursor += n
+            end
+        else
+            length(components) == C || throw(ArgumentError(
+                "For a $C-adsorbate system, got $(length(components)) component masks"))
+            all(length(mask) == length(all_sites) for mask in components) ||
+                throw(ArgumentError("every component mask must have " *
+                    "$(length(all_sites)) entries"))
+            component_masks = copy.(components)
+            any(sum(mask[site] for mask in component_masks) > 1
+                for site in eachindex(first(component_masks))) &&
+                throw(ArgumentError("AtomicLattice component masks may not overlap"))
+        end
+
+        lattice = new{C,G}(lattice_atom, adsorbate_atoms, supercell_dimensions,
+                           lattice_constant, periodicity, lattice_positions,
+                           num_nearest_neighbors, cutoff_radii, neighbors,
+                           type_of_sites, all_sites, component_masks,
+                           reflection_table, adsorbate_height,
+                           ase_lattice, true)
+        return sync_ase_lattice!(lattice)
     end
 end
 
@@ -870,7 +1024,7 @@ frame. PythonCall's `Py` wrapper is otherwise copied without cloning the Python
 object it refers to, which lets synchronization or an MLIP evaluation through
 one Julia copy mutate another copy's cache.
 
-The occupancy vector remains the source of truth. A dirty source produces a
+The component masks remain the source of truth. A dirty source produces a
 dirty copy whose independent ASE cache is rebuilt on its next
 `sync_ase_lattice!` call.
 """
@@ -885,13 +1039,14 @@ end
 """
     coverage(lattice::AtomicLattice)
 
-Fractional coverage, derived from `occupations`.
+Fractional coverage, derived from `components`.
 
 This was a stored field. It is computed now because a stored coverage is a
-second copy of what `occupations` already says, and the two can disagree — the
+second copy of what `components` already say, and the two can disagree — the
 whole point of W11 is that this type has one place where occupancy lives.
 """
-coverage(lattice::AtomicLattice) = sum(lattice.occupations) / length(lattice.occupations)
+coverage(lattice::AtomicLattice) =
+    sum(sum, lattice.components) / length(lattice.all_sites)
 
 """
     nn_distance(lattice::AtomicLattice)
@@ -908,9 +1063,9 @@ nn_distance(lattice::AtomicLattice) = lattice.lattice_constant / sqrt(2)
 """
     sync_ase_lattice!(lattice::AtomicLattice)
 
-Rebuild `ase_lattice`'s adsorbates from `occupations`, and clear `ase_dirty`.
+Rebuild `ase_lattice`'s adsorbates from `components`, and clear `ase_dirty`.
 
-`ase_lattice` is a cache. Occupancy moves update `occupations` and set
+`ase_lattice` is a cache. Occupancy moves update `components` and set
 `ase_dirty`; the ASE frame is only made to agree when something actually needs
 to look at it — an energy evaluation through a Python calculator, or writing a
 trajectory. Doing it eagerly on every move would put a Python round trip in the
@@ -936,11 +1091,12 @@ function sync_ase_lattice!(lattice::AtomicLattice)
         slab.__delitem__(pylist([i - 1 for i in reverse(ads)]))
     end
 
-    adsorbate = lattice.adsorbate_atoms[1]
-    for i in findall(lattice.occupations)
-        x, y = lattice.all_sites[i]
-        ase.build.add_adsorbate(slab, adsorbate;
-                                height=lattice.adsorbate_height, position=(x, y))
+    for (component, adsorbate) in zip(lattice.components, lattice.adsorbate_atoms)
+        for i in findall(component)
+            x, y = lattice.all_sites[i]
+            ase.build.add_adsorbate(slab, adsorbate;
+                                    height=lattice.adsorbate_height, position=(x, y))
+        end
     end
 
     lattice.ase_dirty = false
@@ -1207,6 +1363,16 @@ function occupied_site_count(MLattice::MLattice{C}) where C
     return occupancy
 end
 
+occupied_site_count(lattice::AtomicLattice) = sum.(lattice.components)
+
+"""Fractional in-plane coordinates of AtomicLattice adsorption sites."""
+function _atomic_site_fractions(lattice::AtomicLattice)
+    cell = pyconvert(Matrix{Float64}, lattice.ase_lattice.get_cell())
+    inplane = [cell[1, 1] cell[2, 1]; cell[1, 2] cell[2, 2]]
+    reciprocal = inv(inplane)
+    return [mod.(reciprocal * [x, y], 1.0) for (x, y) in lattice.all_sites]
+end
+
 """
     order_parameter_c2x2(lattice::MLattice{1,SquareLattice}) -> Float64
 
@@ -1258,6 +1424,15 @@ function order_parameter_c2x2(lattice::MLattice{1,SquareLattice})
         end
     end
     return abs(acc) / (d1 * d2)
+end
+
+function order_parameter_c2x2(lattice::AtomicLattice{1,SquareLattice})
+    d1, d2, _ = lattice.supercell_dimensions
+    if isodd(d1) || isodd(d2)
+        throw(ArgumentError("order_parameter_c2x2 requires even in-plane " *
+            "supercell dimensions, got ($d1, $d2)"))
+    end
+    return bragg_amplitude(lattice, d1 ÷ 2, d2 ÷ 2)
 end
 
 """
@@ -1497,6 +1672,18 @@ function bragg_amplitude(lattice::MLattice{1,SquareLattice}, m::Int, n::Int)
     return abs(z) / (d1 * d2)
 end
 
+function bragg_amplitude(lattice::AtomicLattice{1,SquareLattice}, m::Int, n::Int)
+    lattice.periodicity[1] && lattice.periodicity[2] || throw(ArgumentError(
+        "bragg_amplitude for AtomicLattice requires periodic x and y boundaries"))
+    fractions = _atomic_site_fractions(lattice)
+    z = 0.0 + 0.0im
+    for site in occupied_indices(lattice)
+        f = fractions[site]
+        z += cispi(2 * (m * f[1] + n * f[2]))
+    end
+    return abs(z) / num_sites(lattice)
+end
+
 """
     order_parameter_stripe(lattice::MLattice{1,SquareLattice}; period::Int = 2) -> Float64
 
@@ -1573,6 +1760,19 @@ function order_parameter_stripe(lattice::MLattice{1,SquareLattice}; period::Int=
             "divide both in-plane supercell dimensions, since both stripe " *
             "orientations are evaluated and an incommensurate orientation " *
             "leaks a spurious amplitude; period $period does not divide $bad"))
+    end
+    return sqrt(bragg_amplitude(lattice, d1 ÷ period, 0)^2 +
+                bragg_amplitude(lattice, 0, d2 ÷ period)^2)
+end
+
+function order_parameter_stripe(lattice::AtomicLattice{1,SquareLattice}; period::Int=2)
+    d1, d2, _ = lattice.supercell_dimensions
+    period >= 2 || throw(ArgumentError(
+        "order_parameter_stripe requires period >= 2, got $period"))
+    if d1 % period != 0 || d2 % period != 0
+        bad = d1 % period != 0 ? d1 : d2
+        throw(ArgumentError("order_parameter_stripe requires period $period " *
+            "to divide both in-plane dimensions; it does not divide $bad"))
     end
     return sqrt(bragg_amplitude(lattice, d1 ÷ period, 0)^2 +
                 bragg_amplitude(lattice, 0, d2 ÷ period)^2)
@@ -2152,7 +2352,7 @@ site permutation, which excludes homometric aliases while preserving the
 torus counting convention. For `K ≤ 3` the multiset determines the figure
 and the two methods agree.
 """
-function enumerate_motif_embeddings(lattice::MLattice, distances::AbstractVector{<:Real};
+function enumerate_motif_embeddings(lattice::AbstractLattice, distances::AbstractVector{<:Real};
                                     tol::Float64=1e-6,
                                     expected_count::Union{Int,Nothing}=nothing)
     npairs = length(distances)
@@ -2183,7 +2383,7 @@ minimum-image distance matrix matches the template's under some site
 permutation. This is the recommended method for `K ≥ 4`, where a distance
 multiset alone does not determine the figure (homometric figures).
 """
-function enumerate_motif_embeddings(lattice::MLattice, coords::AbstractVector{<:Tuple};
+function enumerate_motif_embeddings(lattice::AbstractLattice, coords::AbstractVector{<:Tuple};
                                     tol::Float64=1e-6,
                                     expected_count::Union{Int,Nothing}=nothing)
     K = length(coords)
@@ -2230,7 +2430,26 @@ function _matches_template(sites::Vector{Int}, dist, T::Matrix{Float64}, tol::Fl
     return assign(1)
 end
 
-function _enumerate_motif_core(lattice::MLattice, distances::Vector{Float64}, K::Int,
+function _motif_geometry(lattice::MLattice)
+    dims = lattice.supercell_dimensions
+    scv = lattice.lattice_vectors * Diagonal([dims[1], dims[2], dims[3]])
+    return scv, inv(scv), lattice.positions, lattice.periodicity
+end
+
+function _motif_geometry(lattice::AtomicLattice)
+    cell = pyconvert(Matrix{Float64}, lattice.ase_lattice.get_cell())
+    scv = permutedims(cell)
+    singular_2d = !lattice.periodicity[3] && all(iszero, view(scv, :, 3))
+    if singular_2d
+        rec = zeros(3, 3)
+        rec[1:2, 1:2] = inv(scv[1:2, 1:2])
+    else
+        rec = inv(scv)
+    end
+    return scv, rec, lattice.lattice_positions, lattice.periodicity
+end
+
+function _enumerate_motif_core(lattice::AbstractLattice, distances::Vector{Float64}, K::Int,
                                template::Union{Nothing,Matrix{Float64}},
                                tol::Float64, expected_count::Union{Int,Nothing})
     npairs = length(distances)
@@ -2239,11 +2458,7 @@ function _enumerate_motif_core(lattice::MLattice, distances::Vector{Float64}, K:
     tol > 0 || throw(ArgumentError("tol must be positive"))
 
     M = num_sites(lattice)
-    dims = lattice.supercell_dimensions
-    scv = lattice.lattice_vectors * Diagonal([dims[1], dims[2], dims[3]])
-    rec = inv(scv)
-    pos = lattice.positions
-    per = lattice.periodicity
+    scv, rec, pos, per = _motif_geometry(lattice)
 
     # Wrap-around guard: the shortest periodic translation (over small
     # integer combinations of the periodic supercell vectors, which covers
@@ -2409,5 +2624,13 @@ function replicate_walkers(template::MLattice{C,G}, K::Int) where {C,G}
                 MLattice{C,G}(Val(:share_geometry), template,
                               [copy(v) for v in template.components]),
                 energy=0.0u"eV", iter=0)
+            for _ in 1:K]
+end
+
+
+"""Build `K` independent AtomicLattice walkers, including independent ASE caches."""
+function replicate_walkers(template::AtomicLattice, K::Int)
+    K >= 0 || throw(ArgumentError("K must be nonnegative, got $K"))
+    return [LatticeWalker(deepcopy(template), energy=0.0u"eV", iter=0)
             for _ in 1:K]
 end

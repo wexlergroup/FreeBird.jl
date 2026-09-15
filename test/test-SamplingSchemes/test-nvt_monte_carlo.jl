@@ -86,6 +86,24 @@
         @test all(!FreeBird.AbstractWalkers.pyis(
             configs[i].ase_lattice, configs[j].ase_lattice)
             for i in eachindex(configs) for j in (i + 1):length(configs))
+
+        multi = AtomicLattice{2,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O", "H"],
+            components=[1, 1],
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        multi_energies, multi_configs, _ = nvt_monte_carlo(
+            MCNewSample(), multi, calc, 300.0, Int64(5), Int64(43))
+        @test length(multi_energies) == 5
+        @test all(isfinite, multi_energies)
+        @test all(occupied_site_count(config) == [1, 1]
+                  for config in multi_configs)
+        @test all(all(sum(component[site] for component in config.components) <= 1
+                      for site in 1:num_sites(config)) for config in multi_configs)
     end
 end
 

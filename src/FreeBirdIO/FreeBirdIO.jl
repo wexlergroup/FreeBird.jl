@@ -90,15 +90,13 @@ function convert_system_to_atomic_lattice_walker(at::FlexibleSystem, resume::Boo
     data = at.data
     required = (:lattice_atom, :adsorbate_atoms, :supercell_dimensions,
                 :lattice_constant, :lattice_periodicity, :num_nearest_neighbors,
-                :type_of_sites, :adsorbate_height, :occupations, :lattice_geometry)
+                :type_of_sites, :adsorbate_height, :lattice_geometry)
     missing_keys = filter(k -> !haskey(data, k), required)
     isempty(missing_keys) || throw(ArgumentError(
         "AtomicLattice trajectory is missing metadata: $(join(missing_keys, ", "))"))
 
     adsorbates = _split_metadata(data[:adsorbate_atoms])
     site_types = _split_metadata(data[:type_of_sites])
-    length(adsorbates) == 1 || throw(ArgumentError(
-        "AtomicLattice trajectory round trips currently support one adsorbate species"))
     dims = Tuple(parse.(Int, _split_metadata(data[:supercell_dimensions])))
     pbc = Tuple(Bool(parse(Int, x)) for x in _split_metadata(data[:lattice_periodicity]))
     length(dims) == 3 || throw(ArgumentError("supercell_dimensions must contain three integers"))
@@ -117,18 +115,34 @@ function convert_system_to_atomic_lattice_walker(at::FlexibleSystem, resume::Boo
         type_of_sites=site_types,
         adsorbate_height=Float64(data[:adsorbate_height]))
 
-    mask = if data[:occupations] isa AbstractVector
-        Bool.(data[:occupations])
+    encoded_components = if haskey(data, :component_occupations)
+        split(string(data[:component_occupations]), ';')
+    elseif haskey(data, :occupations) && length(adsorbates) == 1
+        [data[:occupations]]
     else
-        encoded = string(data[:occupations])
-        startswith(encoded, "bits=") && (encoded = encoded[6:end])
-        all(c -> c == '0' || c == '1', encoded) || throw(ArgumentError(
-            "occupation mask must contain only zeroes and ones"))
-        [c == '1' for c in encoded]
+        throw(ArgumentError(
+            "AtomicLattice trajectory is missing component_occupations metadata"))
     end
-    length(mask) == num_sites(lattice) || throw(ArgumentError(
-        "occupation mask has $(length(mask)) sites, expected $(num_sites(lattice))"))
-    lattice.occupations .= mask
+    length(encoded_components) == length(adsorbates) || throw(ArgumentError(
+        "trajectory contains $(length(encoded_components)) component masks for " *
+        "$(length(adsorbates)) adsorbate species"))
+    for (component, raw) in zip(lattice.components, encoded_components)
+        mask = if raw isa AbstractVector
+            Bool.(raw)
+        else
+            encoded = string(raw)
+            startswith(encoded, "bits=") && (encoded = encoded[6:end])
+            all(c -> c == '0' || c == '1', encoded) || throw(ArgumentError(
+                "component occupation masks must contain only zeroes and ones"))
+            [c == '1' for c in encoded]
+        end
+        length(mask) == num_sites(lattice) || throw(ArgumentError(
+            "occupation mask has $(length(mask)) sites, expected $(num_sites(lattice))"))
+        component .= mask
+    end
+    any(sum(component[site] for component in lattice.components) > 1
+        for site in 1:num_sites(lattice)) && throw(ArgumentError(
+            "AtomicLattice component masks overlap at one or more sites"))
     lattice.ase_dirty = true
     sync_ase_lattice!(lattice)
 
@@ -274,8 +288,6 @@ function convert_walker_to_system(at::LatticeWalker)
     lattice = at.configuration
     lattice isa AtomicLattice || throw(ArgumentError(
         "only AtomicLattice walkers have an atomic-system representation"))
-    num_lattice_components(lattice) == 1 || throw(ArgumentError(
-        "AtomicLattice trajectory round trips currently support one adsorbate species"))
     sync_ase_lattice!(lattice)
     ase_config = pyconvert(AbstractSystem, lattice.ase_lattice)
     # Strip ASE-only metadata such as `adsorbate_info` (a Python dictionary),
@@ -284,7 +296,7 @@ function convert_walker_to_system(at::LatticeWalker)
         [Atom(atomic_symbol(atom), position(atom)) for atom in ase_config.particles],
         cell_vectors(ase_config), periodicity(ase_config))
     geometry = string(nameof(typeof(lattice).parameters[2]))
-    return AbstractSystem(config;
+    metadata = (;
         energy=at.energy.val,
         iter=at.iter,
         freebird_walker="AtomicLattice",
@@ -299,7 +311,16 @@ function convert_walker_to_system(at::LatticeWalker)
         adsorbate_height=lattice.adsorbate_height,
         # The non-numeric prefix prevents ExtXYZ from parsing a long bit mask
         # as a fixed-width integer (and overflowing for realistic lattices).
-        occupations="bits=" * join(Int.(lattice.occupations)))
+        component_occupations=join(
+            ("bits=" * join(Int.(component)) for component in lattice.components), ';'))
+    if num_lattice_components(lattice) == 1
+        # Preserve the original key for readers written before multi-species
+        # AtomicLattice support. Do not emit an empty value for multi-species
+        # frames: bare `occupations=` is not valid extXYZ metadata.
+        metadata = merge(metadata, (;
+            occupations="bits=" * join(Int.(lattice.components[1]))))
+    end
+    return AbstractSystem(config; metadata...)
 end
 
 """

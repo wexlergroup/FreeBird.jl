@@ -13,17 +13,10 @@
 # they do anything clever but that a caller written against them stops caring
 # which type it has.
 #
-# `neighbor_shell` is not implementable for `AtomicLattice` yet and throws rather
-# than guessing. A wrong neighbour list produces a plausible energy, which is the
-# worst failure mode available to this package.
-#
-# The plan's ninth accessor, `reflect_site`, is deliberately absent. Reflection
-# through a pivot is arithmetic on a regular grid; its helpers `_site_to_grid`
-# and `_reflect_site` live in `MonteCarloMoves`, which loads *after* this module,
-# so a method here could not call them. It is also used by exactly one caller,
-# the geometric cluster move, which is `MLattice`-only and stays that way until
-# `AtomicLattice` can supply a reflection table. Adding it now would buy nothing
-# and cost a cross-module dependency in the wrong direction.
+# AtomicLattice now supplies neighbor shells in the same site-index space and a
+# validated reflection table for periodic point-inversion moves. Reflection is
+# deliberately consumed inside `MonteCarloMoves` rather than exposed here: it
+# is geometry-specific proposal machinery, not part of the occupancy contract.
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
@@ -105,57 +98,37 @@ neighbor_shell(lattice::MLattice, i::Int, shell::Int=1) = lattice.neighbors[i][s
 
 # ── AtomicLattice ────────────────────────────────────────────────────────────
 #
-# Occupancy lives in a single `Vector{Bool}` over `all_sites`, so the component
-# argument exists only to match the interface and must be 1.
+# AtomicLattice uses the same component-mask representation as MLattice. Its
+# constructor and mutation API additionally maintain single-site exclusion,
+# because the ASE cache cannot represent two adsorbates at one site.
 
-@inline function _check_single_component(c::Int)
-    c == 1 || throw(ArgumentError(
-        "AtomicLattice carries one occupancy mask over all_sites; got component $c"))
-    return nothing
-end
-
-function n_occupied(lattice::AtomicLattice, c::Int=1)
-    _check_single_component(c)
-    return sum(lattice.occupations)
-end
-
-function is_occupied(lattice::AtomicLattice, i::Int, c::Int=1)
-    _check_single_component(c)
-    return lattice.occupations[i]
-end
-
-function occupied_indices(lattice::AtomicLattice, c::Int=1)
-    _check_single_component(c)
-    return findall(lattice.occupations)
-end
-
-function empty_indices(lattice::AtomicLattice, c::Int=1)
-    _check_single_component(c)
-    return findall(.!lattice.occupations)
-end
+n_occupied(lattice::AtomicLattice, c::Int=1) = sum(lattice.components[c])
+is_occupied(lattice::AtomicLattice, i::Int, c::Int=1) = lattice.components[c][i]
+occupied_indices(lattice::AtomicLattice, c::Int=1) = findall(lattice.components[c])
+empty_indices(lattice::AtomicLattice, c::Int=1) = findall(.!lattice.components[c])
 
 function set_occupied!(lattice::AtomicLattice, i::Int, v::Bool, c::Int=1)
-    _check_single_component(c)
-    lattice.occupations[i] = v
+    checkbounds(lattice.components, c)
+    checkbounds(lattice.components[c], i)
+    if v
+        for component in lattice.components
+            component[i] = false
+        end
+    end
+    lattice.components[c][i] = v
     lattice.ase_dirty = true
     return lattice
 end
 
 function swap_sites!(lattice::AtomicLattice, a::Int, b::Int)
     a == b && return lattice
-    lattice.occupations[a], lattice.occupations[b] =
-        lattice.occupations[b], lattice.occupations[a]
+    for component in lattice.components
+        component[a], component[b] = component[b], component[a]
+    end
     lattice.ase_dirty = true
     return lattice
 end
 
 function neighbor_shell(lattice::AtomicLattice, i::Int, shell::Int=1)
-    throw(ArgumentError(
-        "neighbor_shell is not available for AtomicLattice yet. Its `neighbors` " *
-        "field is indexed over the substrate grid built by get_lattice_positions, " *
-        "while occupancy is indexed over `all_sites` — the union of ontop, bridge " *
-        "and hollow positions selected by type_of_sites. The two are different " *
-        "site sets in a different order, so returning neighbors[i] here would " *
-        "hand back a neighbour list for a site other than the one asked about. " *
-        "Re-indexing the neighbour list onto all_sites is the outstanding work."))
+    return lattice.neighbors[i][shell]
 end

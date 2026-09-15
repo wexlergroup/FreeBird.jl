@@ -86,6 +86,31 @@ function enumerate_lattices(init_lattice::SLattice{G}) where {G}
     return lattices
 end
 
+function enumerate_lattices(init_lattice::AtomicLattice{C,G}) where {C,G}
+    total_sites = num_sites(init_lattice)
+    labels = zeros(Int, total_sites)
+    for c in 1:C
+        for site in occupied_indices(init_lattice, c)
+            labels[site] = c
+        end
+    end
+    sort!(labels)
+    all_configs = unique_permutations(labels)
+    lattices = Vector{typeof(init_lattice)}(undef, length(all_configs))
+    # Python-backed ASE objects must be copied serially: PythonCall object
+    # allocation from multiple Julia threads can corrupt the interpreter.
+    for index in eachindex(all_configs)
+        lattice = deepcopy(init_lattice)
+        config = all_configs[index]
+        for c in 1:C
+            lattice.components[c] .= config .== c
+        end
+        lattice.ase_dirty = true
+        lattices[index] = lattice
+    end
+    return lattices
+end
+
 """
     exact_enumeration(lattice::SLattice{G}, cutoff_radii::Tuple{Float64, Float64}, h::ClassicalHamiltonian) where G
 
@@ -121,4 +146,15 @@ function exact_enumeration(lattice::MLattice{C,G}, h::ClassicalHamiltonian) wher
     return df, ls
 end
 
-
+function exact_enumeration(lattice::AtomicLattice{C,G},
+                           h::ClassicalHamiltonian) where {C,G}
+    lattices = enumerate_lattices(lattice)
+    ls = LatticeGasWalkers(LatticeWalker.(lattices), h)
+    energies = Vector{typeof(ls.walkers[1].energy)}(undef, length(ls.walkers))
+    configurations = Vector{Vector{Vector{Bool}}}(undef, length(ls.walkers))
+    Threads.@threads for i in eachindex(ls.walkers)
+        energies[i] = ls.walkers[i].energy
+        configurations[i] = deepcopy(ls.walkers[i].configuration.components)
+    end
+    return DataFrame(energy=energies, config=configurations), ls
+end

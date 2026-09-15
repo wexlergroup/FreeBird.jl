@@ -64,7 +64,8 @@ function Base.show(io::IO, lattice::AtomicLattice)
     println(io, "    periodicity          : ", lattice.periodicity)
     println(io, "    adsorbate_atoms      : ", lattice.adsorbate_atoms)
     println(io, "    coverage             : ", coverage(lattice))
-    println(io, "    occupied sites       : ", sum(lattice.occupations), " / ", length(lattice.occupations))
+    println(io, "    occupied sites       : ", sum(sum, lattice.components), " / ", num_sites(lattice))
+    println(io, "    component counts     : ", sum.(lattice.components))
     println(io, "    # nn                 : ", lattice.num_nearest_neighbors)
     println()
 end
@@ -220,7 +221,11 @@ configuration it holds, and until `AtomicLattice` could be a walker
 configuration at all there was no reason for a method here.
 """
 function print_occupation(io::IO, lattice::AtomicLattice)
-    print(io, [o ? 1 : 0 for o in lattice.occupations])
+    merged = zeros(Int, num_sites(lattice))
+    for (c, component) in enumerate(lattice.components)
+        merged[component] .= c
+    end
+    print(io, merged)
 end
 
 function print_occupation(io::IO, lattice::MLattice{C,G}) where {C,G}

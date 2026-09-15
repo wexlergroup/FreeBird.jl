@@ -46,6 +46,13 @@ The energy of the empty lattice is measured once and stored as `E_clean`, so
 rather than absolute cluster-expansion values.
 """
 function ICETHamiltonian(ce_path::String, base_lattice::AtomicLattice)
+    num_lattice_components(base_lattice) == 1 || throw(ArgumentError(
+        "ICETHamiltonian currently represents a binary empty/occupied cluster " *
+        "expansion and requires a one-species AtomicLattice"))
+    base_lattice.periodicity[1:2] == (true, true) || throw(ArgumentError(
+        "ICETHamiltonian repeats a periodic cluster-expansion model and requires " *
+        "periodicity=(true, true, ...) on the AtomicLattice"))
+
     icet = pyimport("icet")
     mcham = pyimport("mchammer.calculators")
 
@@ -97,8 +104,13 @@ quietly lose occupancy.
 function build_icet_to_julia_map(base_lattice::AtomicLattice, icet_positions::Matrix{Float64})
     n_sites = length(base_lattice.all_sites)
     tol = nn_distance(base_lattice) * 0.1
-    cell_x = base_lattice.lattice_constant * base_lattice.supercell_dimensions[1]
-    cell_y = base_lattice.lattice_constant * base_lattice.supercell_dimensions[2]
+    # `ase.build.fcc100` uses the surface nearest-neighbour spacing a/sqrt(2),
+    # not the cubic lattice constant `a`, in the two in-plane cell vectors.
+    # Read those vectors from the actual slab: using `a * nx/ny` here gives a
+    # plausible but wrong minimum-image map near a periodic boundary.
+    cell = pyconvert(Matrix{Float64}, base_lattice.ase_lattice.get_cell())
+    cell_x = hypot(cell[1, 1], cell[1, 2])
+    cell_y = hypot(cell[2, 1], cell[2, 2])
 
     # Minimum-image separation in the surface plane.
     function wrapped_delta(a, b, cell)
@@ -159,7 +171,9 @@ Carlo loop. Here it is a lookup in `julia_to_icet`.
 """
 function interacting_energy(lattice::AtomicLattice, h::ICETHamiltonian)
     occ = zeros(Int, h.n_sites)
-    for julia_idx in findall(lattice.occupations)
+    num_lattice_components(lattice) == 1 || throw(ArgumentError(
+        "ICETHamiltonian requires a one-species AtomicLattice"))
+    for julia_idx in occupied_indices(lattice)
         occ[h.julia_to_icet[julia_idx]] = 1
     end
     E_meV = pyconvert(Float64, h.calculator.calculate_total(occupations=pylist(occ)))

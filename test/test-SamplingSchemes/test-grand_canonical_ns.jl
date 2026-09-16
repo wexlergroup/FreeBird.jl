@@ -319,8 +319,8 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
         @test_throws ArgumentError MC_grand_canonical_walk!(
             1, walker, multi_ham, 1.0, mus; z0=z, incremental=true)
 
-        # The same vector-μ kernel is available to existing multi-component
-        # MLattice models, with global (not per-component) empty-site checks.
+        # Exercise the vector-μ kernel on a multi-component MLattice, with
+        # global rather than per-component empty-site checks.
         mlattice = MLattice{2,SquareLattice}(
             lattice_constant=1.0, basis=[(0.0, 0.0, 0.0)],
             supercell_dimensions=(2, 2, 1),

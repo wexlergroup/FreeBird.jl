@@ -350,20 +350,14 @@ Two algorithms, selected by `periodicity`, because the right answer genuinely
 differs:
 
   * **both in-plane directions periodic** — the site list wraps, so a site whose
-    partner atom lies across the cell boundary is still found. A periodic
+    partner atom lies across the cell boundary is included. A periodic
     `(nx, ny, 1)` fcc(100) slab has exactly `nx*ny` hollow sites.
   * **either direction finite** — only interior sites are returned. A hollow site
     needs four surrounding surface atoms, and on a finite slab the boundary rows
     do not have them.
 
-The periodic branch is why this takes `cell`. Before it existed, the finite
-branch was applied unconditionally: a periodic 4x4 Pd/O slab reported the **3x3
-interior, 9 sites**, not 16. That silently described a different, smaller system
-than the one intended, and `ICETHamiltonian`'s `length(all_sites) == nx*ny` guard
-would reject the canonical 4x4 hollow-site system outright with no input able to
-satisfy it — (4,4,1) gave 9 sites while nx*ny = 16, and (5,5,1) gave 16 sites
-while nx*ny = 25. No test caught it: the only assertions on `all_sites` were
-`num_sites(lat) == length(lat.all_sites)`, which is tautological, and `> 0`.
+The periodic branch uses `cell` to apply minimum-image distances across the
+in-plane boundaries.
 """
 function get_hollow_sites(positions, nn, tol, cell,
                           periodicity::Tuple{Bool,Bool,Bool}=(true, true, false))
@@ -601,20 +595,9 @@ end
 Build the adsorption-site list for `slab` and decorate it to the requested
 `coverage`. Returns `(slab, all_sites, occupations)`.
 
-`occupations` is a `Vector{Bool}` over `all_sites` and is the ground truth for
-which sites are filled. Two things about the previous version made that
-impossible to express:
-
-  * it called `shuffle!(all_sites)` **in place**, so the site list came back in
-    random order with the occupied sites at the front. Occupancy was encoded as
-    "the first `n_ads` entries of a list whose order is meaningless", which
-    nothing downstream could read without knowing that;
-  * it returned `adsorbate_indices` — indices into the *ASE frame* — which bear
-    no relation to positions in `all_sites`. There was no way to ask whether
-    site `i` was occupied.
-
-The shuffle now happens in a permutation of the *indices*, `all_sites` keeps its
-geometric order, and occupancy is a mask over it.
+`occupations` is a `Vector{Bool}` over `all_sites` and is the source of truth for
+which sites are filled. `all_sites` is ordered geometrically, while a shuffled
+permutation of its indices selects the occupied sites.
 """
 function add_adsorbates!(slab, adsorbate_atoms, type_of_sites; height, coverage, nn, tol)
     positions = get_positions(slab)
@@ -1068,7 +1051,7 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
             "but the requested geometry is $(nameof(G))"))
         if surface != :fcc100 && !(periodicity[1] && periodicity[2])
             throw(ArgumentError(
-                "AtomicLattice surface $surface currently requires periodic " *
+                "AtomicLattice surface $surface requires periodic " *
                 "x and y boundaries so ASE named adsorption sites form a " *
                 "complete lattice; got periodicity=$periodicity"))
         end
@@ -1205,7 +1188,7 @@ frame. PythonCall's `Py` wrapper is otherwise copied without cloning the Python
 object it refers to, which lets synchronization or an MLIP evaluation through
 one Julia copy mutate another copy's cache.
 
-The component masks remain the source of truth. A dirty source produces a
+The component masks are the source of truth. A dirty source produces a
 dirty copy whose independent ASE cache is rebuilt on its next
 `sync_ase_lattice!` call.
 """
@@ -1220,11 +1203,7 @@ end
 """
     coverage(lattice::AtomicLattice)
 
-Fractional coverage, derived from `components`.
-
-This was a stored field. It is computed now because a stored coverage is a
-second copy of what `components` already say, and the two can disagree — the
-whole point of W11 is that this type has one place where occupancy lives.
+Fractional coverage derived directly from the component occupation masks.
 """
 coverage(lattice::AtomicLattice) =
     sum(sum, lattice.components) / length(lattice.all_sites)
@@ -1233,11 +1212,7 @@ coverage(lattice::AtomicLattice) =
     nn_distance(lattice::AtomicLattice)
 
 Shortest primitive in-plane translation of the selected ASE surface.
-
-The constructor previously passed a hardcoded `nn = 2.791` to `add_adsorbates!`.
-That is `3.947 / sqrt(2)` — the value for palladium — so the site-finding
-geometry was silently correct for exactly one `lattice_constant` and wrong for
-every other, with no error, just a different (or empty) set of adsorption sites.
+The site-finding geometry uses this surface-dependent distance.
 """
 function nn_distance(lattice::AtomicLattice)
     if lattice.surface == :fcc211
@@ -1512,11 +1487,7 @@ num_lattice_components(lattice::MLattice{C,G}) where {C,G} = C
     num_lattice_components(lattice::AtomicLattice{C,G}) where {C,G}
 
 Number of adsorbate species on an `AtomicLattice`, i.e. its first type parameter.
-
-Small, but it is what makes `AtomicLattice` usable as a walker configuration at
-all: `LatticeWalker`'s inner constructor calls `num_lattice_components` to fix
-its own type parameter, so without a method here every
-`LatticeWalker(::AtomicLattice)` is a `MethodError`.
+`LatticeWalker` uses this value as its component-count type parameter.
 """
 num_lattice_components(lattice::AtomicLattice{C,G}) where {C,G} = C
 

@@ -47,13 +47,13 @@ rather than absolute cluster-expansion values.
 """
 function ICETHamiltonian(ce_path::String, base_lattice::AtomicLattice)
     num_lattice_components(base_lattice) == 1 || throw(ArgumentError(
-        "ICETHamiltonian currently represents a binary empty/occupied cluster " *
+        "ICETHamiltonian represents a binary empty/occupied cluster " *
         "expansion and requires a one-species AtomicLattice"))
     base_lattice.periodicity[1:2] == (true, true) || throw(ArgumentError(
         "ICETHamiltonian repeats a periodic cluster-expansion model and requires " *
         "periodicity=(true, true, ...) on the AtomicLattice"))
     base_lattice.surface == :fcc100 || throw(ArgumentError(
-        "ICETHamiltonian currently maps the existing fcc(100) ICET models and " *
+        "ICETHamiltonian maps fcc(100) ICET models and " *
         "requires surface=:fcc100; got surface=$(base_lattice.surface)"))
 
     icet = pyimport("icet")
@@ -162,15 +162,9 @@ end
 Cluster-expansion energy of the lattice's current occupancy, in eV, referenced
 to the empty lattice.
 
-Two differences from the prototype this is ported from. It returns a `Unitful`
-quantity, as every other `interacting_energy` in the package does — the
-prototype returned a bare `Float64` in eV and four call sites compensated with
-`* unit(...)`, which merged as-is would have silently mis-scaled.
-
-And occupancy is read from the index-keyed `occupations` mask. The prototype ran
-`findfirst(s -> s == site, lattice.all_sites)` for every occupied site: an O(N²)
-search comparing `Float64` tuples for exact equality, in the innermost Monte
-Carlo loop. Here it is a lookup in `julia_to_icet`.
+The result is a `Unitful` energy. Occupied site indices map directly into ICET
+ordering through `julia_to_icet`, making occupancy assembly linear in the
+number of lattice sites.
 """
 function interacting_energy(lattice::AtomicLattice, h::ICETHamiltonian)
     occ = zeros(Int, h.n_sites)

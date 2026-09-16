@@ -486,7 +486,7 @@ end
     gc_thermodynamic_stats(df, βs, n_walkers, chemical_potentials; ...)
 
 Reduce a multi-component GC-NS ledger. A C-component ledger must contain
-`num_particles_1` through `num_particles_C`; its existing `num_particles`
+`num_particles_1` through `num_particles_C`; the aggregate `num_particles`
 column is checked against their row-wise sum. The returned `mean_N` is a
 `length(βs) × C` matrix.
 """

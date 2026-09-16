@@ -1,18 +1,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # The AbstractLattice occupancy interface
 #
-# Sampling code that works for one lattice type should work for both. These
-# accessors replaced the type-specific occupation reads that previously made
-# the grand-canonical sampler and Monte Carlo moves `MLattice`-only by
-# construction rather than by intent.
+# Sampling code uses these accessors instead of concrete storage fields.
+# `MLattice` and `AtomicLattice` implement the same occupation contract.
 #
-# These accessors are the contract that replaces those reads. They are
-# deliberately small and deliberately boring: each one is a field access for
-# `MLattice` and a field access for `AtomicLattice`, and the point is not that
-# they do anything clever but that a caller written against them stops caring
-# which type it has.
-#
-# AtomicLattice now supplies neighbor shells in the same site-index space and a
+# AtomicLattice supplies neighbor shells in the same site-index space and a
 # validated reflection table for periodic point-inversion moves. Reflection is
 # deliberately consumed inside `MonteCarloMoves` rather than exposed here: it
 # is geometry-specific proposal machinery, not part of the occupancy contract.

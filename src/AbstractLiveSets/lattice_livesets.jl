@@ -159,7 +159,7 @@ The `LatticeGasWalkers` struct represents a collection of lattice walkers for a 
   when every walker contains an `AtomicLattice`.
 
 # Constructors
-- `LatticeGasWalkers(walkers::Vector{LatticeWalker{C}}, energy_model; assign_energy=true, perturb_energy::Float64=0.0)`: Constructs a new `LatticeGasWalkers` object with the given walkers and energy model. If `assign_energy` is `true`, the energy of each walker is assigned using the provided model. The optional `perturb_energy` parameter can be used to add a small perturbation to the assigned energy.
+- `LatticeGasWalkers(walkers::Vector{LatticeWalker{C}}, energy_model; assign_energy=true, perturb_energy::Float64=0.0)`: Constructs a `LatticeGasWalkers` object with the given walkers and energy model. If `assign_energy` is `true`, the provided model assigns each walker's energy. The optional `perturb_energy` parameter adds a small perturbation to the assigned energy.
 
 """
 struct  LatticeGasWalkers <: LatticeWalkers
@@ -222,12 +222,7 @@ function print_lattice_walker_in_walkers(io::IO, walker::LatticeWalker{C}) where
             println(io, "          ", component)
         end
     else
-        # This branch was unreachable until AtomicLattice became a usable walker
-        # configuration, and it called `AbstractWalkers.print_lattice`, which
-        # does not exist anywhere in the package — so the moment it became
-        # reachable it would have thrown UndefVarError. MERGE_PLAN C4 flagged
-        # exactly this, on the grounds that W11 would give AtomicLattice an
-        # `occupations` field and make the dereference start resolving.
+        # Render occupation data through the shared lattice interface.
         print(io, "      ")
         AbstractWalkers.print_occupation(io, walker.configuration)
         println(io)

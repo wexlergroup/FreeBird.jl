@@ -76,17 +76,8 @@ end
     view_structure(lattice::AtomicLattice)
 
 Open the lattice in ASE's viewer.
-
-This was `view(lattice::AtomicLattice)`, which defined a function named `view`
-inside `AbstractWalkers` and so shadowed `Base.view` for the whole module. It
-loaded only because nothing in the module happened to call `Base.view` before
-this line — a later `view(A, 1:3)` anywhere in `AbstractWalkers` would have
-resolved here and thrown a `MethodError` about `AtomicLattice`.
-
-`view_structure` already exists for `AbstractSystem` and `AtomWalker`
-(`helpers.jl`) and is already exported, so this is a method on the right
-function rather than a new name. Note it syncs first: `ase_lattice` is a cache
-of `occupations` and may be stale.
+The occupation masks are synchronized to the cached ASE structure before the
+viewer opens.
 """
 function view_structure(lattice::AtomicLattice)
     return ase.visualize.view(sync_ase_lattice!(lattice).ase_lattice)
@@ -190,11 +181,7 @@ end
 
 Print the geometry summary a live set shows above its walkers.
 
-Dispatched rather than written inline because the two lattice types do not share
-a field set: `MLattice` has `lattice_vectors`, `basis` and `cutoff_radii`;
-`AtomicLattice` has none of them and carries `lattice_atom`, `type_of_sites` and
-a site list instead. The live-set `show` read the `MLattice` names directly,
-which was a `FieldError` the moment an `AtomicLattice` could reach it.
+Dispatch selects the fields appropriate to each lattice representation.
 """
 function print_lattice_header(io::IO, lattice::MLattice)
     println(io, "    lattice_vectors:      ", lattice.lattice_vectors)
@@ -216,10 +203,6 @@ end
     print_occupation(io::IO, lattice::AtomicLattice)
 
 Print an `AtomicLattice`'s occupancy as a row of 0/1 over `all_sites`.
-
-Needed because `LatticeWalker`'s show path calls `print_occupation` on whatever
-configuration it holds, and until `AtomicLattice` could be a walker
-configuration at all there was no reason for a method here.
 """
 function print_occupation(io::IO, lattice::AtomicLattice)
     merged = zeros(Int, num_sites(lattice))

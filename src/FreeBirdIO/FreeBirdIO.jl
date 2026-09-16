@@ -317,9 +317,9 @@ function convert_walker_to_system(at::LatticeWalker)
         component_occupations=join(
             ("bits=" * join(Int.(component)) for component in lattice.components), ';'))
     if num_lattice_components(lattice) == 1
-        # Preserve the original key for readers written before multi-species
-        # AtomicLattice support. Do not emit an empty value for multi-species
-        # frames: bare `occupations=` is not valid extXYZ metadata.
+        # Single-component frames include a compact `occupations` field.
+        # Multi-species frames use `component_occupations`; a bare empty
+        # `occupations=` value is not valid extXYZ metadata.
         metadata = merge(metadata, (;
             occupations="bits=" * join(Int.(lattice.components[1]))))
     end

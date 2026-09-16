@@ -423,8 +423,8 @@ for thermodynamic reweighting.
 - `random_seed::Int64`: Seed for the random number generator.
 - `fail_count::Int64`: Consecutive failed replacements.
 - `allowed_fail_count::Int64`: Maximum consecutive failures before warning.
-- `init_occupation_p::Float64`: Total per-site occupation probability used to
-  draw the uniform initial prior (`0.5` for one component, `C/(C+1)` for C).
+- `init_occupation_p::Float64`: Total per-site occupation probability for the
+  uniform initial prior (`0.5` for one component, `C/(C+1)` for C).
 - `n_max::Int64`: Upper bound on particle count per walker.
 - `cluster_p::Float64`: Current cluster growth probability (mutable runtime state).
 - `cluster_accepted::Float64`: Accepted cluster moves in current adjustment window.
@@ -470,8 +470,8 @@ Insertions are rejected when N ≥ n_max. Default is `typemax(Int64)` (no cap).
 
 `init_occupation_p=nothing` selects the uniform configuration prior: `0.5`
 for one component and `C/(C+1)` total occupancy for C mutually exclusive
-components. An explicit value remains supported for the established scalar
-workflow. Multi-component GCNS rejects a nonuniform explicit value because its
+components. An explicit value is accepted for one-component configurations.
+Multi-component GCNS rejects a nonuniform explicit value because its
 standard shell weights otherwise describe the wrong prior measure.
 
 The `cluster_*` fields are mutable runtime state for adaptive cluster move tuning.
@@ -1607,10 +1607,10 @@ function _grand_potential(walker::LatticeWalker{C},
 end
 
 """
-Randomize a grand-canonical starting configuration. The scalar path delegates
-to the established public method unchanged. Multi-component configurations use
-one occupation draw per site and, when occupied, one uniformly selected species,
-thereby preserving single-site exclusion for both MLattice and AtomicLattice.
+Randomize a grand-canonical starting configuration. One-component
+configurations use `random_microstate!`. Multi-component configurations use one
+occupation draw per site and, when occupied, one uniformly selected species,
+thereby enforcing single-site exclusion for both MLattice and AtomicLattice.
 """
 function _random_gc_microstate!(configuration::AbstractLattice, p::Float64)
     C = num_lattice_components(configuration)
@@ -1678,8 +1678,7 @@ end
 Clone a lattice walker for a replacement walk. `MLattice` copies only its
 occupancy vectors, energy, and iteration counter while sharing run-invariant
 geometry through the `Val(:share_geometry)` constructor. `AtomicLattice`
-falls back to its safe `deepcopy`, which also clones its Python-backed ASE
-cache, because it does not yet have an equivalent sharing constructor. Neither
+uses `deepcopy`, which also clones its Python-backed ASE cache. Neither
 path draws randomness or changes floating-point values.
 """
 _clone_walker_shared_geometry(w::LatticeWalker) =
@@ -1778,7 +1777,7 @@ end
     _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonicalNestedSamplingParameters)
 
 Initialize walkers with random microstates for grand-canonical NS.
-Single-component initialization retains the established Bernoulli path.
+Single-component initialization uses independent Bernoulli occupation draws.
 Multi-component initialization draws the uniform exclusion-based prior exactly,
 including conditioning on total `N <= n_max` when a cap is present.
 """
@@ -1791,8 +1790,7 @@ function _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonical
         C = num_lattice_components(configuration)
         if C == 1
             _random_gc_microstate!(configuration, gc_params.init_occupation_p)
-            # Preserve the established scalar capped-initialization path and
-            # its random stream byte-for-byte.
+            # Enforce the particle cap by clearing randomly selected occupied sites.
             n_occ = n_occupied(configuration)
             if n_occ > n_max
                 occupied = occupied_indices(configuration)

@@ -862,8 +862,7 @@ Insert a particle at a random empty site. Returns `true` if successful,
 # Returns
 - `success::Bool`: Whether a particle was inserted.
 - `lattice::SLattice`: The mutated lattice.
-- `site::Int`: The inserted site index (0 when unsuccessful). A trailing
-  addition: two-name destructures of the previous return keep working.
+- `site::Int`: The inserted site index, or 0 when unsuccessful.
 """
 function lattice_insert_particle!(lattice::AbstractLattice)
     n_sites = num_sites(lattice)
@@ -910,8 +909,7 @@ Delete a particle from a random occupied site. Returns `true` if successful,
 # Returns
 - `success::Bool`: Whether a particle was deleted.
 - `lattice::SLattice`: The mutated lattice.
-- `site::Int`: The vacated site index (0 when unsuccessful). A trailing
-  addition: two-name destructures of the previous return keep working.
+- `site::Int`: The vacated site index, or 0 when unsuccessful.
 """
 function lattice_delete_particle!(lattice::AbstractLattice)
     n_occ = n_occupied(lattice)
@@ -1476,9 +1474,8 @@ end
     MC_grand_canonical_walk!(n_steps, walker::LatticeWalker{C}, h,
                              omega_max, chemical_potentials; z0=ones(C), ...)
 
-Multi-species lattice grand-canonical constrained walk. This overload is
-selected by a vector of chemical potentials and leaves the established scalar,
-single-species method unchanged.
+Multi-species lattice grand-canonical constrained walk, selected by a vector of
+chemical potentials.
 
 The target constrained prior is proportional to `prod(z0[c]^N[c])`, with at
 most one species on each site. Insertion and deletion first choose a component
@@ -1531,7 +1528,7 @@ function MC_grand_canonical_walk!(
         "every z0 reference fugacity must be finite and positive"))
     incremental && throw(ArgumentError(
         "incremental=true is not available for multi-species lattice walks; " *
-        "site_flip_delta currently has a single-component contract"))
+        "site_flip_delta supports only single-component lattices"))
     if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
         throw(ArgumentError(
             "p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))

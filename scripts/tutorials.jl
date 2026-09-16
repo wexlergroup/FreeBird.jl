@@ -1,6 +1,5 @@
-# Legacy runnable examples. The authoritative, tested tutorial is maintained in
-# docs/src/tutorials.md; do not use Literate to overwrite that page from this
-# shorter historical script.
+# Runnable examples for core FreeBird workflows. The complete tested tutorial,
+# including AtomicLattice examples, is maintained in docs/src/tutorials.md.
 
 # # FreeBird.jl Tutorial
 

@@ -1,5 +1,4 @@
-# Runnable examples for core FreeBird workflows. The complete tested tutorial,
-# including AtomicLattice examples, is maintained in docs/src/tutorials.md.
+# Runnable examples for core FreeBird workflows.
 
 # # FreeBird.jl Tutorial
 

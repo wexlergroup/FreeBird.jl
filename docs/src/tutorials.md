@@ -5,8 +5,6 @@ It covers the basic functionalities of the package, such as
 generating atomistic and lattice walkers, defining a potential energy function or
 Hamiltonian, and running a sampling simulation.
 For more detailed information, please refer to the documentation of the package.
-This page is maintained directly in `docs/src/tutorials.md`; its executable
-examples are run when the documentation is built.
 
 ## Atomistic walkers and nested sampling
 

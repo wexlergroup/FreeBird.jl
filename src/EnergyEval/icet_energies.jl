@@ -17,13 +17,8 @@ A cluster-expansion Hamiltonian evaluated by ICET's `ClusterExpansionCalculator`
 so `using FreeBird` neither imports nor requires ICET. Only constructing an
 `ICETHamiltonian` does.
 
-This is worth being explicit about, because the obvious alternative does not
-work: a Julia package extension cannot help here. `[weakdeps]`/`[extensions]`
-trigger on a **Julia** package being loaded, and ICET is a **Python** module
-reached through PythonCall — there is nothing to weakly depend on. Keyed on
-PythonCall, which is a hard dependency, an extension would load unconditionally
-and achieve nothing. Deferring the import is the mechanism that actually gives
-the property.
+ICET is a Python module and cannot activate a Julia package extension.
+Importing it inside the constructor keeps ICET optional when loading FreeBird.
 """
 struct ICETHamiltonian <: ClassicalHamiltonian
     calculator::Py

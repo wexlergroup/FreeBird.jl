@@ -1,5 +1,4 @@
-# Lightweight deterministic energy model used only to exercise AtomicLattice's
-# generic GCNS plumbing without making this gate depend on optional ICET.
+# Deterministic Hamiltonian for AtomicLattice GCNS tests.
 struct AtomicLatticeSmokeHamiltonian <: ClassicalHamiltonian end
 FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
                                        ::AtomicLatticeSmokeHamiltonian) =

@@ -928,10 +928,8 @@
 
 
     @testset "ICETHamiltonian" begin
-        # ICET is not installed in CI and is not a dependency, so what is
-        # testable here is everything up to the Python call: the type, the fact
-        # that constructing one is the only thing that needs ICET, and the site
-        # mapping, which is pure Julia and is where the real logic lives.
+        # The mapping helpers are pure Julia; constructing ICETHamiltonian
+        # performs the optional Python import.
 
         @test ICETHamiltonian <: ClassicalHamiltonian
         @test fieldnames(ICETHamiltonian) ==
@@ -948,8 +946,7 @@
             type_of_sites=["hollow"]
         )
 
-        # nn_distance replaces a hardcoded 2.791, which was a/sqrt(2) for
-        # palladium specifically.
+        # For fcc(100), the nearest-neighbor distance is a/sqrt(2).
         @test nn_distance(lat) ≈ 3.947 / sqrt(2)
         @test nn_distance(lat) ≈ 2.791 atol=1e-3
 
@@ -991,9 +988,7 @@
             @test_throws Exception FreeBird.EnergyEval.build_icet_to_julia_map(lat, bad)
         end
 
-        # Constructing one needs ICET; without it this must fail loudly rather
-        # than return a half-built Hamiltonian. (With ICET present it fails on
-        # the missing file instead — either way, it throws.)
+        # Construction propagates import and missing-file failures.
         @test_throws Exception ICETHamiltonian("no_such_cluster_expansion.ce", lat)
     end
 end

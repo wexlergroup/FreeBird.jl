@@ -2,9 +2,8 @@ using LinearAlgebra
 using Test
 using FreeBird
 
-# These deterministic tests validate crystallographic geometry and direct
-# evaluation of published Hamiltonian coefficients on AtomicLattice. They do
-# not estimate stochastic transition temperatures.
+# Validate AtomicLattice crystallographic geometry and published Hamiltonian
+# coefficients.
 
 const _LIT_AW = FreeBird.AbstractWalkers
 

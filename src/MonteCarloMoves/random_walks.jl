@@ -1491,9 +1491,9 @@ every component count is conserved. `n_max` remains a cap on total occupancy.
 The optional biased insertion channel uses the same global empty-site predicate
 and composite-density correction as the single-species method.
 
-Incremental energy deltas are intentionally unavailable here: the current
-`site_flip_delta` contract is single-component. The full Hamiltonian is
-re-evaluated after each non-null proposal.
+Incremental energy deltas are intentionally unavailable here:
+`site_flip_delta` supports only single-component lattices. The full Hamiltonian
+is re-evaluated after each non-null proposal.
 """
 function MC_grand_canonical_walk!(
     n_steps::Int,

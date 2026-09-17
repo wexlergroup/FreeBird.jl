@@ -56,6 +56,33 @@ function Base.show(io::IO, lattice::MLattice{C,G}) where {C,G}
     end
 end
 
+function Base.show(io::IO, lattice::AtomicLattice)
+    println(io, typeof(lattice))
+    println(io, "    lattice atom         : ", lattice.lattice_atom)
+    println(io, "    ASE surface          : ", lattice.surface)
+    println(io, "    positions            : ", length(lattice.lattice_positions[:,1]), " grid points")
+    println(io, "    supercell_dimensions : ", lattice.supercell_dimensions)
+    println(io, "    periodicity          : ", lattice.periodicity)
+    println(io, "    adsorbate_atoms      : ", lattice.adsorbate_atoms)
+    println(io, "    coverage             : ", coverage(lattice))
+    println(io, "    occupied sites       : ", sum(sum, lattice.components), " / ", num_sites(lattice))
+    println(io, "    component counts     : ", sum.(lattice.components))
+    println(io, "    # nn                 : ", lattice.num_nearest_neighbors)
+    println()
+end
+
+
+"""
+    view_structure(lattice::AtomicLattice)
+
+Open the lattice in ASE's viewer.
+The occupation masks are synchronized to the cached ASE structure before the
+viewer opens.
+"""
+function view_structure(lattice::AtomicLattice)
+    return ase.visualize.view(sync_ase_lattice!(lattice).ase_lattice)
+end
+
 """
     merge_components(lattice::MLattice{C}) where C
     
@@ -148,6 +175,42 @@ function print_layer_single_comp(io::IO, lattice::MLattice{C,G}, boolvec::Vector
     end
 end
 
+
+"""
+    print_lattice_header(io::IO, lattice::AbstractLattice)
+
+Print the geometry summary a live set shows above its walkers.
+
+Dispatch selects the fields appropriate to each lattice representation.
+"""
+function print_lattice_header(io::IO, lattice::MLattice)
+    println(io, "    lattice_vectors:      ", lattice.lattice_vectors)
+    println(io, "    supercell_dimensions: ", lattice.supercell_dimensions)
+    println(io, "    periodicity:          ", lattice.periodicity)
+    println(io, "    basis:                ", lattice.basis)
+end
+
+function print_lattice_header(io::IO, lattice::AtomicLattice)
+    println(io, "    lattice_atom:         ", lattice.lattice_atom)
+    println(io, "    adsorbate_atoms:      ", lattice.adsorbate_atoms)
+    println(io, "    supercell_dimensions: ", lattice.supercell_dimensions)
+    println(io, "    periodicity:          ", lattice.periodicity)
+    println(io, "    type_of_sites:        ", lattice.type_of_sites)
+    println(io, "    sites:                ", num_sites(lattice))
+end
+
+"""
+    print_occupation(io::IO, lattice::AtomicLattice)
+
+Print an `AtomicLattice`'s occupancy as a row of 0/1 over `all_sites`.
+"""
+function print_occupation(io::IO, lattice::AtomicLattice)
+    merged = zeros(Int, num_sites(lattice))
+    for (c, component) in enumerate(lattice.components)
+        merged[component] .= c
+    end
+    print(io, merged)
+end
 
 function print_occupation(io::IO, lattice::MLattice{C,G}) where {C,G}
     if G == GenericLattice

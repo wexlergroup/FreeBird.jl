@@ -301,6 +301,43 @@
                     end
                 end
             end
+
+            @testset "singular 2D cell" begin
+                lattice_vectors_2d = [
+                    4.0 0.0 0.0;
+                    0.0 4.0 0.0;
+                    0.0 0.0 0.0
+                ]
+                positions_2d = [
+                    0.0 0.0 0.0;
+                    1.0 0.0 0.0;
+                    0.0 1.0 0.0;
+                    1.0 1.0 0.0
+                ]
+                neighbors = AbstractWalkers.compute_neighbors(
+                    lattice_vectors_2d, positions_2d,
+                    (true, true, false), [1.1, 1.5])
+                @test neighbors[1] == [[2, 3], [4]]
+                @test neighbors[4] == [[2, 3], [1]]
+            end
+
+            @testset "z-only minimum image" begin
+                lattice_vectors_z = [
+                    4.0 0.0 0.0;
+                    0.0 4.0 0.0;
+                    0.0 0.0 2.0
+                ]
+                positions_z = [
+                    0.0 0.0 0.0;
+                    0.0 0.0 1.5
+                ]
+                neighbors = AbstractWalkers.compute_neighbors(
+                    lattice_vectors_z, positions_z,
+                    (false, false, true), [0.6])
+                @test neighbors == [[[2]], [[1]]]
+            end
+
+            @test !isdefined(AbstractWalkers, :compute_neighbors_banded)
         end
 
 
@@ -1661,6 +1698,290 @@
             bytes = @allocated FreeBird.SamplingSchemes._clone_walker_shared_geometry(wk)
             @test bytes < 50_000
         end
+    end
+
+    @testset "AtomicLattice interface" begin
+        multispecies = AtomicLattice{2,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O", "H"], coverage=0.25,
+            num_nearest_neighbors=2, type_of_sites=["hollow"])
+        @test num_lattice_components(multispecies) == 2
+        @test sum(sum, multispecies.components) == 4
+        @test all(sum(component[i] for component in multispecies.components) <= 1
+                  for i in 1:num_sites(multispecies))
+        @test occupied_site_count(multispecies) == [2, 2]
+        symbols = FreeBird.AbstractWalkers.pyconvert(
+            Vector{String}, multispecies.ase_lattice.get_chemical_symbols())
+        @test count(==("O"), symbols) == 2
+        @test count(==("H"), symbols) == 2
+
+        specified = AtomicLattice{2,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O", "H"], coverage=0.9, components=[1, 3],
+            num_nearest_neighbors=2, type_of_sites=["hollow"])
+        @test occupied_site_count(specified) == [1, 3]
+        @test coverage(specified) == 0.25
+
+        @testset "multi-species occupancy and moves" begin
+            exclusive = deepcopy(multispecies)
+            occupied_by_one = first(occupied_indices(exclusive, 1))
+            set_occupied!(exclusive, occupied_by_one, true, 2)
+            @test !is_occupied(exclusive, occupied_by_one, 1)
+            @test is_occupied(exclusive, occupied_by_one, 2)
+
+            randomized = deepcopy(multispecies)
+            expected_counts = occupied_site_count(randomized)
+            generate_random_new_lattice_sample!(randomized)
+            @test occupied_site_count(randomized) == expected_counts
+            @test all(sum(component[i] for component in randomized.components) <= 1
+                      for i in 1:num_sites(randomized))
+            for _ in 1:50
+                lattice_random_walk!(randomized)
+            end
+            @test occupied_site_count(randomized) == expected_counts
+            @test all(sum(component[i] for component in randomized.components) <= 1
+                      for i in 1:num_sites(randomized))
+
+            contact = lattice_biased_sites(randomized; predicate=:contact)
+            cavity = lattice_biased_sites(randomized; predicate=:cavity)
+            global_empty = [i for i in 1:num_sites(randomized)
+                            if all(!component[i] for component in randomized.components)]
+            @test sort(vcat(contact, cavity)) == global_empty
+
+            insertion = deepcopy(multispecies)
+            before_insert = occupied_site_count(insertion)
+            success, _, inserted_site = lattice_insert_particle!(insertion, 2)
+            @test success
+            @test is_occupied(insertion, inserted_site, 2)
+            @test occupied_site_count(insertion) == before_insert + [0, 1]
+            success, _, _ = lattice_delete_particle!(insertion, 2)
+            @test success
+            @test occupied_site_count(insertion) == before_insert
+
+            microstate = deepcopy(multispecies)
+            random_microstate!(microstate; p=1.0)
+            @test sum(sum, microstate.components) == num_sites(microstate)
+            @test all(sum(component[i] for component in microstate.components) == 1
+                      for i in 1:num_sites(microstate))
+
+            cluster = deepcopy(multispecies)
+            cluster_before = deepcopy(cluster.components)
+            cluster_counts = occupied_site_count(cluster)
+            pairs = Tuple{Int,Int}[]
+            geometric_cluster_swap!(cluster, 0.4; record=pairs)
+            @test occupied_site_count(cluster) == cluster_counts
+            @test all(sum(component[i] for component in cluster.components) <= 1
+                      for i in 1:num_sites(cluster))
+            FreeBird.MonteCarloMoves._apply_cluster_pairs!(cluster, pairs)
+            @test cluster.components == cluster_before
+        end
+        @testset "ASE surface builders" begin
+            cases = [
+                (:fcc110, GenericLattice,    "Pd", (4, 4, 2), "hollow",     16),
+                (:fcc111, TriangularLattice, "Pd", (4, 4, 2), "fcc",        16),
+                (:fcc211, GenericLattice,    "Pd", (6, 4, 3), "ontop",       8),
+                (:bcc100, SquareLattice,     "Fe", (4, 4, 2), "bridge",     32),
+                (:bcc110, GenericLattice,    "Fe", (4, 4, 2), "shortbridge",16),
+                (:bcc111, TriangularLattice, "Fe", (4, 4, 3), "hollow",     16),
+                (:hcp0001, TriangularLattice,"Ti", (4, 4, 2), "hcp",        16),
+                (:hcp10m10, GenericLattice,  "Ti", (4, 4, 2), "ontop",      16),
+                (:diamond100, SquareLattice, "C",  (4, 4, 4), "ontop",      16),
+                (:diamond111, TriangularLattice,"C",(4, 4, 6), "ontop",     16),
+            ]
+            for (surface, geometry, atom, dims, site, expected_sites) in cases
+                lattice_type = AtomicLattice{1,geometry}
+                lattice = lattice_type(
+                    lattice_atom=atom, surface=surface,
+                    supercell_dimensions=dims, lattice_constant=4.0,
+                    periodicity=(true, true, false), adsorbate_atoms=["H"],
+                    coverage=0.25, num_nearest_neighbors=1,
+                    type_of_sites=[site])
+                @test lattice.surface == surface
+                @test num_sites(lattice) == expected_sites
+                @test n_occupied(lattice) == round(Int, 0.25 * expected_sites)
+                @test nn_distance(lattice) > 0
+                @test size(lattice.reflection_table) ==
+                      (expected_sites, expected_sites)
+                count_before = n_occupied(lattice)
+                geometric_cluster_swap!(lattice, 0.35)
+                @test n_occupied(lattice) == count_before
+            end
+
+            triangular = AtomicLattice{1,TriangularLattice}(
+                lattice_atom="Pd", surface="FCC(111)",
+                supercell_dimensions=(4, 4, 2), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=1,
+                type_of_sites=["bridge", "fcc", "hcp"])
+            @test triangular.surface == :fcc111
+            @test num_sites(triangular) == 5 * 4 * 4
+
+            triangular_multi = AtomicLattice{2,TriangularLattice}(
+                lattice_atom="Pd", surface=:fcc111,
+                supercell_dimensions=(4, 4, 2), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O", "H"],
+                components=[3, 5], num_nearest_neighbors=1,
+                type_of_sites=["fcc"])
+            multi_counts = occupied_site_count(triangular_multi)
+            for _ in 1:20
+                lattice_random_walk!(triangular_multi)
+            end
+            geometric_cluster_swap!(triangular_multi, 0.35)
+            @test occupied_site_count(triangular_multi) == multi_counts
+            @test all(sum(component[i] for component in triangular_multi.components) <= 1
+                      for i in 1:num_sites(triangular_multi))
+
+            @test_throws ArgumentError AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc111,
+                supercell_dimensions=(4, 4, 2), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.25, num_nearest_neighbors=1,
+                type_of_sites=["fcc"])
+            @test_throws ArgumentError AtomicLattice{1,TriangularLattice}(
+                lattice_atom="Pd", surface=:fcc111,
+                supercell_dimensions=(4, 4, 2), lattice_constant=3.947,
+                periodicity=(false, true, false), adsorbate_atoms=["O"],
+                coverage=0.25, num_nearest_neighbors=1,
+                type_of_sites=["fcc"])
+            @test_throws ArgumentError AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:not_a_surface,
+                supercell_dimensions=(4, 4, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.25, num_nearest_neighbors=1,
+                type_of_sites=["hollow"])
+            @test_throws ArgumentError AtomicLattice{1,GenericLattice}(
+                lattice_atom="Pd", surface=:fcc211,
+                supercell_dimensions=(4, 4, 2), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.25, num_nearest_neighbors=1,
+                type_of_sites=["ontop"])
+            @test_throws ArgumentError AtomicLattice{1,GenericLattice}(
+                lattice_atom="Ti", surface=:hcp10m10,
+                supercell_dimensions=(4, 3, 2), lattice_constant=2.95,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.25, num_nearest_neighbors=1,
+                type_of_sites=["ontop"])
+        end
+        @test_throws ArgumentError AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O"], coverage=1.01,
+            num_nearest_neighbors=2, type_of_sites=["hollow"])
+        @test_throws ArgumentError AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O"], coverage=0.25,
+            num_nearest_neighbors=2, type_of_sites=["typo"])
+
+        periodic = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O"], coverage=0.25,
+            num_nearest_neighbors=2, type_of_sites=["hollow"])
+        finite = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(false, false, false),
+            adsorbate_atoms=["O"], coverage=0.25,
+            num_nearest_neighbors=2, type_of_sites=["hollow"])
+
+        @test num_sites(periodic) == 16
+        @test num_sites(finite) == 9
+        @test num_lattice_components(periodic) == 1
+        @test n_occupied(periodic) == sum(periodic.components[1])
+        @test sort(vcat(occupied_indices(periodic), empty_indices(periodic))) ==
+              collect(1:num_sites(periodic))
+
+        sync_ase_lattice!(periodic)
+        before = copy(periodic.components[1])
+        sites_before = copy(periodic.all_sites)
+        lattice_random_walk!(periodic)
+        @test sum(periodic.components[1]) == sum(before)
+        @test periodic.all_sites == sites_before
+
+        # A random hop pair may legitimately be a no-op (the same site, or
+        # two sites with the same occupancy).  Exercise the mutation and ASE
+        # invalidation contract with a deterministic occupied/empty pair.
+        sync_ase_lattice!(periodic)
+        before = copy(periodic.components[1])
+        swap_sites!(periodic,
+                    first(occupied_indices(periodic)),
+                    first(empty_indices(periodic)))
+        @test count(periodic.components[1] .!= before) == 2
+        @test periodic.ase_dirty
+
+        sync_ase_lattice!(periodic)
+        @test !periodic.ase_dirty
+        @test neighbor_shell(periodic, 1) == periodic.neighbors[1][1]
+        @test !isempty(periodic.reflection_table)
+
+        @testset "square-lattice observables and motifs" begin
+            ordered = deepcopy(periodic)
+            ordered.components[1] .= false
+            spacing = nn_distance(ordered)
+            xmin = minimum(first, ordered.all_sites)
+            ymin = minimum(last, ordered.all_sites)
+            for (site, (x, y)) in enumerate(ordered.all_sites)
+                i = round(Int, (x - xmin) / spacing)
+                j = round(Int, (y - ymin) / spacing)
+                ordered.components[1][site] = iseven(i + j)
+            end
+            @test order_parameter_c2x2(ordered) ≈ 0.5 atol=1e-12
+            @test bragg_amplitude(ordered, 2, 2) ≈
+                  order_parameter_c2x2(ordered) atol=1e-12
+            @test order_parameter_stripe(ordered; period=2) ≈ 0.0 atol=1e-12
+
+            first_distance = ordered.cutoff_radii[1] / (1 + 1e-8)
+            pairs = enumerate_motif_embeddings(ordered, [first_distance])
+            expected_pairs = sum(length(ordered.neighbors[i][1])
+                                 for i in 1:num_sites(ordered)) ÷ 2
+            @test length(pairs) == expected_pairs
+        end
+
+        @testset "independent replicated walkers" begin
+            replicas = replicate_walkers(periodic, 3)
+            @test length(replicas) == 3
+            @test all(w -> w.configuration isa AtomicLattice{1,SquareLattice},
+                      replicas)
+            @test all(w -> w.configuration.components == periodic.components,
+                      replicas)
+            set_occupied!(replicas[1].configuration,
+                          first(empty_indices(replicas[1].configuration)), true)
+            @test replicas[1].configuration.components !=
+                  replicas[2].configuration.components
+            @test !FreeBird.AbstractWalkers.pyis(
+                replicas[1].configuration.ase_lattice,
+                replicas[2].configuration.ase_lattice)
+        end
+
+        @testset "deepcopy owns its ASE cache" begin
+            copied = deepcopy(periodic)
+            @test copied.components == periodic.components
+            @test copied.components !== periodic.components
+            @test copied.components[1] !== periodic.components[1]
+            @test !FreeBird.AbstractWalkers.pyis(
+                copied.ase_lattice, periodic.ase_lattice)
+
+            original_atom_count = FreeBird.AbstractWalkers.pyconvert(
+                Int, periodic.ase_lattice.__len__())
+            copied.ase_lattice.pop()
+            @test FreeBird.AbstractWalkers.pyconvert(
+                Int, periodic.ase_lattice.__len__()) == original_atom_count
+
+            set_occupied!(periodic, first(empty_indices(periodic)), true)
+            @test periodic.ase_dirty
+            dirty_copy = deepcopy(periodic)
+            @test dirty_copy.ase_dirty
+            sync_ase_lattice!(dirty_copy)
+            @test !dirty_copy.ase_dirty
+            @test periodic.ase_dirty
+        end
+
+        walker = LatticeWalker(periodic)
+        @test walker isa LatticeWalker{1}
+        @test !isempty(sprint(show, walker))
+        @test !isempty(sprint(show, [walker]))
     end
 
 end

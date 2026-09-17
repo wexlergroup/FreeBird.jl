@@ -12,12 +12,14 @@ using ..AbstractWalkers
 using ..AbstractPotentials
 using ..AbstractHamiltonians
 using AtomsCalculators
+using PythonCall
 
 export pbc_dist, pbc_displacement
 export interacting_energy, frozen_energy
 export single_site_energy
 export site_flip_delta
 export pair_force, interacting_gradient
+export ICETHamiltonian
 
 # definitions of frozen_energy and interacting_energy
 include("atomistic_energies.jl")
@@ -30,6 +32,8 @@ include("atomistic_pairwise.jl")
 
 # definitions of single_site_energy for computing a site energy using a pairwise potential
 include("atomistic_single_site.jl")
+
+include("icet_energies.jl")
 
 # definitions of pairwise forces and gradients
 include("atomistic_forces.jl")

@@ -8,6 +8,7 @@ module FreeBirdIO
 using AtomsIO, ExtXYZ, DataFrames, CSV
 using AtomsBase, Unitful
 using Arrow
+using ASEconvert, PythonCall
 
 using ..AbstractWalkers
 using ..AbstractLiveSets
@@ -59,6 +60,9 @@ Converts a `FlexibleSystem` object to an `AtomWalker` object.
 """
 function convert_system_to_walker(at::FlexibleSystem, resume::Bool)
     data = at.data
+    if get(data, :freebird_walker, "") == "AtomicLattice"
+        return convert_system_to_atomic_lattice_walker(at, resume)
+    end
     energy = (haskey(data, :energy) && resume) ? data[:energy]*u"eV" : 0.0u"eV"
     iter = (haskey(data, :iter) && resume && data[:iter]>=0) ? data[:iter] : 0
     list_num_par = (haskey(data, :list_num_par) && resume) ? data[:list_num_par] : [length(at)]
@@ -68,6 +72,85 @@ function convert_system_to_walker(at::FlexibleSystem, resume::Bool)
     new_list = [Atom(atomic_symbol(i),position(i)) for i in at.particles]
     at = FastSystem(new_list, cell_vectors(at), periodicity(at))
     return AtomWalker{C}(at; energy=energy, iter=iter, list_num_par=list_num_par, frozen=[frozen...], energy_frozen_part=e_frozen)
+end
+
+_split_metadata(value::AbstractVector) = string.(value)
+_split_metadata(value::Tuple) = string.(value)
+_split_metadata(value) = isempty(string(value)) ? String[] : String.(split(string(value), ','))
+
+function _atomic_lattice_geometry(name::AbstractString)
+    name == "SquareLattice" && return SquareLattice
+    name == "TriangularLattice" && return TriangularLattice
+    name == "GenericLattice" && return GenericLattice
+    throw(ArgumentError("unsupported AtomicLattice geometry '$name' in trajectory"))
+end
+
+"""Reconstruct an `AtomicLattice` walker from FreeBird extXYZ metadata."""
+function convert_system_to_atomic_lattice_walker(at::FlexibleSystem, resume::Bool)
+    data = at.data
+    required = (:lattice_atom, :adsorbate_atoms, :supercell_dimensions,
+                :lattice_constant, :lattice_periodicity, :num_nearest_neighbors,
+                :type_of_sites, :adsorbate_height, :lattice_geometry)
+    missing_keys = filter(k -> !haskey(data, k), required)
+    isempty(missing_keys) || throw(ArgumentError(
+        "AtomicLattice trajectory is missing metadata: $(join(missing_keys, ", "))"))
+
+    adsorbates = _split_metadata(data[:adsorbate_atoms])
+    site_types = _split_metadata(data[:type_of_sites])
+    dims = Tuple(parse.(Int, _split_metadata(data[:supercell_dimensions])))
+    pbc = Tuple(Bool(parse(Int, x)) for x in _split_metadata(data[:lattice_periodicity]))
+    length(dims) == 3 || throw(ArgumentError("supercell_dimensions must contain three integers"))
+    length(pbc) == 3 || throw(ArgumentError("lattice_periodicity must contain three booleans"))
+
+    geometry = _atomic_lattice_geometry(string(data[:lattice_geometry]))
+    surface = haskey(data, :ase_surface) ? string(data[:ase_surface]) : "fcc100"
+    lattice_type = AtomicLattice{length(adsorbates),geometry}
+    lattice = lattice_type(
+        lattice_atom=string(data[:lattice_atom]),
+        surface=surface,
+        supercell_dimensions=dims,
+        lattice_constant=Float64(data[:lattice_constant]),
+        periodicity=pbc,
+        adsorbate_atoms=adsorbates,
+        coverage=0.0,
+        num_nearest_neighbors=Int(data[:num_nearest_neighbors]),
+        type_of_sites=site_types,
+        adsorbate_height=Float64(data[:adsorbate_height]))
+
+    encoded_components = if haskey(data, :component_occupations)
+        split(string(data[:component_occupations]), ';')
+    elseif haskey(data, :occupations) && length(adsorbates) == 1
+        [data[:occupations]]
+    else
+        throw(ArgumentError(
+            "AtomicLattice trajectory is missing component_occupations metadata"))
+    end
+    length(encoded_components) == length(adsorbates) || throw(ArgumentError(
+        "trajectory contains $(length(encoded_components)) component masks for " *
+        "$(length(adsorbates)) adsorbate species"))
+    for (component, raw) in zip(lattice.components, encoded_components)
+        mask = if raw isa AbstractVector
+            Bool.(raw)
+        else
+            encoded = string(raw)
+            startswith(encoded, "bits=") && (encoded = encoded[6:end])
+            all(c -> c == '0' || c == '1', encoded) || throw(ArgumentError(
+                "component occupation masks must contain only zeroes and ones"))
+            [c == '1' for c in encoded]
+        end
+        length(mask) == num_sites(lattice) || throw(ArgumentError(
+            "occupation mask has $(length(mask)) sites, expected $(num_sites(lattice))"))
+        component .= mask
+    end
+    any(sum(component[site] for component in lattice.components) > 1
+        for site in 1:num_sites(lattice)) && throw(ArgumentError(
+            "AtomicLattice component masks overlap at one or more sites"))
+    lattice.ase_dirty = true
+    sync_ase_lattice!(lattice)
+
+    energy = (resume && haskey(data, :energy)) ? Float64(data[:energy]) * u"eV" : 0.0u"eV"
+    iter = (resume && haskey(data, :iter) && data[:iter] >= 0) ? Int(data[:iter]) : 0
+    return LatticeWalker(lattice; energy=energy, iter=iter)
 end
 
 """
@@ -202,6 +285,47 @@ function convert_walker_to_system(at::AtomWalker)
     return AbstractSystem(config; energy=energy, iter=iter, list_num_par=num, frozen=frozen, energy_frozen_part=e_frozen)
 end
 
+"""Convert an AtomicLattice walker to an extXYZ-compatible atomic system."""
+function convert_walker_to_system(at::LatticeWalker)
+    lattice = at.configuration
+    lattice isa AtomicLattice || throw(ArgumentError(
+        "only AtomicLattice walkers have an atomic-system representation"))
+    sync_ase_lattice!(lattice)
+    ase_config = pyconvert(AbstractSystem, lattice.ase_lattice)
+    # Strip ASE-only metadata such as `adsorbate_info` (a Python dictionary),
+    # which ExtXYZ cannot represent, while preserving atoms, cell and PBC.
+    config = FastSystem(
+        [Atom(atomic_symbol(atom), position(atom)) for atom in ase_config.particles],
+        cell_vectors(ase_config), periodicity(ase_config))
+    geometry = string(nameof(typeof(lattice).parameters[2]))
+    metadata = (;
+        energy=at.energy.val,
+        iter=at.iter,
+        freebird_walker="AtomicLattice",
+        lattice_geometry=geometry,
+        lattice_atom=lattice.lattice_atom,
+        ase_surface=string(lattice.surface),
+        adsorbate_atoms=join(lattice.adsorbate_atoms, ','),
+        supercell_dimensions=join(lattice.supercell_dimensions, ','),
+        lattice_constant=lattice.lattice_constant,
+        lattice_periodicity=join(Int.(lattice.periodicity), ','),
+        num_nearest_neighbors=lattice.num_nearest_neighbors,
+        type_of_sites=join(lattice.type_of_sites, ','),
+        adsorbate_height=lattice.adsorbate_height,
+        # The non-numeric prefix prevents ExtXYZ from parsing a long bit mask
+        # as a fixed-width integer (and overflowing for realistic lattices).
+        component_occupations=join(
+            ("bits=" * join(Int.(component)) for component in lattice.components), ';'))
+    if num_lattice_components(lattice) == 1
+        # Single-component frames include a compact `occupations` field.
+        # Multi-species frames use `component_occupations`; a bare empty
+        # `occupations=` value is not valid extXYZ metadata.
+        metadata = merge(metadata, (;
+            occupations="bits=" * join(Int.(lattice.components[1]))))
+    end
+    return AbstractSystem(config; metadata...)
+end
+
 """
     append_walker(filename::String, at::AtomWalker)
 
@@ -267,6 +391,10 @@ function write_single_walker(filename::String, at::AtomWalker)
     save_system(filename::String, flex)
 end
 
+function write_single_walker(filename::String, at::LatticeWalker)
+    write_walkers(filename, [at])
+end
+
 """
     write_walkers(filename::String, ats::Vector{AtomWalker})
 
@@ -293,6 +421,19 @@ Write a collection of `LatticeWalker` objects to a file.
 
 """
 function write_walkers(filename::String, ats::Vector{LatticeWalker{C}}; append=false) where C
+    if !isempty(ats) && all(at -> at.configuration isa AtomicLattice, ats)
+        systems = convert_walker_to_system.(ats)
+        if append
+            for system in systems
+                write_frame(filename, ExtXYZ.write_dict(Atoms(system)), append=true)
+            end
+        else
+            save_trajectory(filename, systems)
+        end
+        return nothing
+    elseif any(at -> at.configuration isa AtomicLattice, ats)
+        throw(ArgumentError("cannot serialize mixed AtomicLattice and non-atomic lattice walkers"))
+    end
     occupancies = [at.configuration.components for at in ats]
     energies = [at.energy.val for at in ats]
     iter = [at.iter for at in ats]

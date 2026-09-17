@@ -352,7 +352,82 @@ You should expect to see a single peak in the heat capacity curve around 40 K, a
 
 That's it! You have successfully run an exact enumeration simulation using the FreeBird.jl package.
 
+## Atomic adsorption lattices
+
+Use [`AtomicLattice`](@ref) to represent adsorbates on an explicit atomic
+surface. Each adsorption site can be empty or occupied by one adsorbate.
+FreeBird updates the ASE structure automatically when an atomic energy model
+evaluates a configuration.
+
+### Creating a surface
+
+The following example creates four hollow sites above a 2×2 Pd(100) slab and
+places one oxygen atom on them:
+
+````@example quick_start
+atomic = AtomicLattice{1,SquareLattice}(
+    lattice_atom="Pd",
+    surface=:fcc100,
+    supercell_dimensions=(2, 2, 1),
+    lattice_constant=3.947,
+    periodicity=(true, true, false),
+    adsorbate_atoms=["O"],
+    components=[1],
+    num_nearest_neighbors=2,
+    type_of_sites=["hollow"],
+);
+(num_sites(atomic), occupied_site_count(atomic))
+````
+
+`components=[1]` places one oxygen atom on the lattice. You can instead use
+`coverage` to initialize a fraction of the sites. The `type_of_sites` argument
+selects site families such as `"ontop"`, `"bridge"`, or `"hollow"` when they
+are available on the chosen surface.
+
+Supported surfaces include low-index fcc, bcc, hcp, and diamond faces. The
+geometry type must match the surface: for example, `fcc100` uses
+`SquareLattice`, `fcc111` uses `TriangularLattice`, and stepped or rectangular
+faces use `GenericLattice`. See [`AtomicLattice`](@ref) for the complete list.
+
+### Adding multiple adsorbate species
+
+Set `C` to the number of species and give one particle count per species. This
+example places one oxygen and one hydrogen atom on the Pd surface:
+
+````@example quick_start
+binary_atomic = AtomicLattice{2,SquareLattice}(
+    lattice_atom="Pd",
+    surface=:fcc100,
+    supercell_dimensions=(2, 2, 1),
+    lattice_constant=3.947,
+    periodicity=(true, true, false),
+    adsorbate_atoms=["O", "H"],
+    components=[1, 1],
+    num_nearest_neighbors=2,
+    type_of_sites=["hollow"],
+);
+occupied_site_count(binary_atomic)
+````
+
+### Choosing an energy model
+
+A single-species atomic lattice can use a
+[`GenericLatticeHamiltonian`](@ref). Here we enumerate every arrangement of
+the one oxygen atom created above:
+
+````@example quick_start
+atomic_ham = GenericLatticeHamiltonian(
+    -0.04, [-0.01, -0.0025], u"eV")
+atomic_df, atomic_ls = exact_enumeration(atomic, atomic_ham);
+length(atomic_df.energy)
+````
+
+Use [`ICETHamiltonian`](@ref) for a compatible one-species fcc(100) cluster
+expansion. Use [`PyMLPotential`](@ref) when an ASE calculator should evaluate
+the complete atomic structure. [Using Machine Learning Interatomic Potentials
+(MLIPs) in FreeBird](@ref) shows how to configure an MLIP for
+fixed-particle-number lattice sampling.
+
 ---
 
 *This page was generated using [Literate.jl](https://github.com/fredrikekre/Literate.jl).*
-

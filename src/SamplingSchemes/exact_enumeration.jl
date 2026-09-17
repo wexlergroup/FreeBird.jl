@@ -86,14 +86,41 @@ function enumerate_lattices(init_lattice::SLattice{G}) where {G}
     return lattices
 end
 
+function enumerate_lattices(init_lattice::AtomicLattice{C,G}) where {C,G}
+    total_sites = num_sites(init_lattice)
+    labels = zeros(Int, total_sites)
+    for c in 1:C
+        for site in occupied_indices(init_lattice, c)
+            labels[site] = c
+        end
+    end
+    sort!(labels)
+    all_configs = unique_permutations(labels)
+    lattices = Vector{typeof(init_lattice)}(undef, length(all_configs))
+    # Python-backed ASE objects must be copied serially: PythonCall object
+    # allocation from multiple Julia threads can corrupt the interpreter.
+    for index in eachindex(all_configs)
+        lattice = deepcopy(init_lattice)
+        config = all_configs[index]
+        for c in 1:C
+            lattice.components[c] .= config .== c
+        end
+        lattice.ase_dirty = true
+        lattices[index] = lattice
+    end
+    return lattices
+end
+
 """
-    exact_enumeration(lattice::SLattice{G}, cutoff_radii::Tuple{Float64, Float64}, h::ClassicalHamiltonian) where G
+    exact_enumeration(lattice::AbstractLattice, energy_model)
 
 Enumerate all possible configurations of a lattice system and compute the energy of each configuration.
 
 # Arguments
-- `lattice::SLattice{G}`: The (starting) lattice system to enumerate. All possible configurations will be generated from this lattice system.
-- `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
+- `lattice::AbstractLattice`: The starting lattice system to enumerate. All
+  configurations with its component counts will be generated.
+- `h`: The lattice energy model. `AtomicLattice` also accepts a
+  `PyMLPotential`.
 
 # Returns
 - `DataFrame`: A DataFrame containing the energy and configuration of each configuration.
@@ -121,4 +148,15 @@ function exact_enumeration(lattice::MLattice{C,G}, h::ClassicalHamiltonian) wher
     return df, ls
 end
 
-
+function exact_enumeration(lattice::AtomicLattice{C,G},
+                           h::Union{ClassicalHamiltonian,PyMLPotential}) where {C,G}
+    lattices = enumerate_lattices(lattice)
+    ls = LatticeGasWalkers(LatticeWalker.(lattices), h)
+    energies = Vector{typeof(ls.walkers[1].energy)}(undef, length(ls.walkers))
+    configurations = Vector{Vector{Vector{Bool}}}(undef, length(ls.walkers))
+    Threads.@threads for i in eachindex(ls.walkers)
+        energies[i] = ls.walkers[i].energy
+        configurations[i] = deepcopy(ls.walkers[i].configuration.components)
+    end
+    return DataFrame(energy=energies, config=configurations), ls
+end

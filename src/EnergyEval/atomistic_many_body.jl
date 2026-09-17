@@ -74,6 +74,19 @@ function interacting_energy(system::AbstractSystem, calc::PyMLPotential)
     return AtomsCalculators.potential_energy(system, calc.calc)
 end
 
+"""
+    interacting_energy(lattice::AtomicLattice, calc::PyMLPotential)
+
+Synchronize an `AtomicLattice`'s derived ASE cache, convert it to the
+`AtomsBase` representation expected by `AtomsCalculators`, and evaluate the
+wrapped Python calculator.
+"""
+function interacting_energy(lattice::AtomicLattice, calc::PyMLPotential)
+    system = pyconvert(
+        AbstractSystem, sync_ase_lattice!(lattice).ase_lattice)
+    return interacting_energy(system, calc)
+end
+
 # variant with list_num_par/frozen passed by callers in LJ workflow
 function interacting_energy(system::AbstractSystem,
                             calc::PyMLPotential,

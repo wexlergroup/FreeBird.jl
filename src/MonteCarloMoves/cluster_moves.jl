@@ -1,7 +1,7 @@
 """
-    geometric_cluster_swap!(lattice::MLattice{C,SquareLattice}, p::Float64) where C
+    geometric_cluster_swap!(lattice, p::Float64)
 
-Perform a geometric cluster move on a square lattice by point inversion through a random pivot.
+Perform a geometric cluster move by point inversion through a random pivot.
 
 A random pivot site and seed site are chosen on the periodic lattice. A cluster of sites is
 grown from the seed via BFS, adding first-shell neighbors with fixed probability `p`
@@ -16,7 +16,8 @@ The parameter `p` controls the average cluster size: `p ≈ 0` gives single-site
 `p → 1` gives lattice-spanning clusters.
 
 # Arguments
-- `lattice::MLattice{C,SquareLattice}`: The lattice to perform the cluster move on.
+- `lattice`: A supported periodic `MLattice`, or an `AtomicLattice` whose
+  adsorption-site set has a validated point-inversion table.
 - `p::Float64`: Growth probability for BFS cluster construction (0 < p < 1).
 - `record::Union{Nothing,Vector{Tuple{Int,Int}}}=nothing`: When a vector is
   supplied, every applied (site, reflected_site) pair is appended to it;
@@ -25,7 +26,7 @@ The parameter `p` controls the average cluster size: `p ≈ 0` gives single-site
   random-number draw.
 
 # Returns
-- `lattice::MLattice{C,SquareLattice}`: The mutated lattice after the cluster swap.
+- `lattice`: The mutated lattice after the cluster swap.
 
 # Notes
 - Preserves per-component particle counts exactly.
@@ -98,6 +99,14 @@ function _apply_cluster_pairs!(lattice::MLattice{C,G},
     return lattice
 end
 
+function _apply_cluster_pairs!(lattice::AtomicLattice,
+                               pairs::Vector{Tuple{Int,Int}})
+    for (a, b) in pairs
+        a != b && swap_sites!(lattice, a, b)
+    end
+    return lattice
+end
+
 """
     _site_to_grid(site::Int, Lx::Int, Ly::Int) -> Tuple{Int,Int,Int}
 
@@ -144,7 +153,7 @@ pairing each visited site with its image under the `reflect` closure (a
 self-inverse site-index map supplied by the geometry-specific caller).
 Returns a vector of (site, reflected_site) pairs.
 """
-function _build_geometric_cluster(lattice::MLattice,
+function _build_geometric_cluster(lattice::AbstractLattice,
                                   seed::Int,
                                   reflect::F,
                                   p::Float64) where {F}
@@ -401,4 +410,31 @@ function geometric_cluster_swap!(lattice::MLattice{C,GenericLattice}, p::Float64
     throw(ArgumentError("geometric_cluster_swap! supports square and triangular " *
         "lattices only, got a GenericLattice configuration; use swap-only " *
         "decorrelation (clusters_freq = 0) for generic geometries"))
+end
+
+"""
+    geometric_cluster_swap!(lattice::AtomicLattice, p::Float64)
+
+Perform a periodic point-inversion cluster move using the validated reflection
+table constructed over `all_sites`. Every component mask is exchanged, so the
+move preserves each species count exactly.
+"""
+function geometric_cluster_swap!(lattice::AtomicLattice, p::Float64;
+                                 record::Union{Nothing,Vector{Tuple{Int,Int}}}=nothing)
+    isempty(lattice.reflection_table) && throw(ArgumentError(
+        "the AtomicLattice adsorption-site set is not closed under periodic " *
+        "point inversion, so geometric cluster moves are unavailable for " *
+        "type_of_sites=$(lattice.type_of_sites) and periodicity=$(lattice.periodicity)"))
+    n_sites = num_sites(lattice)
+    pivot = rand(1:n_sites)
+    seed = rand(1:n_sites)
+    reflect = site -> lattice.reflection_table[pivot, site]
+    cluster = _build_geometric_cluster(lattice, seed, reflect, p)
+    _apply_cluster_pairs!(lattice, cluster)
+    if record !== nothing
+        for pair in cluster
+            pair[1] != pair[2] && push!(record, pair)
+        end
+    end
+    return lattice
 end

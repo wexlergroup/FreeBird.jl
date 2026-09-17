@@ -220,4 +220,89 @@ end
         @test _test_min_dist(sysj1) >= 12.5 / 5 - 2 * sqrt(3) * 0.2 - 1e-9
         @test_throws ArgumentError FreeBirdIO.generate_lattice_starting_config(12.5, 0)
     end
+
+    @testset "AtomicLattice extXYZ round trip" begin
+        lattice = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        lattice.components[1] .= false
+        lattice.components[1][[1, 6, 11]] .= true
+        lattice.ase_dirty = true
+        walker = LatticeWalker(lattice; energy=-1.25u"eV", iter=7)
+
+        filename = "atomic_lattice.traj.extxyz"
+        write_walkers(filename, [walker])
+        @test isfile(filename)
+        @test lattice.ase_dirty == false
+
+        frames = read_configs(filename)
+        @test length(frames) == 1
+        @test frames[1].data[:freebird_walker] == "AtomicLattice"
+        @test frames[1].data[:ase_surface] == "fcc100"
+        @test frames[1].data[:occupations] == "bits=1000010000100000"
+        @test frames[1].data[:component_occupations] == "bits=1000010000100000"
+
+        restored = read_single_walker(filename)
+        @test restored isa LatticeWalker{1}
+        @test restored.energy == walker.energy
+        @test restored.iter == walker.iter
+        @test restored.configuration isa AtomicLattice{1,SquareLattice}
+        @test restored.configuration.components == lattice.components
+        @test restored.configuration.periodicity == lattice.periodicity
+        @test restored.configuration.ase_dirty == false
+
+        write_single_walker(filename, walker, true)
+        @test length(read_walkers(filename)) == 2
+        rm(filename, force=true)
+
+        multi = AtomicLattice{2,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O", "H"],
+            coverage=0.0,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        multi.components[1][[1, 6]] .= true
+        multi.components[2][[3, 12, 16]] .= true
+        multi.ase_dirty = true
+        multi_walker = LatticeWalker(multi; energy=-2.0u"eV", iter=9)
+        multi_filename = "atomic_lattice_multispecies.traj.extxyz"
+        write_single_walker(multi_filename, multi_walker)
+
+        multi_frames = read_configs(multi_filename)
+        @test multi_frames[1].data[:component_occupations] ==
+              "bits=1000010000000000;bits=0010000000010001"
+        multi_restored = read_single_walker(multi_filename)
+        @test multi_restored isa LatticeWalker{2}
+        @test multi_restored.configuration isa AtomicLattice{2,SquareLattice}
+        @test multi_restored.configuration.adsorbate_atoms == ["O", "H"]
+        @test multi_restored.configuration.components == multi.components
+        @test multi_restored.energy == multi_walker.energy
+        @test multi_restored.iter == multi_walker.iter
+        rm(multi_filename, force=true)
+
+        triangular = AtomicLattice{1,TriangularLattice}(
+            lattice_atom="Pd", surface=:fcc111,
+            supercell_dimensions=(3, 3, 2), lattice_constant=3.947,
+            periodicity=(true, true, false), adsorbate_atoms=["O"],
+            coverage=0.0, num_nearest_neighbors=1,
+            type_of_sites=["fcc"])
+        triangular.components[1][[1, 5, 9]] .= true
+        triangular.ase_dirty = true
+        triangular_filename = "atomic_lattice_fcc111.traj.extxyz"
+        write_single_walker(triangular_filename, LatticeWalker(triangular))
+        triangular_restored = read_single_walker(triangular_filename)
+        @test triangular_restored.configuration isa AtomicLattice{1,TriangularLattice}
+        @test triangular_restored.configuration.surface == :fcc111
+        @test triangular_restored.configuration.components == triangular.components
+        rm(triangular_filename, force=true)
+    end
 end

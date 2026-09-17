@@ -107,6 +107,21 @@ function interacting_energy(lattice::SLattice, h::GenericLatticeHamiltonian{N,U}
     return e_interaction + e_adsorption
 end
 
+"""
+    interacting_energy(lattice::AtomicLattice{1}, h::GenericLatticeHamiltonian)
+
+Evaluate the same single-component lattice Hamiltonian on an atomic adsorption
+lattice. Every entry of `all_sites` is an adsorption site, so the on-site term
+applies to every occupied component-mask entry.
+"""
+function interacting_energy(lattice::AtomicLattice{1},
+                            h::GenericLatticeHamiltonian{N,U}) where {N,U}
+    e_interaction::U = lattice_interaction_energy(
+        lattice.components[1], lattice.neighbors, h)
+    e_adsorption::U = sum(lattice.components[1]) * h.on_site_interaction
+    return e_interaction + e_adsorption
+end
+
 function interacting_energy(lattice::SLattice, h::MLatticeHamiltonian{C,N,U}) where {C,N,U}
     # for SLattice with a multi-component Hamiltonian, taking the first element of the Hamiltonian matrix
     ham = h.Hamiltonians[1,1]
@@ -158,6 +173,15 @@ function interacting_energy(lattice::SLattice, h::ClusterLatticeHamiltonian{N,U}
     return e
 end
 
+function interacting_energy(lattice::AtomicLattice{1},
+                            h::ClusterLatticeHamiltonian{N,U}) where {N,U}
+    e = interacting_energy(lattice, h.pair_ham)
+    for c in h.clusters
+        e += cluster_energy(lattice.components[1], c)
+    end
+    return e
+end
+
 """
     site_field_energy(occupations::Vector{Bool}, field::Vector{U})
 
@@ -189,6 +213,13 @@ occupation-masked field sum of [`site_field_energy`](@ref).
 Single-component (`SLattice`) configurations only.
 """
 function interacting_energy(lattice::SLattice, h::SiteFieldLatticeHamiltonian{H,U}) where {H,U}
+    e_base::U = interacting_energy(lattice, h.base)
+    e_field::U = site_field_energy(lattice.components[1], h.field)
+    return e_base + e_field
+end
+
+function interacting_energy(lattice::AtomicLattice{1},
+                            h::SiteFieldLatticeHamiltonian{H,U}) where {H,U}
     e_base::U = interacting_energy(lattice, h.base)
     e_field::U = site_field_energy(lattice.components[1], h.field)
     return e_base + e_field
@@ -237,6 +268,26 @@ function site_flip_delta(lattice::SLattice, h::GenericLatticeHamiltonian{N,U},
     return sgn * acc
 end
 
+function site_flip_delta(lattice::AtomicLattice{1},
+                         h::GenericLatticeHamiltonian{N,U}, site::Int) where {N,U}
+    _check_shell_counts(lattice.neighbors, N)
+    occ = lattice.components[1]
+    sgn = occ[site] ? -1 : 1
+    acc::U = h.on_site_interaction
+    nbrs = lattice.neighbors[site]
+    for n in 1:N
+        Jn = h.nth_neighbor_interactions[n]
+        for j in nbrs[n]
+            if j == site
+                acc += Jn / 2
+            elseif occ[j]
+                acc += Jn
+            end
+        end
+    end
+    return sgn * acc
+end
+
 """
     site_flip_delta(lattice::SLattice, h::MLatticeHamiltonian{C,N,U}, site::Int) where {C,N,U}
 
@@ -258,6 +309,13 @@ signed field entry of the flipped site, mirroring the wrapper's
 """
 function site_flip_delta(lattice::SLattice, h::SiteFieldLatticeHamiltonian{H,U},
                          site::Int) where {H,U}
+    base_delta = site_flip_delta(lattice, h.base, site)
+    sgn = lattice.components[1][site] ? -1 : 1
+    return base_delta + sgn * h.field[site]
+end
+
+function site_flip_delta(lattice::AtomicLattice{1},
+                         h::SiteFieldLatticeHamiltonian{H,U}, site::Int) where {H,U}
     base_delta = site_flip_delta(lattice, h.base, site)
     sgn = lattice.components[1][site] ? -1 : 1
     return base_delta + sgn * h.field[site]
@@ -315,6 +373,17 @@ function site_flip_delta(lattice::SLattice, h::ClusterLatticeHamiltonian{N,U},
     return site_flip_delta(lattice, h.pair_ham, site) + sgn * acc
 end
 
+function site_flip_delta(lattice::AtomicLattice{1},
+                         h::ClusterLatticeHamiltonian{N,U}, site::Int) where {N,U}
+    occ = lattice.components[1]
+    sgn = occ[site] ? -1 : 1
+    acc::U = zero(U)
+    for c in h.clusters
+        acc += cluster_flip_count(occ, c, site) * c.coupling
+    end
+    return site_flip_delta(lattice, h.pair_ham, site) + sgn * acc
+end
+
 """
     interacting_energy(lattice::MLattice{C,G}, h::MLatticeHamiltonian{C,N,U})
 
@@ -340,5 +409,24 @@ function interacting_energy(lattice::MLattice{C,G}, h::MLatticeHamiltonian{C,N,U
         end
     end
     @debug "interaction energy: $interaction_energy, adsorption energy: $adsorption_energy"
+    return interaction_energy + adsorption_energy
+end
+
+"""Evaluate a multi-component lattice Hamiltonian on an `AtomicLattice`."""
+function interacting_energy(lattice::AtomicLattice{C,G},
+                            h::MLatticeHamiltonian{C,N,U}) where {C,G,N,U}
+    adsorption_energy = zero(U)
+    interaction_energy = zero(U)
+    for i in 1:C
+        ham = h.Hamiltonians[i, i]
+        interaction_energy += lattice_interaction_energy(
+            lattice.components[i], lattice.neighbors, ham)
+        adsorption_energy += sum(lattice.components[i]) * ham.on_site_interaction
+        for j in (i + 1):C
+            interaction_energy += inter_component_energy(
+                lattice.components[i], lattice.components[j], lattice.neighbors,
+                h.Hamiltonians[i, j])
+        end
+    end
     return interaction_energy + adsorption_energy
 end

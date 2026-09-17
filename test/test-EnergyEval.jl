@@ -851,4 +851,144 @@
         @test frozen_energy(empty_at, cps, [0, 0], [true, true]) == 0.0u"eV"
     end
 
+    @testset "AtomicLattice lattice Hamiltonians" begin
+        atomic = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O"], coverage=0.0,
+            num_nearest_neighbors=2, type_of_sites=["hollow"])
+        atomic.components[1][[1, 2, 6, 11]] .= true
+        atomic.ase_dirty = true
+        pair = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+
+        expected = FreeBird.EnergyEval.lattice_interaction_energy(
+            atomic.components[1], atomic.neighbors, pair) +
+            sum(atomic.components[1]) * pair.on_site_interaction
+        @test interacting_energy(atomic, pair) == expected
+
+        field = collect(1:num_sites(atomic)) .* 1e-3 .* u"eV"
+        field_ham = SiteFieldLatticeHamiltonian(pair, field)
+        @test interacting_energy(atomic, field_ham) ==
+              expected + sum(field[atomic.components[1]])
+
+        cluster_ham = ClusterLatticeHamiltonian(pair,
+            [ClusterInteraction(0.012u"eV", [(1, 2, 6)])])
+        @test interacting_energy(atomic, cluster_ham) == expected + 0.012u"eV"
+
+        for ham in (pair, field_ham, cluster_ham)
+            for site in (1, 3, 6, 16)
+                e0 = interacting_energy(atomic, ham)
+                delta = site_flip_delta(atomic, ham, site)
+                set_occupied!(atomic, site, !is_occupied(atomic, site))
+                e1 = interacting_energy(atomic, ham)
+                @test isapprox(e1 - e0, delta; atol=1e-13u"eV")
+                set_occupied!(atomic, site, !is_occupied(atomic, site))
+            end
+        end
+
+        multi = AtomicLattice{2,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O", "H"], coverage=0.0,
+            num_nearest_neighbors=2, type_of_sites=["hollow"])
+        multi.components[1][[1, 2, 6]] .= true
+        multi.components[2][[3, 7, 12]] .= true
+        h_multi = MLatticeHamiltonian(2, [
+            GenericLatticeHamiltonian(-0.04, [-0.01, -0.002], u"eV"),
+            GenericLatticeHamiltonian(-0.03, [-0.008, -0.001], u"eV"),
+            GenericLatticeHamiltonian(-0.02, [-0.006, -0.0005], u"eV")])
+        expected_multi = zero(1.0u"eV")
+        for i in 1:2
+            ham = h_multi.Hamiltonians[i, i]
+            expected_multi += FreeBird.EnergyEval.lattice_interaction_energy(
+                multi.components[i], multi.neighbors, ham)
+            expected_multi += sum(multi.components[i]) * ham.on_site_interaction
+            for j in (i + 1):2
+                expected_multi += FreeBird.EnergyEval.inter_component_energy(
+                    multi.components[i], multi.components[j], multi.neighbors,
+                    h_multi.Hamiltonians[i, j])
+            end
+        end
+        @test isapprox(interacting_energy(multi, h_multi), expected_multi;
+                       atol=1e-13u"eV")
+
+        tiny = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O"], coverage=0.5,
+            num_nearest_neighbors=1, type_of_sites=["hollow"])
+        tiny_ham = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
+        exact_df, exact_liveset = exact_enumeration(tiny, tiny_ham)
+        @test nrow(exact_df) == 6
+        @test length(exact_liveset.walkers) == 6
+        @test all(sum(first(config)) == 2 for config in exact_df.config)
+        @test all(w -> w.energy == interacting_energy(w.configuration, tiny_ham),
+                  exact_liveset.walkers)
+    end
+
+
+    @testset "ICETHamiltonian" begin
+        # The mapping helpers are pure Julia; constructing ICETHamiltonian
+        # performs the optional Python import.
+
+        @test ICETHamiltonian <: ClassicalHamiltonian
+        @test fieldnames(ICETHamiltonian) ==
+              (:calculator, :n_sites, :E_clean, :julia_to_icet)
+
+        lat = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"]
+        )
+
+        # For fcc(100), the nearest-neighbor distance is a/sqrt(2).
+        @test nn_distance(lat) ≈ 3.947 / sqrt(2)
+        @test nn_distance(lat) ≈ 2.791 atol=1e-3
+
+        @testset "build_icet_to_julia_map recovers a permutation" begin
+            # ICET orders its sites its own way and can use a translated
+            # coordinate origin. Synthesise exactly that: take the lattice's own
+            # sites, permute them, shift them, and check the map inverts it.
+            n = length(lat.all_sites)
+            # A fixed permutation rather than a random one: the test should say
+            # the same thing every time it runs, and a cyclic shift is a valid
+            # permutation for any n.
+            perm = circshift(collect(1:n), 3)
+            @test perm != collect(1:n)   # so a map that returns the identity fails
+            off_x, off_y = 0.5, -0.3
+            icet_pos = zeros(n, 2)
+            for (icet_idx, julia_idx) in enumerate(perm)
+                icet_pos[icet_idx, 1] = lat.all_sites[julia_idx][1] - off_x
+                icet_pos[icet_idx, 2] = lat.all_sites[julia_idx][2] - off_y
+            end
+
+            # Equivalent periodic images must map to the same sites. The
+            # fcc(100) in-plane cell length is nx*a/sqrt(2), not nx*a.
+            ase_cell = FreeBird.AbstractWalkers.pyconvert(
+                Matrix{Float64}, lat.ase_lattice.get_cell())
+            cell_x = hypot(ase_cell[1, 1], ase_cell[1, 2])
+            cell_y = hypot(ase_cell[2, 1], ase_cell[2, 2])
+            icet_pos[2:2:end, 1] .+= cell_x
+            icet_pos[3:3:end, 2] .-= cell_y
+
+            m = FreeBird.EnergyEval.build_icet_to_julia_map(lat, icet_pos)
+            @test m == perm
+            @test length(unique(m)) == n        # bijective, as asserted internally
+            @test sort(m) == collect(1:n)
+
+            # A site with no partner is an error rather than a silent zero.
+            bad = copy(icet_pos)
+            bad[1, 1] += 1000.0
+            bad[1, 2] += 1000.0
+            @test_throws Exception FreeBird.EnergyEval.build_icet_to_julia_map(lat, bad)
+        end
+
+        # Construction propagates import and missing-file failures.
+        @test_throws Exception ICETHamiltonian("no_such_cluster_expansion.ce", lat)
+    end
 end

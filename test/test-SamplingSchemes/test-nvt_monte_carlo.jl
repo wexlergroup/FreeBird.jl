@@ -59,6 +59,52 @@
             @test accepted1 == accepted2
         end
     end
+
+    @testset "AtomicLattice Python-calculator snapshots are independent" begin
+        lattice = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        ase_lj = FreeBird.EnergyEval.pyimport(
+            "ase.calculators.lj").LennardJones()
+        calc = PyMLPotential(
+            FreeBird.AbstractPotentials.ASEcalculator(ase_lj))
+
+        energies, configs, accepted = nvt_monte_carlo(
+            MCNewSample(), lattice, calc, 300.0, Int64(5), Int64(42))
+
+        @test length(energies) == 5
+        @test all(isfinite, energies)
+        @test 0 <= accepted <= 5
+        @test all(!FreeBird.AbstractWalkers.pyis(
+            lattice.ase_lattice, config.ase_lattice) for config in configs)
+        @test all(!FreeBird.AbstractWalkers.pyis(
+            configs[i].ase_lattice, configs[j].ase_lattice)
+            for i in eachindex(configs) for j in (i + 1):length(configs))
+
+        multi = AtomicLattice{2,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O", "H"],
+            components=[1, 1],
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        multi_energies, multi_configs, _ = nvt_monte_carlo(
+            MCNewSample(), multi, calc, 300.0, Int64(5), Int64(43))
+        @test length(multi_energies) == 5
+        @test all(isfinite, multi_energies)
+        @test all(occupied_site_count(config) == [1, 1]
+                  for config in multi_configs)
+        @test all(all(sum(component[site] for component in config.components) <= 1
+                      for site in 1:num_sites(config)) for config in multi_configs)
+    end
 end
 
 @testset "nvt Monte Carlo atomistic version" begin
@@ -238,6 +284,36 @@ end
         pr_e, pr_c, pr_acc = nvt_monte_carlo(MCNewSample(), eq_c[end], ham, 300.0, 80, seed + 1)
         @test d_energies[1] == mean(pr_e)
         @test d_rates[1] == pr_acc / 80
+
+        # AtomicLattice + Python-calculator driver wiring: keep the same
+        # phase-seed contract as the classical lattice overload.
+        atomic = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            components=[1],
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        ase_lj = FreeBird.EnergyEval.pyimport(
+            "ase.calculators.lj").LennardJones()
+        calc = PyMLPotential(
+            FreeBird.AbstractPotentials.ASEcalculator(ase_lj))
+        atomic_params = MetropolisMCParameters([300.0];
+            equilibrium_steps=12, sampling_steps=16, random_seed=seed)
+        atomic_e, atomic_configs, atomic_cv, atomic_rates =
+            monte_carlo_sampling(MCNewSample(), atomic, calc, atomic_params)
+        _, atomic_eq_configs, _ = nvt_monte_carlo(
+            MCNewSample(), atomic, calc, 300.0, Int64(12), Int64(seed))
+        atomic_pr_e, atomic_pr_configs, atomic_pr_acc = nvt_monte_carlo(
+            MCNewSample(), atomic_eq_configs[end], calc, 300.0,
+            Int64(16), Int64(seed + 1))
+        @test atomic_e[1] == mean(atomic_pr_e)
+        @test atomic_cv[1] == var(atomic_pr_e) / (8.617333262e-5 * 300.0^2)
+        @test atomic_rates[1] == atomic_pr_acc / 16
+        @test atomic_configs[1].components == atomic_pr_configs[end].components
+
         # Atomistic driver: same-seed reproducibility end to end
         p1 = MetropolisMCParameters([500.0];
             equilibrium_steps=100, sampling_steps=100, step_size=0.3, random_seed=99)

@@ -8,9 +8,10 @@
 # higher derivatives (see `inflection_transitions`).
 #
 # Nested sampling gives the entropy essentially exactly along the (contiguous)
-# cull index i: the enclosed prior volume is X_i = (K/(K+1))^i, so
-# ln X_i = i·ln(K/(K+1)). With the energy ladder E(i) (E = `emax`), the caloric
-# entropy is S(E) = ln g(E) = i·ln(K/(K+1)) − ln|dE/di| (+const), and derivatives
+# cull index i: the enclosed prior volume is ln X_i = i·c with c = -1/K (the
+# default `compression=:geometric`) or ln(K/(K+1)) (`:mean`; see ωᵢ). With the
+# energy ladder E(i) (E = `emax`), the caloric entropy is
+# S(E) = ln g(E) = i·c − ln|dE/di| (+const), and derivatives
 # are taken against the dense, uniform i-axis (local cubic fits) — far more stable
 # than differentiating a binned ln g in energy space.
 #
@@ -50,7 +51,8 @@ end
 # Returns a NamedTuple with energies `E` (ascending) and, as requested,
 # `S_vol`, `S_caloric`, `β`, `γ`, `δ`.
 function _microcanonical_core(df::DataFrame, n_walkers::Int; n_cull::Int = 1,
-                              n_nodes::Int = 400, halfwidth::Int = 0, max_order::Int = 2)
+                              n_nodes::Int = 400, halfwidth::Int = 0, max_order::Int = 2,
+                              compression::Symbol = :geometric)
     n_walkers > 0 || throw(ArgumentError("n_walkers must be positive"))
     1 <= max_order <= 3 || throw(ArgumentError("max_order must be 1, 2, or 3"))
     halfwidth == 0 || halfwidth >= 2 ||
@@ -61,7 +63,8 @@ function _microcanonical_core(df::DataFrame, n_walkers::Int; n_cull::Int = 1,
     e = Float64.(df.emax)
     n = length(i)
 
-    cc = log(n_walkers / (n_walkers + n_cull))         # ln(K/(K+n_cull)) < 0
+    # ln X_i = i * cc < 0: -n_cull/K under :geometric, ln(K/(K+n_cull)) under :mean (see ωᵢ)
+    cc = last(_shell_law(n_walkers, n_cull, compression))
     W = halfwidth > 0 ? halfwidth : clamp(n ÷ 55, 25, 2000)
     W = min(W, (n - 3) ÷ 2)
     n - 2W >= 5 || throw(ArgumentError(halfwidth > 0 ?
@@ -103,9 +106,10 @@ end
 Estimate the microcanonical entropy ``S(E)`` from a canonical nested-sampling
 output `df` (columns `:iter`, `:emax`) produced with `n_walkers` live points.
 
-Along the contiguous cull index ``i`` the enclosed prior volume is
-``X_i=(K/(K+n_{cull}))^i``, so the volume entropy is ``S_{vol}=\\ln X_i=i\\ln(K/(K+n_{cull}))``
-and the caloric entropy is ``S(E)=\\ln g(E)=i\\ln(K/(K+n_{cull}))-\\ln|dE/di|``,
+Along the contiguous cull index ``i`` the enclosed prior volume is ``\\ln X_i = i\\,c``
+with ``c = -n_{cull}/K`` under the default `compression=:geometric` or
+``c = \\ln(K/(K+n_{cull}))`` under `:mean` (see [`ωᵢ`](@ref)), so the volume entropy is
+``S_{vol}=\\ln X_i=i\\,c`` and the caloric entropy is ``S(E)=\\ln g(E)=i\\,c-\\ln|dE/di|``,
 with the ladder slope ``dE/di`` obtained from local cubic fits against the dense,
 uniform `i`-axis.
 
@@ -114,6 +118,8 @@ uniform `i`-axis.
   `:volume` for the Hertz/Gibbs volume entropy ``S_{vol}=\\ln G`` (one fewer
   derivative, slightly cleaner).
 - `n_cull`: NS culls per iteration (default 1).
+- `compression`: `:geometric` (default) or `:mean`, the convention of the prior-volume
+  ladder ``\\ln X_i`` (a constant slope per iteration; the two differ by ``i/(2K^2)``).
 - `n_nodes`: number of smoothed output nodes (default 400).
 - `halfwidth`: half-window (in iterations) of the local cubic smoother; `0` (default)
   picks `clamp(n÷55, 25, 2000)`, which requires a ladder of ≥ 55 recorded
@@ -127,10 +133,12 @@ up to an additive constant).
 See also [`caloric_derivatives`](@ref), [`inflection_transitions`](@ref).
 """
 function microcanonical_entropy(df::DataFrame, n_walkers::Int; n_cull::Int = 1,
-                                kind::Symbol = :caloric, n_nodes::Int = 400, halfwidth::Int = 0)
+                                kind::Symbol = :caloric, n_nodes::Int = 400, halfwidth::Int = 0,
+                                compression::Symbol = :geometric)
     kind in (:caloric, :volume) || throw(ArgumentError("kind must be :caloric or :volume"))
     r = _microcanonical_core(df, n_walkers; n_cull = n_cull, n_nodes = n_nodes,
-                             halfwidth = halfwidth, max_order = 1)
+                             halfwidth = halfwidth, max_order = 1,
+                             compression = compression)
     return r.E, kind === :caloric ? r.S_caloric : r.S_vol
 end
 
@@ -147,7 +155,7 @@ and then differentiated against energy with local cubic fits.
 
 # Arguments
 - `max_order`: highest derivative to return (1 → β only; 2 → β, γ; 3 → β, γ, δ).
-- `n_cull`, `n_nodes`, `halfwidth`: as in [`microcanonical_entropy`](@ref).
+- `n_cull`, `n_nodes`, `halfwidth`, `compression`: as in [`microcanonical_entropy`](@ref).
 
 # Returns
 A `NamedTuple` with `E` (ascending energies, same units as `:emax`) and `β` (units
@@ -160,10 +168,12 @@ trims that region (`ground_trim`) before differentiating; do the same before
 interpreting low-energy `γ`/`δ` features.
 """
 function caloric_derivatives(df::DataFrame, n_walkers::Int; n_cull::Int = 1,
-                             max_order::Int = 2, n_nodes::Int = 400, halfwidth::Int = 0)
+                             max_order::Int = 2, n_nodes::Int = 400, halfwidth::Int = 0,
+                             compression::Symbol = :geometric)
     1 <= max_order <= 3 || throw(ArgumentError("max_order must be 1, 2, or 3"))
     r = _microcanonical_core(df, n_walkers; n_cull = n_cull, n_nodes = n_nodes,
-                             halfwidth = halfwidth, max_order = max_order)
+                             halfwidth = halfwidth, max_order = max_order,
+                             compression = compression)
     max_order == 1 && return (E = r.E, β = r.β)
     max_order == 2 && return (E = r.E, β = r.β, γ = r.γ)
     return (E = r.E, β = r.β, γ = r.γ, δ = r.δ)
@@ -299,6 +309,7 @@ Orders `1…max_order` are searched. The transition temperature is
 """
 function inflection_transitions(df::DataFrame, n_walkers::Int; n_cull::Int = 1,
         max_order::Int = 2, n_nodes::Int = 400, halfwidth::Int = 0,
+        compression::Symbol = :geometric,
         kb::Float64 = 8.617333262e-5, prominence::Float64 = 0.20,
         prominence_abs::Union{Nothing,Float64} = nothing, edge::Int = 4,
         ground_trim::Float64 = 0.05,
@@ -309,7 +320,8 @@ function inflection_transitions(df::DataFrame, n_walkers::Int; n_cull::Int = 1,
     0 <= ground_trim < 0.5 || throw(ArgumentError("ground_trim must be in [0, 0.5)"))
     edge >= 1 || throw(ArgumentError("edge must be ≥ 1"))
     r = _microcanonical_core(df, n_walkers; n_cull = n_cull, n_nodes = n_nodes,
-                             halfwidth = halfwidth, max_order = 1)
+                             halfwidth = halfwidth, max_order = 1,
+                             compression = compression)
     E, β = r.E, r.β
     # Trim the ground-state β divergence (the ladder flattens, dE/di → 0, β → ∞)
     # BEFORE differentiating, so γ/δ near the transitions are not contaminated.

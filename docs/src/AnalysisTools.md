@@ -9,11 +9,12 @@ below — microcanonical inflection-point analysis of phase transitions.
 
 Nested sampling yields the microcanonical entropy ``S(E) = \ln g(E)`` almost for
 free. Along the contiguous cull index ``i`` the enclosed prior volume is
-``X_i = (K/(K+1))^i``, so ``\ln X_i = i\,\ln(K/(K+1))`` and, with the recorded
-energy ladder ``E(i)``,
+``\ln X_i = i\,c`` with ``c = -1/K`` under the default `compression=:geometric` (or
+``c = \ln(K/(K+1))`` under `:mean`, see `ωᵢ`) and, with the recorded energy ladder
+``E(i)``,
 
 ```math
-S(E) = i\,\ln\!\frac{K}{K+1} - \ln\left|\frac{dE}{di}\right| + \mathrm{const} ,
+S(E) = i\,c - \ln\left|\frac{dE}{di}\right| + \mathrm{const} ,
 ```
 
 where derivatives are taken against the dense, uniform ``i``-axis (local cubic

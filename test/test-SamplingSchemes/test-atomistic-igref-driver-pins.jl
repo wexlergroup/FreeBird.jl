@@ -61,7 +61,7 @@
         ls = pin_liveset(counts, lj)
         params = AtomisticIGRefGCNSParameters(mc_steps=mc_steps,
             reference_activity=(z0V / pin_V)u"Å^-3", species=:Ar,
-            allowed_fail_count=100_000)
+            allowed_fail_count=100_000, compression=:mean)  # compression keyword: fixture on the historical mean convention (compression=:mean); the geometric default is covered by test-compression-convention.jl
         iters = Int[]
         emaxs = Float64[]
         npars = Int[]

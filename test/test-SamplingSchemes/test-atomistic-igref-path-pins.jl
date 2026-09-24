@@ -101,7 +101,7 @@
         Random.seed!(seed)
         params = AtomisticIGRefGCNSParameters(mc_steps=mc_steps,
             reference_activity=(z0V / (species == :H ? pin3_sV : pin3_V))u"Å^-3", species=species,
-            allowed_fail_count=100_000)
+            allowed_fail_count=100_000, compression=:mean)  # compression keyword: fixture on the historical mean convention (compression=:mean); the geometric default is covered by test-compression-convention.jl
         iters = Int[]
         emaxs = Float64[]
         npars = Int[]
@@ -125,7 +125,7 @@
         ls = pin3_liveset(counts; lj=pin3_lj_d)
         params = AtomisticIGRefGCNSParameters(mc_steps=mc_steps,
             reference_activity=(z0V / pin3_V)u"Å^-3", species=:Ar,
-            allowed_fail_count=100_000)
+            allowed_fail_count=100_000, compression=:mean)  # compression keyword: fixture on the historical mean convention (compression=:mean); the geometric default is covered by test-compression-convention.jl
         save = SaveEveryN(df_filename="_igpin3_d.csv", wk_filename="_igpin3_d.traj.extxyz",
                           ls_filename="_igpin3_d.ls.extxyz", n_traj=10^7, n_snap=10^7, n_info=10^7)
         seen = Int[]
@@ -288,7 +288,7 @@
     @testset "fixture D: driver entered through initialize=false with an observable (seed 424273)" begin
         df, seen, live = pin3_driver_run(424273, pin3_counts_d, 6.0, 40, 60)
         @test nrow(df) == 60
-        @test names(df) == ["iter", "emax", "num_particles", "log_compression", "n_obs"]
+        @test names(df) == ["iter", "emax", "num_particles", "log_compression", "n_live", "n_obs"]  # compression keyword: the ledger gained the n_live column
         @test df.iter == collect(1:60)
         @test issorted(df.emax, rev=true)
         @test df.log_compression == log.(PIN_D_LC_NUM ./ PIN_D_LC_DEN)

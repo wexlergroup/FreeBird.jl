@@ -1,10 +1,10 @@
 @testset "AnalysisTools.jl tests" begin
     @testset "ωᵢ function tests" begin
         # Basic tests
-        @test ωᵢ([1], 4) ≈ [1/5 * (4/5)^1]
-        @test ωᵢ([1, 2, 3], 4) ≈ [1/5 * (4/5)^1, 1/5 * (4/5)^2, 1/5 * (4/5)^3]
-        @test ωᵢ([0], 4) ≈ [1/5]
-        @test ωᵢ([100], 4)[1] ≈ 1/5 * (4/5)^100 rtol=1e-10
+        @test ωᵢ([1], 4; compression=:mean) ≈ [1/5 * (4/5)^1]  # compression keyword: fixture on the historical mean convention (compression=:mean); the geometric default is covered by test-compression-convention.jl
+        @test ωᵢ([1, 2, 3], 4; compression=:mean) ≈ [1/5 * (4/5)^1, 1/5 * (4/5)^2, 1/5 * (4/5)^3]
+        @test ωᵢ([0], 4; compression=:mean) ≈ [1/5]
+        @test ωᵢ([100], 4; compression=:mean)[1] ≈ 1/5 * (4/5)^100 rtol=1e-10
         
         # Edge cases and properties
         @test ωᵢ(Int[], 4) == Float64[]
@@ -120,7 +120,7 @@
             @test issorted(E)
             @test all(isfinite, S)
             # volume entropy is exact by construction: S_vol = ln X_i = ln G(E_i)
-            Ev, Sv = microcanonical_entropy(df, K; kind=:volume)
+            Ev, Sv = microcanonical_entropy(df, K; kind=:volume, compression=:mean)  # compression keyword: fixture on the historical mean convention (compression=:mean); the geometric default is covered by test-compression-convention.jl
             @test all(abs(Sv[k] - log(cdf_at(Eg, G, Ev[k]))) < 1e-6
                       for k in eachindex(Ev) if 0.5 < Ev[k] < 9.5)
             d = caloric_derivatives(df, K; max_order=2)

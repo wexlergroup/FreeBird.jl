@@ -115,14 +115,14 @@
             om_clean("sch")
             return df
         end
-        @test names(schema_run(0.0u"eV")) == ["iter", "emax", "num_particles", "log_compression"]
-        @test names(schema_run(-0.01u"eV")) == ["iter", "emax", "num_particles", "log_compression", "omega"]
+        @test names(schema_run(0.0u"eV")) == ["iter", "emax", "num_particles", "log_compression", "n_live"]  # compression keyword: the ledger gained the n_live column
+        @test names(schema_run(-0.01u"eV")) == ["iter", "emax", "num_particles", "log_compression", "n_live", "omega"]
         @test names(schema_run(-0.01u"eV"; record=true)) ==
-              ["iter", "emax", "num_particles", "log_compression", "omega",
+              ["iter", "emax", "num_particles", "log_compression", "n_live", "omega",
                "move_attempted", "move_accepted", "insert_attempted", "insert_accepted",
                "delete_attempted", "delete_accepted", "step_size"]
         @test names(schema_run(-0.01u"eV"; obs=[:n_obs => cfg -> Float64(length(cfg))])) ==
-              ["iter", "emax", "num_particles", "log_compression", "omega", "n_obs"]
+              ["iter", "emax", "num_particles", "log_compression", "n_live", "omega", "n_obs"]
     end
 
     @testset "_grand_potential closed form and the exact-zero addend" begin
@@ -351,7 +351,7 @@
         df, _, _, _, _ = om_run(86031, -0.002u"eV"; K=8, z0V=4.0, mc_steps=40, n_steps=40,
                                 obs=[:n_obs => cfg -> Float64(length(cfg))],
                                 callback=(iter, walker) -> push!(seen, walker.list_num_par[1]))
-        @test names(df) == ["iter", "emax", "num_particles", "log_compression", "omega", "n_obs"]
+        @test names(df) == ["iter", "emax", "num_particles", "log_compression", "n_live", "omega", "n_obs"]  # compression keyword: the ledger gained the n_live column
         @test df.n_obs == Float64.(df.num_particles)
         @test seen == df.num_particles
         @test issorted(df.omega, rev=true)

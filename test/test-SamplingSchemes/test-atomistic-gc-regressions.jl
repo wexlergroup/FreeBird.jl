@@ -65,7 +65,7 @@
         ls = LJAtomWalkers(walkers, LJParameters(epsilon=0.01, sigma=2.5))
         p = NestedSamplingParameters(mc_steps=40, initial_step_size=0.5, step_size=0.5,
                                      step_size_lo=0.01, step_size_up=2.0,
-                                     allowed_fail_count=1000)
+                                     allowed_fail_count=1000, compression=:mean)  # compression keyword: fixture on the historical mean convention (compression=:mean); the geometric default is covered by test-compression-convention.jl
         save = mksave("ab")
         df, lso, _ = nested_sampling(ls, p, 60, MCRandomWalkClone(), save)
         clean("ab")
@@ -91,7 +91,7 @@
         end
         clean("pipe")
         @test nrow(df) == 0
-        @test names(df) == ["iter", "emax", "num_particles", "log_compression"]
+        @test names(df) == ["iter", "emax", "num_particles", "log_compression", "n_live"]  # compression keyword: the ledger gained the n_live column
         live_e = [ustrip(u"eV", w.energy) for w in lso.walkers]
         live_n = [w.list_num_par[1] for w in lso.walkers]
         @test all(iszero, live_e)

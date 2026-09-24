@@ -311,9 +311,9 @@
         Ts = [200.0, 300.0, 500.0]
         stats = gc_thermodynamic_stats_ideal_ref(
             df, igref_n_sites, 1.0, μs, Ts, n_walkers;
-            ω0=(n_walkers + 1) / n_walkers, live_emax=live_E, live_numbers=live_N)
+            ω0=(n_walkers + 1) / n_walkers, compression=:mean, live_emax=live_E, live_numbers=live_N)  # compression keyword: fixture on the historical mean convention (compression=:mean)
         stats_notail = gc_thermodynamic_stats_ideal_ref(
-            df, igref_n_sites, 1.0, μs, Ts, n_walkers)
+            df, igref_n_sites, 1.0, μs, Ts, n_walkers; compression=:mean)  # compression keyword: the tail comparison stays on one convention
 
         for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
             i == 1 && continue  # skip the out-of-window point
@@ -339,7 +339,7 @@
         # ordering and the row-count ceiling on the same fixture
         ess_l = gc_effective_sample_size_ideal_ref(
             df, igref_n_sites, 1.0, μs, Ts, n_walkers;
-            ω0=(n_walkers + 1) / n_walkers, live_emax=live_E, live_numbers=live_N)
+            ω0=(n_walkers + 1) / n_walkers, compression=:mean, live_emax=live_E, live_numbers=live_N)  # compression keyword: fixture on the historical mean convention (compression=:mean)
         @test ess_l[1, 1] < ess_l[4, 1] / 10
         @test all(ess_l .<= nrow(df) + length(live_E))
     end
@@ -380,7 +380,7 @@
 
         stats = gc_thermodynamic_stats_ideal_ref(
             df, igref_n_sites, z0, μs, Ts, n_walkers;
-            ω0=(n_walkers + 1) / n_walkers, live_emax=live_E, live_numbers=live_N)
+            ω0=(n_walkers + 1) / n_walkers, compression=:mean, live_emax=live_E, live_numbers=live_N)  # compression keyword: fixture on the historical mean convention (compression=:mean)
 
         for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
             β = 1 / (kb * T)
@@ -443,7 +443,7 @@
 
         stats = gc_thermodynamic_stats_ideal_ref(
             df, igref_n_sites, z0, μs, Ts, n_walkers;
-            ω0=(n_walkers + 1) / n_walkers, live_emax=live_E, live_numbers=live_N)
+            ω0=(n_walkers + 1) / n_walkers, compression=:mean, live_emax=live_E, live_numbers=live_N)  # compression keyword: fixture on the historical mean convention (compression=:mean)
 
         for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
             i == 1 && continue  # the out-of-window point feeds only the N_eff gate
@@ -491,7 +491,7 @@
         @test nrow(df) > 0
         stats = gc_thermodynamic_stats_ideal_ref(
             df, igref_n_sites, 1.0, [0.0], [300.0], n_walkers;
-            ω0=(n_walkers + 1) / n_walkers, live_emax=live_E, live_numbers=live_N)
+            ω0=(n_walkers + 1) / n_walkers, live_emax=live_E, live_numbers=live_N, compression=:mean)  # compression keyword: fixture on the historical mean convention (compression=:mean); the geometric default is covered by test-compression-convention.jl
         # β|E| ≲ 4e-11 from the tie-breaking tags; atol dominated by that
         @test isapprox(stats.logXi[1, 1], igref_n_sites * log(2.0); atol=1e-6)
     end
@@ -690,13 +690,13 @@
         live_Ea = [w.energy.val for w in ls_out.walkers]
         live_N = [Int(sum(w.configuration.components[1])) for w in ls_out.walkers]
         sa = gc_thermodynamic_stats_ideal_ref(df, 16, 1.0, [dpc_mu], [dpc_T],
-            dpc_K; ω0=(dpc_K + 1) / dpc_K, live_emax=live_Ea, live_numbers=live_N)
+            dpc_K; ω0=(dpc_K + 1) / dpc_K, compression=:mean, live_emax=live_Ea, live_numbers=live_N)  # compression keyword: fixture on the historical mean convention (compression=:mean)
         df_b = copy(df)
         df_b.emax = [dpc_recompute(dpc_ham_b, c) for c in configs]
         live_Eb = [dpc_recompute(dpc_ham_b, w.configuration.components[1])
                    for w in ls_out.walkers]
         sb = gc_thermodynamic_stats_ideal_ref(df_b, 16, 1.0, [dpc_mu], [dpc_T],
-            dpc_K; ω0=(dpc_K + 1) / dpc_K, live_emax=live_Eb, live_numbers=live_N)
+            dpc_K; ω0=(dpc_K + 1) / dpc_K, compression=:mean, live_emax=live_Eb, live_numbers=live_N)  # compression keyword: fixture on the historical mean convention (compression=:mean)
         @test abs(sa.logXi[1, 1] - lnXi_a) < 0.75
         @test abs(sb.logXi[1, 1] - lnXi_b) < 1.1
         # The substituted estimator's Kish N_eff is a real diagnostic: finite,
@@ -799,7 +799,7 @@
             live_N = [Int(sum(w.configuration.components[1]))
                       for w in lsx.walkers]
             s = gc_thermodynamic_stats_ideal_ref(d, 16, 1.0, [inc_mu],
-                [inc_T], 64; ω0=65 / 64, live_emax=live_E,
+                [inc_T], 64; ω0=65 / 64, compression=:mean, live_emax=live_E,  # compression keyword: fixture on the historical mean convention (compression=:mean)
                 live_numbers=live_N)
             @test abs(s.logXi[1, 1] - inc_lnXi) < 0.85
             @test abs(s.mean_N[1, 1] - inc_meanN) < 0.27
@@ -998,11 +998,11 @@
         # A K-length tail is warning-free
         s_full = @test_logs min_level = Base.CoreLogging.Warn gc_thermodynamic_stats_ideal_ref(
             df_g, 16, 1.0, [0.0], [300.0], K_g;
-            ω0=w0_g, live_emax=full_E, live_numbers=full_N)
+            ω0=w0_g, live_emax=full_E, live_numbers=full_N, compression=:mean)
         # A truncated tail warns, naming both lengths and the tail-mass factor
         s_half = @test_logs (:warn, r"4 entries.*n_walkers = 8.*4/8") gc_thermodynamic_stats_ideal_ref(
             df_g, 16, 1.0, [0.0], [300.0], K_g;
-            ω0=w0_g, live_emax=half_E, live_numbers=half_N)
+            ω0=w0_g, live_emax=half_E, live_numbers=half_N, compression=:mean)  # compression keyword: fixture on the historical mean convention (compression=:mean); the geometric default is covered by test-compression-convention.jl
         # The deficit the warning protects against, pinned to the closed form
         X_g = (K_g / (K_g + 1))^J_g
         @test isapprox(s_half.logXi[1, 1] - s_full.logXi[1, 1],

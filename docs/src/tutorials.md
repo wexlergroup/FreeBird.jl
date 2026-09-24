@@ -141,9 +141,11 @@ The [`AnalysisTools`](@ref) module provides functions to calculate the heat capa
 First, we calculate the `ω` factors, which account for the fractions of phase-space volume sampled during
 each nested sampling iteration, defined as:
 ```math
-\omega_i = \frac{1}{N+1} \left(\frac{N}{N+1}\right)^i
+\omega_i = e^{-i/N}\left(e^{1/N} - 1\right)
 ```
-where $N$ is the number of walkers and $i$ is the iteration number.
+where $N$ is the number of walkers and $i$ is the iteration number (the geometric
+convention, $\ln X_i = -i/N$; `ωᵢ(...; compression=:mean)` gives the earlier mean-shrinkage
+weights $\omega_i = \frac{1}{N+1}\left(\frac{N}{N+1}\right)^i$).
 
 ````@example quick_start
 ωi = ωᵢ(energies.iter, 120);

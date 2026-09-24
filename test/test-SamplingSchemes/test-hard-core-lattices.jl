@@ -230,7 +230,7 @@
 
                 stats = gc_thermodynamic_stats_fixed_N(
                     dfs, collect(0:N_max), M, μ_grid, [T_ath * u"K"];
-                    n_walkers=K, n_cull=1, ω0=(K + 1) / K, live_emax=live)
+                    n_walkers=K, n_cull=1, ω0=(K + 1) / K, compression=:mean, live_emax=live)  # compression keyword: fixture on the historical mean convention (compression=:mean)
 
                 # Tolerances sized ≥ 3σ of the intrinsic NS shrinkage noise:
                 # the deepest sectors carry H_N = ln(C(M,N)/g_N) ≈ 8.8 nats,
@@ -282,7 +282,7 @@
 
         stats = gc_thermodynamic_stats_fixed_N(
             dfs, collect(0:6), M_tr, [0.0] .* u"eV", [T_ath * u"K"];
-            n_walkers=K, n_cull=1, ω0=(K + 1) / K, live_emax=live)
+            n_walkers=K, n_cull=1, ω0=(K + 1) / K, compression=:mean, live_emax=live)  # compression keyword: fixture on the historical mean convention (compression=:mean)
 
         # Same per-sector tolerance as the local-move reference (≥ 3σ)
         for N in 0:6
@@ -342,7 +342,7 @@
         μs = [kb * T_ath * log(z) for z in zs]
         stats = gc_thermodynamic_stats_ideal_ref(
             df, M_sq, 1.0, μs, [T_ath], K;
-            ω0=(K + 1) / K, live_emax=live_E, live_numbers=live_N)
+            ω0=(K + 1) / K, compression=:mean, live_emax=live_E, live_numbers=live_N)  # compression keyword: fixture on the historical mean convention (compression=:mean)
 
         # Tolerances ≥ 3σ of the NS evidence noise (σ(logΞ) ≈ 0.25 at this
         # depth/K), while a dropped (1+z0)^M normalization would shift logΞ
@@ -417,7 +417,7 @@
         μs = [kb * T_ath * log(z) for z in zs]
         stats = gc_thermodynamic_stats_ideal_ref(
             df, M_tr, 1.0, μs, [T_ath], K;
-            ω0=(K + 1) / K, live_emax=live_E, live_numbers=live_N)
+            ω0=(K + 1) / K, compression=:mean, live_emax=live_E, live_numbers=live_N)  # compression keyword: fixture on the historical mean convention (compression=:mean)
 
         # Tolerances ≥ 3σ of the evidence noise, sized from three-seed
         # scatter at this configuration (max observed |ΔlogΞ| 0.37,

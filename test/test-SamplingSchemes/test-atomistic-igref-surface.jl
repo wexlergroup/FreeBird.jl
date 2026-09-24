@@ -192,7 +192,7 @@
         @test df1 == df2
         @test [ustrip(u"eV", w.energy) for w in lso1.walkers] ==
               [ustrip(u"eV", w.energy) for w in lso2.walkers]
-        @test names(df1) == ["iter", "emax", "num_particles", "log_compression"]
+        @test names(df1) == ["iter", "emax", "num_particles", "log_compression", "n_live"]  # compression keyword: the ledger gained the n_live column
         @test issorted(df1.emax, rev=true)
         @test maximum(df1.num_particles) <= 6
         @test maximum(w.list_num_par[1] for w in lso1.walkers) <= 6

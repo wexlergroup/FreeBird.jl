@@ -85,7 +85,7 @@
         end
         clean("stall")
         @test nrow(df) == 0
-        @test names(df) == ["iter", "emax", "num_particles", "log_compression"]
+        @test names(df) == ["iter", "emax", "num_particles", "log_compression", "n_live"]  # compression keyword: the ledger gained the n_live column
         @test length(ls_out.walkers) == 8
         @test all(w.energy == 0.0u"eV" for w in ls_out.walkers)
         @test params_out.fail_count == 7
@@ -186,7 +186,7 @@
         @test df1 == df2
         @test live1 == live2
         @test nrow(df1) == 120
-        @test names(df1) == ["iter", "emax", "num_particles", "log_compression"]
+        @test names(df1) == ["iter", "emax", "num_particles", "log_compression", "n_live"]  # compression keyword: the ledger gained the n_live column
         @test issorted(df1.emax, rev=true)
         @test all(df1.log_compression .< 0.0)
         @test all(df1.num_particles .>= 0)
@@ -380,7 +380,7 @@ end
                       "insert_accepted", "delete_attempted", "delete_accepted"]
         # Schema pin updated for the trailing step-size column (an
         # order-preserving append under the same kwarg; disclosed)
-        @test names(df) == vcat(["iter", "emax", "num_particles", "log_compression"],
+        @test names(df) == vcat(["iter", "emax", "num_particles", "log_compression", "n_live"],  # compression keyword: the ledger gained the n_live column
                                 rate_names, ["step_size"])
         # Closure: recorded per-iteration deltas sum to the run totals
         for name in rate_names
@@ -397,7 +397,7 @@ end
                            n_traj=10^7, n_snap=10^7, n_info=10^7)
         df2, _, _ = ideal_gas_referenced_nested_sampling(
             ls2, params2, 40, MCAtomGrandCanonicalMoves(), save2)
-        @test names(df2) == ["iter", "emax", "num_particles", "log_compression"]
+        @test names(df2) == ["iter", "emax", "num_particles", "log_compression", "n_live"]
         # Same seed, recording on or off: identical sampling trajectory
         @test df2.emax == df.emax
         for f in ("_t_rates.csv", "_t_rates.traj.extxyz", "_t_rates.ls.extxyz")
@@ -417,7 +417,7 @@ end
                                  "_t_ch.ls.extxyz")
             rm(f, force=true)
         end
-        base_names = ["iter", "emax", "num_particles", "log_compression"]
+        base_names = ["iter", "emax", "num_particles", "log_compression", "n_live"]  # compression keyword: the ledger gained the n_live column
         rate6 = ["move_attempted", "move_accepted", "insert_attempted",
                  "insert_accepted", "delete_attempted", "delete_accepted"]
         cav2 = ["insert_biased_attempted", "insert_biased_accepted"]
@@ -579,7 +579,7 @@ end
         b, df_gw = run_route(MCGalileanWalk(n_refresh=6), 71101, "xgw")
         @test abs(a - b) < 0.28
         # the Galilean route drives a genuine descent with the serial ledger schema
-        @test names(df_gw) == ["iter", "emax", "log_compression"]
+        @test names(df_gw) == ["iter", "emax", "log_compression", "n_live"]  # compression keyword: the ledger gained the n_live column
         @test nrow(df_gw) >= 400
         @test issorted(df_gw.emax, rev=true) || maximum(diff(df_gw.emax)) <= 1e-12
     end

@@ -58,7 +58,7 @@
         K = 25
         for ω0 in (1.0, (K + 1) / K), live in (fill(E, K), [E])
             logZ, meanE = fe(empty_df, Ts;
-                n_walkers=K, n_cull=1, ω0=ω0, live_energies=live, kb=kb)
+                n_walkers=K, n_cull=1, ω0=ω0, compression=:mean, live_energies=live, kb=kb)  # compression keyword: fixture on the historical mean convention (compression=:mean); the geometric default is covered by test-compression-convention.jl
             for (j, T) in enumerate(Ts)
                 β = 1.0 / (kb * ustrip(u"K", T))
                 @test isapprox(logZ[j], -β * E, rtol=1e-12)
@@ -95,7 +95,7 @@
         T_grid = [250.0, 300.0, 400.0] .* u"K"
 
         stats = gc_thermodynamic_stats_fixed_N(dfs, N_values, M, μ_grid, T_grid;
-            n_walkers=K, n_cull=1, ω0=ω0, live_emax=live)
+            n_walkers=K, n_cull=1, ω0=ω0, live_emax=live, compression=:mean)  # compression keyword: fixture on the historical mean convention (compression=:mean); the geometric default is covered by test-compression-convention.jl
 
         @test stats.logXi isa Matrix{Float64}
         @test size(stats.logXi) == (length(μ_grid), length(T_grid))
@@ -228,7 +228,7 @@
 
             return gc_thermodynamic_stats_fixed_N(dfs, collect(0:M), M,
                 μ_grid, T_grid;
-                n_walkers=K, n_cull=1, ω0=(K + 1) / K, live_emax=live)
+                n_walkers=K, n_cull=1, ω0=(K + 1) / K, compression=:mean, live_emax=live)  # compression keyword: fixture on the historical mean convention (compression=:mean)
         end
 
         function check_stats(stats)

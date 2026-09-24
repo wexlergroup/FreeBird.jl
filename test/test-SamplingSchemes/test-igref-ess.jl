@@ -52,9 +52,9 @@
         df_b = DataFrame(iter=1:n_con, emax=sort(rand(rng_b, n_con); rev=true),
                          num_particles=rand(rng_b, 0:16, n_con))
         eA = gc_effective_sample_size_ideal_ref(
-            df_con, 16, 1.0, [0.0], [300.0], K_con; mode=:anchored)
+            df_con, 16, 1.0, [0.0], [300.0], K_con; mode=:anchored, compression=:mean)  # compression keyword: fixture on the historical mean convention (compression=:mean); the geometric default is covered by test-compression-convention.jl
         eB = gc_effective_sample_size_ideal_ref(
-            df_b, 16, 1.0, [0.0], [300.0], K_con; mode=:anchored)
+            df_b, 16, 1.0, [0.0], [300.0], K_con; mode=:anchored, compression=:mean)
         @test isapprox(eA[1, 1], closed_con; rtol=1e-12)
         # Two structurally different fixtures (different energies and particle
         # numbers, same J and K): bitwise-equal anchor values
@@ -94,7 +94,7 @@
                    (beta_t - beta0_t) * df_t.emax[q] for q in 1:5]
         w_hand = exp.(lw_hand .- maximum(lw_hand))
         e_anc = gc_effective_sample_size_ideal_ref(
-            df_t, 16, z0_t, [mu_t], [T_t], K_t; mode=:anchored, T0=T0_t)
+            df_t, 16, z0_t, [mu_t], [T_t], K_t; mode=:anchored, T0=T0_t, compression=:mean)  # compression keyword: fixture on the historical mean convention (compression=:mean); the geometric default is covered by test-compression-convention.jl
         @test isapprox(e_anc[1, 1], sum(w_hand)^2 / sum(w_hand .^ 2); rtol=1e-12)
         lr_hand = [df_t.num_particles[q] * s_t -
                    (beta_t - beta0_t) * df_t.emax[q] for q in 1:5]
@@ -134,11 +134,11 @@
     @testset "omega0 scale invariance (dead points only)" begin
         for mode in (:kish, :anchored, :anchored_uniform)
             e1 = gc_effective_sample_size_ideal_ref(
-                df_fix, 16, z0_fix, mus_fix, Ts_fix, K_fix; mode=mode)
+                df_fix, 16, z0_fix, mus_fix, Ts_fix, K_fix; mode=mode, compression=:mean)  # compression keyword: the three scaled calls stay on one convention
             e2 = gc_effective_sample_size_ideal_ref(
-                df_fix, 16, z0_fix, mus_fix, Ts_fix, K_fix; mode=mode, ω0=1.05)
+                df_fix, 16, z0_fix, mus_fix, Ts_fix, K_fix; mode=mode, ω0=1.05, compression=:mean)  # compression keyword: fixture on the historical mean convention (compression=:mean)
             e3 = gc_effective_sample_size_ideal_ref(
-                df_fix, 16, z0_fix, mus_fix, Ts_fix, K_fix; mode=mode, ω0=21.0)
+                df_fix, 16, z0_fix, mus_fix, Ts_fix, K_fix; mode=mode, ω0=21.0, compression=:mean)  # compression keyword: fixture on the historical mean convention (compression=:mean)
             @test all(isapprox.(e1, e2; rtol=1e-12))
             @test all(isapprox.(e1, e3; rtol=1e-12))
         end

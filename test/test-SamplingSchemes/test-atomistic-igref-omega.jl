@@ -595,7 +595,7 @@
         p = AtomisticIGRefGCNSParameters(mc_steps=40, reference_activity=(4.0 / om_sV)u"Å^-3",
                                          species=:H, allowed_fail_count=1000, n_max=6,
                                          chemical_potential=mu)
-        df1, lso1, _ = ideal_gas_referenced_nested_sampling(ls, p, 60, MCAtomGrandCanonicalMoves(), om_save("c1"))
+        df1, lso1, _ = ideal_gas_referenced_nested_sampling(ls, p, 10, MCAtomGrandCanonicalMoves(), om_save("c1"))  # per-trial Metropolis uniform: 10 steps (was 60) so the continuation still records rows; at this seed the new stream reaches the one-particle atom after 21 rows
         om_clean("c1")
         df2, lso2, _ = ideal_gas_referenced_nested_sampling(lso1, p, 40, MCAtomGrandCanonicalMoves(), om_save("c2");
                                                             initialize=false)

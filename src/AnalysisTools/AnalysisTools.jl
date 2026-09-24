@@ -384,7 +384,8 @@ end
                            energies::Vector{Float64},
                            numbers::Vector{Int},
                            μ::Float64;
-                           kb::Float64=8.617333262e-5)
+                           kb::Float64=8.617333262e-5,
+                           reference_fugacity::Float64=1.0)
 
 Compute grand-canonical thermodynamic averages from nested sampling output.
 
@@ -392,6 +393,18 @@ The log-sum-exp trick is used for numerical stability. The grand-canonical
 heat capacity at constant μ is:
 
     C_{V,μ} = k_B β² [Var(E) − μ Cov(E, N)]
+
+When the ledger was sampled under the ideal-lattice-gas prior at reference
+fugacity `z0 = reference_fugacity` (a configuration with N particles carries
+prior weight `z0^N`; see `GrandCanonicalNestedSamplingParameters`), each
+shell weight is multiplied by `z0^(-N_i)`, implemented as the term
+`-N_i log z0` inside the log-sum-exp, which restores the flat counting
+measure that the Boltzmann sum over microstates assumes. At the default
+`z0 = 1.0` the term is `-N_i * 0.0 = 0.0` and subtracting it leaves every
+log-term, and so every returned value, bit-identical to the uniform-prior
+evaluation. The three averages are ratios of two such sums, so the prior
+mass `(1 + z0)^M` cancels and is never applied: this function normalizes by
+nothing at any `z0`.
 
 # Arguments
 - `β::Float64`: Inverse temperature 1/(k_B T).
@@ -401,6 +414,9 @@ heat capacity at constant μ is:
 - `numbers::Vector{Int}`: N_i values.
 - `μ::Float64`: Chemical potential.
 - `kb::Float64`: Boltzmann constant (default: eV/K).
+- `reference_fugacity::Float64=1.0`: Reference fugacity z0 of the prior the
+  run sampled (must match the run; positive). Each shell gains the factor
+  `z0^(-N_i)`; the default reproduces the uniform-prior evaluation bit for bit.
 
 # Returns
 - `(⟨E⟩, C_{V,μ}, ⟨N⟩)`: Mean energy, GC heat capacity, mean particle number.
@@ -411,17 +427,24 @@ function gc_thermodynamic_stats(β::Float64,
                                  energies::Vector{Float64},
                                  numbers::Vector{Int},
                                  μ::Float64;
-                                 kb::Float64=8.617333262e-5)
+                                 kb::Float64=8.617333262e-5,
+                                 reference_fugacity::Float64=1.0)
     n = length(ωi)
     if n != length(grand_energies) || n != length(energies) || n != length(numbers)
         throw(DimensionMismatch("All input vectors must have the same length"))
+    end
+    if reference_fugacity <= 0.0
+        throw(ArgumentError("reference_fugacity must be positive"))
     end
     if n == 0
         return NaN, NaN, NaN
     end
 
-    # Log-sum-exp for numerical stability
-    log_terms = [log(ωi[i]) - β * grand_energies[i] for i in 1:n]
+    # Log-sum-exp for numerical stability; the -N_i log z0 term restores the
+    # flat counting measure from the z0^N-weighted prior (exactly 0.0 at z0 = 1,
+    # so the default subtracts 0.0 and every log-term keeps its bits)
+    log_z0 = log(reference_fugacity)
+    log_terms = [log(ωi[i]) - β * grand_energies[i] - numbers[i] * log_z0 for i in 1:n]
     max_log = maximum(log_terms)
 
     z = 0.0
@@ -461,13 +484,18 @@ end
                            n_walkers::Int, μ::Float64;
                            n_cull::Int=1, ω0::Float64=1.0,
                            kb::Float64=8.617333262e-5,
-                           compression::Symbol=:geometric)
+                           compression::Symbol=:geometric,
+                           reference_fugacity::Float64=1.0)
 
 Compute grand-canonical thermodynamic stats from a GC-NS output DataFrame.
 
 The DataFrame must have columns `:iter`, `:omega`, `:energy`, `:num_particles`.
 Adds the live-walker contribution to the end of the recorded samples for correct
-normalization.
+normalization. A ledger sampled under the ideal-lattice-gas prior at reference
+fugacity z0 (`GrandCanonicalNestedSamplingParameters(reference_fugacity=z0)`)
+is reduced with the same `reference_fugacity`, which forwards to the vector
+method and multiplies each shell by `z0^(-N_j)`; the default is bit-identical
+to the uniform-prior reduction.
 
 # Arguments
 - `df::DataFrame`: GC-NS output with columns `[:iter, :omega, :energy, :num_particles]`.
@@ -478,6 +506,8 @@ normalization.
 - `ω0::Float64=1.0`: Initial phase-space volume.
 - `kb::Float64`: Boltzmann constant (default: eV/K).
 - `compression::Symbol=:geometric`: Shell convention passed to `ωᵢ` (`:geometric` or `:mean`).
+- `reference_fugacity::Float64=1.0`: Reference fugacity z0 of the prior the run
+  sampled (must match the run; positive); see the vector method.
 
 # Returns
 - `(mean_E, Cv, mean_N)`: Vectors of ⟨E⟩, C_{V,μ}, and ⟨N⟩ at each β.
@@ -489,7 +519,13 @@ function gc_thermodynamic_stats(df::DataFrame,
                                  n_cull::Int=1,
                                  ω0::Float64=1.0,
                                  kb::Float64=8.617333262e-5,
-                                 compression::Symbol=:geometric)
+                                 compression::Symbol=:geometric,
+                                 reference_fugacity::Float64=1.0)
+    # Validate here as well: an ArgumentError raised inside the threaded loop
+    # below would surface wrapped in a TaskFailedException
+    if reference_fugacity <= 0.0
+        throw(ArgumentError("reference_fugacity must be positive"))
+    end
     ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0, compression=compression)
     grand_es = df.omega
     Es = df.energy
@@ -501,7 +537,7 @@ function gc_thermodynamic_stats(df::DataFrame,
 
     Threads.@threads for (i, b) in collect(enumerate(βs))
         mean_Es[i], Cvs[i], mean_Ns[i] = gc_thermodynamic_stats(
-            b, ωi, grand_es, Es, Ns, μ; kb=kb)
+            b, ωi, grand_es, Es, Ns, μ; kb=kb, reference_fugacity=reference_fugacity)
     end
 
     return mean_Es, Cvs, mean_Ns

@@ -429,14 +429,36 @@ The grand potential Ω = E − μN is used as the sorting quantity. Walkers have
 variable particle count N, and the NS loop records (Ω, E, N) per iteration
 for thermodynamic reweighting.
 
+The prior (reference) measure is the ideal lattice gas at reference fugacity
+`z0 = reference_fugacity`: the Bernoulli product measure in which each site
+is occupied independently with probability `z0/(1 + z0)`, so a configuration
+with N particles carries prior weight `z0^N` and the total prior mass on M
+sites is `(1 + z0)^M`. At the default `z0 = 1` this is the uniform measure
+over all 2^M microstates, the previous behaviour of this construction. The
+initial live set is drawn from that measure, and the decorrelation walk
+preserves it below the Ω ceiling through the `z0` factors already carried by
+the insertion and deletion acceptances of `MC_grand_canonical_walk!`; the
+ordering variable Ω = E − μN itself does not depend on `z0`. Post-run,
+`gc_thermodynamic_stats` with the matching `reference_fugacity` restores the
+flat counting measure through a per-shell factor `z0^(-N_j)`. The prior
+volumes are fractions of the mass `(1 + z0)^M` of the full occupation range
+N ∈ {0, …, M}; a finite `n_max` truncates that prior to a binomial partial
+sum which no library function computes, so no normalization is offered for
+a capped run at `z0 ≠ 1`.
+
 # Fields
 - `mc_steps::Int64`: MCMC steps per replacement walker.
 - `chemical_potential::Float64`: Chemical potential μ (unitless, in energy units of the Hamiltonian).
+- `reference_fugacity::Float64`: Reference fugacity z0 of the ideal-lattice-gas
+  prior (positive; `1.0`, the default, is the uniform prior).
 - `energy_perturbation::Float64`: Perturbation to break energy degeneracies.
 - `random_seed::Int64`: Seed for the random number generator.
 - `fail_count::Int64`: Consecutive failed replacements.
 - `allowed_fail_count::Int64`: Maximum consecutive failures before warning.
-- `init_occupation_p::Float64`: Per-site occupation probability for initial walkers.
+- `init_occupation_p::Union{Nothing,Float64}`: Per-site occupation probability
+  for the initial walkers. `nothing` (the default) draws them from the prior
+  at `z0/(1 + z0)`; a number overrides that draw and is accepted only at
+  `reference_fugacity == 1.0`.
 - `n_max::Int64`: Upper bound on particle count per walker.
 - `cluster_p::Float64`: Current cluster growth probability (mutable runtime state).
 - `cluster_accepted::Float64`: Accepted cluster moves in current adjustment window.
@@ -451,11 +473,12 @@ for thermodynamic reweighting.
 mutable struct GrandCanonicalNestedSamplingParameters <: SamplingParameters
     mc_steps::Int64
     chemical_potential::Float64
+    reference_fugacity::Float64
     energy_perturbation::Float64
     random_seed::Int64
     fail_count::Int64
     allowed_fail_count::Int64
-    init_occupation_p::Float64
+    init_occupation_p::Union{Nothing,Float64}
     n_max::Int64
     cluster_p::Float64
     cluster_accepted::Float64
@@ -468,14 +491,23 @@ end
 
 """
     GrandCanonicalNestedSamplingParameters(;
-        mc_steps=100, chemical_potential=0.0, energy_perturbation=1e-12,
+        mc_steps=100, chemical_potential=0.0, reference_fugacity=1.0,
+        energy_perturbation=1e-12,
         random_seed=1234, fail_count=0, allowed_fail_count=10,
-        init_occupation_p=0.5, n_max=typemax(Int64),
+        init_occupation_p=nothing, n_max=typemax(Int64),
         cluster_p=0.3, cluster_accepted=0.0, cluster_total=0.0,
         cluster_p_history=Float64[], cluster_accept_history=Float64[],
         cluster_adjust_iterations=Int[], move_stats=Dict{Symbol,Int}())
 
 Convenience constructor for `GrandCanonicalNestedSamplingParameters`.
+
+`reference_fugacity` (z0) must be positive. It selects the ideal-lattice-gas
+prior of mass `(1 + z0)^M` described on the struct; `1.0`, the default, is the
+uniform prior. `init_occupation_p` defaults to `nothing`, which draws the
+initial live set from that prior at `z0/(1 + z0)`; a number is accepted only
+at `reference_fugacity = 1.0` (the previous free choice of the initial law
+under the uniform prior) and throws an `ArgumentError` otherwise, since the
+reference measure fixes the initial law.
 
 The `n_max` parameter sets an upper bound on the number of particles per walker.
 Insertions are rejected when N ≥ n_max. Default is `typemax(Int64)` (no cap).
@@ -491,11 +523,12 @@ never window-reset, cleared once at the start of each run).
 function GrandCanonicalNestedSamplingParameters(;
     mc_steps::Int64=100,
     chemical_potential::Float64=0.0,
+    reference_fugacity::Float64=1.0,
     energy_perturbation::Float64=1e-12,
     random_seed::Int64=1234,
     fail_count::Int64=0,
     allowed_fail_count::Int64=10,
-    init_occupation_p::Float64=0.5,
+    init_occupation_p::Union{Nothing,Float64}=nothing,
     n_max::Int64=typemax(Int64),
     cluster_p::Float64=0.3,
     cluster_accepted::Float64=0.0,
@@ -505,8 +538,18 @@ function GrandCanonicalNestedSamplingParameters(;
     cluster_adjust_iterations::Vector{Int}=Int[],
     move_stats::Dict{Symbol,Int}=Dict{Symbol,Int}(),
 )
+    if reference_fugacity <= 0.0
+        throw(ArgumentError("reference_fugacity must be positive"))
+    end
+    if init_occupation_p !== nothing && reference_fugacity != 1.0
+        throw(ArgumentError("init_occupation_p and reference_fugacity are " *
+            "mutually exclusive: the reference measure at z0 = " *
+            "$reference_fugacity fixes the initial occupation law at " *
+            "z0/(1 + z0); pass init_occupation_p only at the default " *
+            "reference_fugacity = 1.0"))
+    end
     GrandCanonicalNestedSamplingParameters(
-        mc_steps, chemical_potential, energy_perturbation,
+        mc_steps, chemical_potential, reference_fugacity, energy_perturbation,
         random_seed, fail_count, allowed_fail_count,
         init_occupation_p, n_max,
         cluster_p, cluster_accepted, cluster_total,
@@ -1690,14 +1733,25 @@ end
 """
     _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonicalNestedSamplingParameters)
 
-Initialize walkers with random microstates for grand-canonical NS.
-Each site is occupied independently with probability `gc_params.init_occupation_p`.
+Initialize walkers with random microstates for grand-canonical NS: exact
+i.i.d. draws from the ideal-lattice-gas prior at
+`z0 = gc_params.reference_fugacity`, each site occupied independently with
+probability `z0/(1 + z0)`, or with probability `gc_params.init_occupation_p`
+when that field is a number (accepted by the constructor only at `z0 = 1`).
+Occupancies above `n_max` are thinned at random, and every walker's
+iteration counter is reset to zero.
 """
 function _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonicalNestedSamplingParameters)
     h = liveset.hamiltonian
     n_max = gc_params.n_max
+    if gc_params.init_occupation_p === nothing
+        z0 = gc_params.reference_fugacity
+        p0 = z0 / (1.0 + z0)
+    else
+        p0 = gc_params.init_occupation_p
+    end
     for walker in liveset.walkers
-        random_microstate!(walker.configuration; p=gc_params.init_occupation_p)
+        random_microstate!(walker.configuration; p=p0)
         # Enforce n_max: if too many particles, randomly delete until N ≤ n_max
         n_occ = sum(walker.configuration.components[1])
         if n_occ > n_max
@@ -1708,6 +1762,9 @@ function _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonical
             end
         end
         assign_energy!(walker, h; perturb_energy=gc_params.energy_perturbation)
+        # Reset the iteration counter: df.iter feeds the ωᵢ prior-volume
+        # weights, so a stale counter from a reused liveset corrupts them
+        walker.iter = 0
     end
     return liveset
 end
@@ -1721,7 +1778,9 @@ end
 Perform one step of grand-canonical nested sampling.
 
 Sorts walkers by Ω = E − μN, removes the worst (highest Ω), clones a parent
-with Ω < Ω_worst, and decorrelates the clone via grand-canonical MCMC.
+with Ω < Ω_worst, and decorrelates the clone via grand-canonical MCMC that
+preserves the `z0^N`-weighted prior (`z0 = gc_params.reference_fugacity`)
+below the Ω ceiling.
 
 # Returns
 - `iter`: Iteration number (or `missing` if the step failed).
@@ -1767,11 +1826,13 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     end
     to_walk = _clone_walker_shared_geometry(ats[parent_idx])
 
-    # Decorrelate via GC MCMC
+    # Decorrelate via GC MCMC: z0 weights the insert/delete acceptance so the
+    # walk preserves the Bernoulli(z0/(1+z0)) prior below the Ω ceiling
     accept, rate, to_walk, cl_accepted, cl_total, move_stats = MC_grand_canonical_walk!(
         gc_params.mc_steps, to_walk, h, omega_max_val, mu;
         p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
         energy_perturb=gc_params.energy_perturbation,
+        z0=gc_params.reference_fugacity,
         n_max=gc_params.n_max,
         clusters_freq=mc_routine.clusters_freq,
         swaps_freq=mc_routine.swaps_freq,
@@ -1811,12 +1872,23 @@ end
 
 Run the grand-canonical nested sampling loop.
 
-Initializes walkers with random microstates, then iterates: remove the
-highest-Ω walker, record (Ω, E, N), replace with a decorrelated clone.
+Initializes walkers as i.i.d. draws from the ideal-lattice-gas prior at
+reference fugacity `z0 = gc_params.reference_fugacity` (each site occupied
+with probability `z0/(1 + z0)`; prior weight `z0^N`, total mass `(1 + z0)^M`
+on M sites, the uniform measure over the 2^M microstates at the default
+`z0 = 1`), then iterates: remove the highest-Ω walker, record (Ω, E, N),
+replace with a clone decorrelated below the Ω ceiling under the same prior
+(the insertion and deletion acceptances of `MC_grand_canonical_walk!` carry
+`z0`; the ordering variable Ω = E − μN does not). Reduce the ledger with
+`gc_thermodynamic_stats` at the same `reference_fugacity`, which restores
+the flat counting measure through a per-shell factor `z0^(-N_j)`. A finite
+`n_max` truncates the prior mass `(1 + z0)^M` to a binomial partial sum that
+no library function computes.
 
 # Arguments
 - `liveset::LatticeGasWalkers`: The initial liveset (walkers will be re-initialized).
-- `gc_params::GrandCanonicalNestedSamplingParameters`: GC-NS parameters including μ.
+- `gc_params::GrandCanonicalNestedSamplingParameters`: GC-NS parameters including μ
+  and the reference fugacity z0 of the prior.
 - `n_steps::Int64`: Number of NS iterations.
 - `mc_routine::MCGrandCanonicalMoves`: The GC move routine.
 - `save_strategy::DataSavingStrategy`: Strategy for periodic output.
@@ -1980,9 +2052,10 @@ so a single run yields Ξ(μ, T) over a continuous temperature range and a
 neighborhood of μ around `μ_ref(T) = k_B T ln z0`.
 
 Setting `reference_fugacity = 1` makes the prior the uniform measure over all
-2^M microstates — the same prior as the Ω-sorted construction in
-`GrandCanonicalNestedSamplingParameters`, which instead bakes a single μ into
-the sort quantity Ω = E − μN.
+2^M microstates — the default prior of the Ω-sorted construction in
+`GrandCanonicalNestedSamplingParameters`, which selects the same prior family
+through its own `reference_fugacity` but bakes a single μ into the sort
+quantity Ω = E − μN.
 
 Unlike the Ω-sorted construction there is deliberately no `n_max` field: the
 post-processing normalization `(1 + z0)^M` is the prior mass of the *full*

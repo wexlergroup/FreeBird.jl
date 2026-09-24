@@ -925,9 +925,12 @@ configuration with N particles weight `z0^N` — over all microstates with Ω < 
 - Delete ratio: `(1 / z0) * (p_insert / p_delete) * N / (M - N + 1)`
 
 The default `z0 = 1.0` reduces to the uniform prior over all 2^M microstates,
-matching the Ω-sorted grand-canonical nested sampling construction. `z0 ≠ 1`
-is used by the ideal-gas-referenced (E-sorted) construction, where the walk
-runs with `mu = 0` so the Ω ceiling reduces to an energy ceiling.
+the default of the Ω-sorted grand-canonical nested sampling construction
+(`GrandCanonicalNestedSamplingParameters`, whose `reference_fugacity` is
+passed here). `z0 ≠ 1` is used by the ideal-gas-referenced (E-sorted)
+construction, where the walk runs with `mu = 0` so the Ω ceiling reduces to
+an energy ceiling, and by the Ω-sorted construction at a non-unit reference
+fugacity.
 
 Cluster moves are symmetric (no Metropolis correction), accepted if Ω < Ω_max.
 

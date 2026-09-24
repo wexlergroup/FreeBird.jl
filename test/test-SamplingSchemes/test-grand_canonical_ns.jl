@@ -24,7 +24,7 @@
         @test gc_params.random_seed == 1234
         @test gc_params.fail_count == 0
         @test gc_params.allowed_fail_count == 10
-        @test gc_params.init_occupation_p == 0.5
+        @test gc_params.init_occupation_p === nothing
         @test gc_params.n_max == typemax(Int64)
  
         gc_params2 = GrandCanonicalNestedSamplingParameters(

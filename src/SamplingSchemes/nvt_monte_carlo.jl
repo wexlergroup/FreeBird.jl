@@ -48,6 +48,30 @@ mutable struct MetropolisMCParameters <: SamplingParameters
     end
 end
 
+function _validate_lattice_nvt_inputs(temperature::Float64,
+                                      num_steps::Int64, kb::Float64)
+    isfinite(temperature) && temperature > 0.0 || throw(ArgumentError(
+        "temperature must be finite and positive, got $temperature"))
+    num_steps >= 0 || throw(ArgumentError(
+        "num_steps must be non-negative, got $num_steps"))
+    isfinite(kb) && kb > 0.0 || throw(ArgumentError(
+        "kb must be finite and positive, got $kb"))
+    return nothing
+end
+
+function _validate_lattice_nvt_parameters(mc_params::MetropolisMCParameters,
+                                          kb::Float64)
+    mc_params.equilibrium_steps >= 0 || throw(ArgumentError(
+        "equilibrium_steps must be non-negative"))
+    mc_params.sampling_steps > 0 || throw(ArgumentError(
+        "sampling_steps must be positive"))
+    all(temp -> isfinite(temp) && temp > 0.0, mc_params.temperatures) ||
+        throw(ArgumentError("temperatures must be finite and positive"))
+    isfinite(kb) && kb > 0.0 || throw(ArgumentError(
+        "kb must be finite and positive, got $kb"))
+    return nothing
+end
+
 
 """
     nvt_monte_carlo(
@@ -88,6 +112,7 @@ function nvt_monte_carlo(
     random_seed::Int64;
     kb::Float64 = 8.617_333_262e-5  # eV K-1
 )
+    _validate_lattice_nvt_inputs(temperature, num_steps, kb)
     # Set the random seed
     Random.seed!(random_seed)
 
@@ -174,6 +199,7 @@ function nvt_monte_carlo(
     random_seed::Int64;
     kb::Float64 = 8.617_333_262e-5  # eV K⁻¹
 )
+    _validate_lattice_nvt_inputs(temperature, num_steps, kb)
     Random.seed!(random_seed)
 
     energies = Vector{Float64}(undef, num_steps)
@@ -398,6 +424,7 @@ function monte_carlo_sampling(
     mc_params::MetropolisMCParameters;
     kb::Float64 = 8.617333262e-5 # eV/K
 )
+    _validate_lattice_nvt_parameters(mc_params, kb)
     energies = Vector{Float64}(undef, length(mc_params.temperatures))
     cvs = Vector{Float64}(undef, length(mc_params.temperatures))
     acceptance_rates = Vector{Float64}(undef, length(mc_params.temperatures))
@@ -407,22 +434,20 @@ function monte_carlo_sampling(
 
     for (i, temp) in enumerate(mc_params.temperatures)
 
-        # Equilibrate the lattice
-        equilibration_energies, equilibration_configurations, equilibration_accepted_steps = nvt_monte_carlo(
-            mc_routine,
-            lattice,
-            h,
-            temp,
-            mc_params.equilibrium_steps,
-            mc_params.random_seed
-        )
-
-        equi_var = var(equilibration_energies)
-        equi_mean = mean(equilibration_energies)
-
-        equi_rate = equilibration_accepted_steps / mc_params.equilibrium_steps
-
-        @info "Temperature: $temp K, Equilibration energy: $equi_mean, Variance: $(round(equi_var; sigdigits=4)), Acceptance rate: $(round(equi_rate; sigdigits=4))"
+        production_start = if mc_params.equilibrium_steps == 0
+            deepcopy(lattice)
+        else
+            equilibration_energies, equilibration_configurations,
+                equilibration_accepted_steps = nvt_monte_carlo(
+                    mc_routine, lattice, h, temp,
+                    mc_params.equilibrium_steps, mc_params.random_seed)
+            equi_var = var(equilibration_energies)
+            equi_mean = mean(equilibration_energies)
+            equi_rate = equilibration_accepted_steps /
+                        mc_params.equilibrium_steps
+            @info "Temperature: $temp K, Equilibration energy: $equi_mean, Variance: $(round(equi_var; sigdigits=4)), Acceptance rate: $(round(equi_rate; sigdigits=4))"
+            equilibration_configurations[end]
+        end
 
 
         # Sample the lattice. The production seed is derived from the
@@ -430,7 +455,7 @@ function monte_carlo_sampling(
         # the equilibration random stream, correlating the two phases
         sampling_energies, sampling_configurations, sampling_accepted_steps = nvt_monte_carlo(
             mc_routine,
-            equilibration_configurations[end],
+            production_start,
             h,
             temp,
             mc_params.sampling_steps,
@@ -493,6 +518,7 @@ function monte_carlo_sampling(
     mc_params::MetropolisMCParameters;
     kb::Float64 = 8.617333262e-5 # eV/K
 )
+    _validate_lattice_nvt_parameters(mc_params, kb)
     energies = Vector{Float64}(undef, length(mc_params.temperatures))
     cvs = Vector{Float64}(undef, length(mc_params.temperatures))
     acceptance_rates = Vector{Float64}(undef, length(mc_params.temperatures))
@@ -502,22 +528,20 @@ function monte_carlo_sampling(
 
     for (i, temp) in enumerate(mc_params.temperatures)
 
-        # Equilibrate the lattice
-        equilibration_energies, equilibration_configurations, equilibration_accepted_steps = nvt_monte_carlo(
-            mc_routine,
-            lattice,
-            calc,
-            temp,
-            mc_params.equilibrium_steps,
-            mc_params.random_seed
-        )
-
-        equi_var = var(equilibration_energies)
-        equi_mean = mean(equilibration_energies)
-
-        equi_rate = equilibration_accepted_steps / mc_params.equilibrium_steps
-
-        @info "Temperature: $temp K, Equilibration energy: $equi_mean, Variance: $(round(equi_var; sigdigits=4)), Acceptance rate: $(round(equi_rate; sigdigits=4))"
+        production_start = if mc_params.equilibrium_steps == 0
+            deepcopy(lattice)
+        else
+            equilibration_energies, equilibration_configurations,
+                equilibration_accepted_steps = nvt_monte_carlo(
+                    mc_routine, lattice, calc, temp,
+                    mc_params.equilibrium_steps, mc_params.random_seed)
+            equi_var = var(equilibration_energies)
+            equi_mean = mean(equilibration_energies)
+            equi_rate = equilibration_accepted_steps /
+                        mc_params.equilibrium_steps
+            @info "Temperature: $temp K, Equilibration energy: $equi_mean, Variance: $(round(equi_var; sigdigits=4)), Acceptance rate: $(round(equi_rate; sigdigits=4))"
+            equilibration_configurations[end]
+        end
 
 
         # Sample the lattice from a distinct random stream. Reusing the
@@ -525,7 +549,7 @@ function monte_carlo_sampling(
         # equilibrated configuration.
         sampling_energies, sampling_configurations, sampling_accepted_steps = nvt_monte_carlo(
             mc_routine,
-            equilibration_configurations[end],
+            production_start,
             calc,
             temp,
             mc_params.sampling_steps,

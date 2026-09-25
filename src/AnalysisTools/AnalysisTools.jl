@@ -432,6 +432,22 @@ function _warn_if_reweighting(df::DataFrame, Es::Vector{Float64},
     return nothing
 end
 
+function _warn_if_reweighting(df::DataFrame, Es::Vector{Float64},
+                              Ns::Matrix{Int}, μs::Vector{Float64})
+    (isempty(Es) || !hasproperty(df, :omega)) && return nothing
+    ω_recorded = collect(Float64, df.omega)
+    length(ω_recorded) == length(Es) || return nothing
+    grand_es = Es .- Ns * μs
+    resid = maximum(abs.(ω_recorded .- grand_es); init=0.0)
+    tol = 1e-6 * max(1.0, maximum(abs, Es; init=1.0))
+    resid <= tol && return nothing
+    @warn "gc_thermodynamic_stats: requested chemical potentials differ " *
+          "from those represented by the sampled grand potentials; " *
+          "post-hoc reweighting is supported but loses efficiency as the " *
+          "difference grows." requested_chemical_potentials=μs maxlog=1
+    return nothing
+end
+
 """
     gc_thermodynamic_stats(β, ωi, grand_energies, energies,
                            component_numbers, chemical_potentials; kb=...)
@@ -574,10 +590,18 @@ end
 """
     gc_thermodynamic_stats(df, βs, n_walkers, chemical_potentials; ...)
 
-Reduce a multi-component GC-NS ledger. A C-component ledger must contain
+Reduce a multi-component GC-NS ledger at the requested chemical potentials.
+A C-component ledger must contain
 `num_particles_1` through `num_particles_C`; the aggregate `num_particles`
-column is checked against their row-wise sum. The returned `mean_N` is a
-`length(βs) × C` matrix.
+column is checked against their row-wise sum. Grand energies are reconstructed
+from each row's bare energy and component counts, so the ledger can be
+reweighted to chemical potentials other than those used during sampling.
+
+Pass both `live_energies` and `live_component_numbers` to include the remaining
+live-set prior mass. `live_component_numbers` must have one row per live energy
+and one column per component. Shell and live-tail weights are built in log space
+to avoid underflow in long runs. The returned `mean_N` is a
+`length(βs) × C` matrix in component order.
 """
 function gc_thermodynamic_stats(df::DataFrame,
                                  βs::Vector{Float64},
@@ -585,10 +609,15 @@ function gc_thermodynamic_stats(df::DataFrame,
                                  chemical_potentials::AbstractVector{<:Real};
                                  n_cull::Int=1,
                                  ω0::Float64=1.0,
+                                 live_energies=nothing,
+                                 live_component_numbers=nothing,
                                  kb::Float64=8.617333262e-5)
-    C = length(chemical_potentials)
+    mus = collect(Float64, chemical_potentials)
+    C = length(mus)
     C > 0 || throw(ArgumentError(
         "chemical_potentials must contain at least one component"))
+    all(isfinite, mus) || throw(ArgumentError(
+        "all chemical_potentials must be finite"))
     count_names = [Symbol("num_particles_$c") for c in 1:C]
     missing_names = setdiff(count_names, Symbol.(names(df)))
     isempty(missing_names) || throw(ArgumentError(
@@ -601,14 +630,43 @@ function gc_thermodynamic_stats(df::DataFrame,
     all(totals .== df.num_particles) || throw(ArgumentError(
         "num_particles must equal the row-wise sum of the component counts"))
 
-    ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
+    log_weights = log_ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
+    energies = collect(Float64, df.energy)
+    grand_energies = energies .- component_numbers * mus
+    _warn_if_reweighting(df, energies, component_numbers, mus)
+
+    if live_energies !== nothing || live_component_numbers !== nothing
+        live_energies === nothing && throw(ArgumentError(
+            "live_component_numbers given without live_energies"))
+        live_component_numbers === nothing && throw(ArgumentError(
+            "live_energies given without live_component_numbers"))
+        live_counts = Matrix{Int}(live_component_numbers)
+        live_es = collect(Float64, live_energies)
+        size(live_counts, 1) == length(live_es) || throw(DimensionMismatch(
+            "live_energies and live_component_numbers must have the same " *
+            "number of rows"))
+        size(live_counts, 2) == C || throw(DimensionMismatch(
+            "live_component_numbers has $(size(live_counts, 2)) columns, " *
+            "expected $C"))
+        n_iters = isempty(df.iter) ? 0 : maximum(df.iter)
+        log_tail = n_iters * log(n_walkers / (n_walkers + n_cull)) -
+                   log(n_walkers)
+        log_weights = vcat(log_weights, fill(log_tail, length(live_es)))
+        energies = vcat(energies, live_es)
+        component_numbers = vcat(component_numbers, live_counts)
+        grand_energies = vcat(
+            grand_energies, live_es .- live_counts * mus)
+    end
+
+    weights = isempty(log_weights) ? Float64[] :
+        exp.(log_weights .- maximum(log_weights))
     mean_Es = Vector{Float64}(undef, length(βs))
     Cvs = Vector{Float64}(undef, length(βs))
     mean_Ns = Matrix{Float64}(undef, length(βs), C)
     Threads.@threads for (i, b) in collect(enumerate(βs))
         mean_Es[i], Cvs[i], mean_N = gc_thermodynamic_stats(
-            b, ωi, df.omega, df.energy, component_numbers,
-            chemical_potentials; kb=kb)
+            b, weights, grand_energies, energies, component_numbers,
+            mus; kb=kb)
         mean_Ns[i, :] .= mean_N
     end
     return mean_Es, Cvs, mean_Ns

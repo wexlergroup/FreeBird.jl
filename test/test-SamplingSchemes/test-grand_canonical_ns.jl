@@ -817,6 +817,44 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
         @test wrapped[2][1] ≈ direct[2]
         @test vec(wrapped[3]) ≈ direct[3]
 
+        reweighted_df = copy(df)
+        reweighted_df.omega = copy(Es)
+        reweighted = @test_logs (
+            :warn, r"requested chemical potentials differ") match_mode=:any gc_thermodynamic_stats(
+                reweighted_df, [β], 10, mus; kb=kb)
+        @test reweighted[1][1] ≈ direct[1]
+        @test reweighted[2][1] ≈ direct[2]
+        @test vec(reweighted[3]) ≈ direct[3]
+
+        live_es = [3.0, 4.0]
+        live_Ns = [1 1; 2 0]
+        live_wrapped = gc_thermodynamic_stats(
+            df, [β], 2, mus; kb=kb,
+            live_energies=live_es, live_component_numbers=live_Ns)
+        dead_logs = log_ωᵢ(df.iter, 2)
+        live_log_weight = maximum(df.iter) * log(2 / 3) - log(2)
+        all_logs = vcat(dead_logs, fill(live_log_weight, 2))
+        all_weights = exp.(all_logs .- maximum(all_logs))
+        all_Es = vcat(Es, live_es)
+        all_Ns = vcat(Ns, live_Ns)
+        live_direct = gc_thermodynamic_stats(
+            β, all_weights, all_Es .- all_Ns * mus,
+            all_Es, all_Ns, mus; kb=kb)
+        @test live_wrapped[1][1] ≈ live_direct[1]
+        @test live_wrapped[2][1] ≈ live_direct[2]
+        @test vec(live_wrapped[3]) ≈ live_direct[3]
+
+        long_df = DataFrame(
+            iter=[100_000], omega=[1.9], energy=[2.0],
+            num_particles=[1], num_particles_1=[1], num_particles_2=[0])
+        long_stats = gc_thermodynamic_stats(
+            long_df, [β], 10, mus; kb=kb)
+        @test all(isfinite, long_stats[1])
+        @test all(isfinite, long_stats[2])
+        @test all(isfinite, long_stats[3])
+        @test long_stats[1][1] ≈ 2.0
+        @test vec(long_stats[3]) ≈ [1.0, 0.0]
+
         @test_throws DimensionMismatch gc_thermodynamic_stats(
             β, ωi, grand_es, Es, Ns[:, 1:1], mus; kb=kb)
         @test_throws ArgumentError gc_thermodynamic_stats(
@@ -825,6 +863,11 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
         bad_totals.num_particles[1] += 1
         @test_throws ArgumentError gc_thermodynamic_stats(
             bad_totals, [β], 10, mus; kb=kb)
+        @test_throws ArgumentError gc_thermodynamic_stats(
+            df, [β], 10, mus; kb=kb, live_energies=live_es)
+        @test_throws DimensionMismatch gc_thermodynamic_stats(
+            df, [β], 10, mus; kb=kb,
+            live_energies=live_es, live_component_numbers=live_Ns[:, 1:1])
     end
 
     # ================================================================

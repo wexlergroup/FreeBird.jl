@@ -180,6 +180,35 @@ end
             MCGrandCanonicalMoves(clusters_freq=1), lattice, h, 600.0, 10, 1)
     end
 
+    @testset "multi-species guard" begin
+        multi = AtomicLattice{2,SquareLattice}(
+            lattice_atom="Pd",
+            type_of_sites=["hollow"],
+            components=[1, 1],
+            adsorbate_atoms=["O", "H"],
+            supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            num_nearest_neighbors=2,
+        )
+        err = try
+            μvt_monte_carlo(routine, multi, h, 600.0, 10, 1)
+            nothing
+        catch exception
+            exception
+        end
+        @test err isa ArgumentError
+        @test occursin("one-species AtomicLattice", sprint(showerror, err))
+
+        params = MetropolisMCParameters(
+            [600.0]; equilibrium_steps=0, sampling_steps=10,
+            chemical_potentials=[-0.03])
+        @test_throws ArgumentError monte_carlo_sampling(
+            routine, multi, h, params)
+        @test_throws ArgumentError FreeBird.SamplingSchemes.metropolis_hastings(
+            routine, multi, 0.0, deepcopy(multi), h, 1.0, -0.03, :move)
+    end
+
     @testset "reverse-proposal detailed balance" begin
         beta = 1 / (8.617_333_262e-5 * 600.0)
         p_insert = 0.2

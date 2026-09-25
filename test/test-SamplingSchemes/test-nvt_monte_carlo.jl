@@ -38,6 +38,22 @@
             @test length(configs) == 100
             @test 0 ≤ accepted ≤ 100
             @test all(isfinite, energies)
+
+            zero_eq = MetropolisMCParameters(
+                [300.0]; equilibrium_steps=0, sampling_steps=4,
+                random_seed=42)
+            zero_energies, zero_configs, zero_cvs, zero_rates =
+                monte_carlo_sampling(mc_routine, lattice, ham, zero_eq)
+            @test length(zero_energies) == 1
+            @test length(zero_configs) == 1
+            @test all(isfinite, zero_energies)
+            @test all(isfinite, zero_cvs)
+            @test all(rate -> 0.0 <= rate <= 1.0, zero_rates)
+
+            @test_throws ArgumentError nvt_monte_carlo(
+                mc_routine, lattice, ham, 0.0, Int64(2), Int64(42))
+            @test_throws ArgumentError nvt_monte_carlo(
+                mc_routine, lattice, ham, 300.0, Int64(-1), Int64(42))
         end
     
         @testset "Temperature effects" begin
@@ -86,6 +102,17 @@
         @test all(!FreeBird.AbstractWalkers.pyis(
             configs[i].ase_lattice, configs[j].ase_lattice)
             for i in eachindex(configs) for j in (i + 1):length(configs))
+
+        zero_eq = MetropolisMCParameters(
+            [300.0]; equilibrium_steps=0, sampling_steps=3,
+            random_seed=42)
+        zero_energies, zero_configs, zero_cvs, zero_rates =
+            monte_carlo_sampling(MCNewSample(), lattice, calc, zero_eq)
+        @test length(zero_energies) == 1
+        @test length(zero_configs) == 1
+        @test all(isfinite, zero_energies)
+        @test all(isfinite, zero_cvs)
+        @test all(rate -> 0.0 <= rate <= 1.0, zero_rates)
 
         multi = AtomicLattice{2,SquareLattice}(
             lattice_atom="Pd",

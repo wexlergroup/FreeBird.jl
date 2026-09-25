@@ -244,7 +244,9 @@ end
         frames = read_configs(filename)
         @test length(frames) == 1
         @test frames[1].data[:freebird_walker] == "AtomicLattice"
+        @test frames[1].data[:atomic_lattice_schema] == 1
         @test frames[1].data[:ase_surface] == "fcc100"
+        @test startswith(frames[1].data[:site_geometry_fingerprint], "fnv64=")
         @test frames[1].data[:occupations] == "bits=1000010000100000"
         @test frames[1].data[:component_occupations] == "bits=1000010000100000"
 
@@ -256,6 +258,33 @@ end
         @test restored.configuration.components == lattice.components
         @test restored.configuration.periodicity == lattice.periodicity
         @test restored.configuration.ase_dirty == false
+        fresh = read_single_walker(filename; resume=false)
+        @test fresh.energy == 0.0u"eV"
+        @test fresh.iter == 0
+        @test fresh.configuration.components == lattice.components
+
+        raw_frame = read(filename, String)
+        bad_schema = "atomic_lattice_bad_schema.extxyz"
+        write(bad_schema, replace(raw_frame,
+            "atomic_lattice_schema=1" => "atomic_lattice_schema=2"))
+        @test_throws ArgumentError read_single_walker(bad_schema)
+        rm(bad_schema, force=true)
+
+        bad_geometry = "atomic_lattice_bad_geometry.extxyz"
+        fingerprint = frames[1].data[:site_geometry_fingerprint]
+        write(bad_geometry, replace(raw_frame,
+            fingerprint => "fnv64=0000000000000000"))
+        @test_throws ArgumentError read_single_walker(bad_geometry)
+        rm(bad_geometry, force=true)
+
+        bad_frame = "atomic_lattice_bad_frame.extxyz"
+        frame_lines = split(raw_frame, '\n'; keepempty=true)
+        first_atom = split(frame_lines[3])
+        first_atom[4] = "0.25000000"
+        frame_lines[3] = join(first_atom, ' ')
+        write(bad_frame, join(frame_lines, '\n'))
+        @test_throws ArgumentError read_single_walker(bad_frame)
+        rm(bad_frame, force=true)
 
         write_single_walker(filename, walker, true)
         @test length(read_walkers(filename)) == 2
@@ -294,6 +323,7 @@ end
             supercell_dimensions=(3, 3, 2), lattice_constant=3.947,
             periodicity=(true, true, false), adsorbate_atoms=["O"],
             coverage=0.0, num_nearest_neighbors=1,
+            image_multiplicity=true,
             type_of_sites=["fcc"])
         triangular.components[1][[1, 5, 9]] .= true
         triangular.ase_dirty = true
@@ -302,7 +332,23 @@ end
         triangular_restored = read_single_walker(triangular_filename)
         @test triangular_restored.configuration isa AtomicLattice{1,TriangularLattice}
         @test triangular_restored.configuration.surface == :fcc111
+        @test triangular_restored.configuration.image_multiplicity
         @test triangular_restored.configuration.components == triangular.components
         rm(triangular_filename, force=true)
+
+        hcp = AtomicLattice{1,TriangularLattice}(
+            lattice_atom="Ti", surface=:hcp0001,
+            supercell_dimensions=(2, 2, 2), lattice_constant=2.95,
+            lattice_constant_c=4.8,
+            periodicity=(true, true, false), adsorbate_atoms=["H"],
+            coverage=0.0, num_nearest_neighbors=0,
+            type_of_sites=["hcp"])
+        hcp_filename = "atomic_lattice_hcp.extxyz"
+        write_single_walker(hcp_filename, LatticeWalker(hcp))
+        hcp_restored = read_single_walker(hcp_filename)
+        @test hcp_restored.configuration.surface == :hcp0001
+        @test hcp_restored.configuration.lattice_constant_c == 4.8
+        @test isempty(hcp_restored.configuration.cutoff_radii)
+        rm(hcp_filename, force=true)
     end
 end

@@ -116,6 +116,7 @@ applies to every occupied component-mask entry.
 """
 function interacting_energy(lattice::AtomicLattice{1},
                             h::GenericLatticeHamiltonian{N,U}) where {N,U}
+    AbstractWalkers._validate_atomic_components(lattice)
     e_interaction::U = lattice_interaction_energy(
         lattice.components[1], lattice.neighbors, h)
     e_adsorption::U = sum(lattice.components[1]) * h.on_site_interaction
@@ -270,6 +271,7 @@ end
 
 function site_flip_delta(lattice::AtomicLattice{1},
                          h::GenericLatticeHamiltonian{N,U}, site::Int) where {N,U}
+    checkbounds(lattice.components[1], site)
     _check_shell_counts(lattice.neighbors, N)
     occ = lattice.components[1]
     sgn = occ[site] ? -1 : 1
@@ -415,6 +417,7 @@ end
 """Evaluate a multi-component lattice Hamiltonian on an `AtomicLattice`."""
 function interacting_energy(lattice::AtomicLattice{C,G},
                             h::MLatticeHamiltonian{C,N,U}) where {C,G,N,U}
+    AbstractWalkers._validate_atomic_components(lattice)
     adsorption_energy = zero(U)
     interaction_energy = zero(U)
     for i in 1:C

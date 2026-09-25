@@ -359,9 +359,9 @@ function MC_random_walk!(n_steps::Int,
 
     # Opt-in incremental energy path (single-component walkers only): anchor
     # the unperturbed energy once per walk and advance it by exact
-    # site_flip_delta sums, the pattern of MC_grand_canonical_walk!. The
-    # default path below is the shipped arithmetic in the shipped order with
-    # the shipped random draws; the anchor is not evaluated on it.
+    # site_flip_delta sums, following MC_grand_canonical_walk!. The default
+    # path evaluates the complete energy for each proposal and does not
+    # evaluate this anchor.
     use_deltas = incremental && C == 1 && h isa ClassicalHamiltonian &&
                  supports_site_deltas(h)
     zero_e = 0.0 * unit(lattice.energy)
@@ -563,6 +563,7 @@ function generate_random_new_lattice_sample!(lattice::MLattice{C}) where C
 end
 
 function generate_random_new_lattice_sample!(lattice::AtomicLattice{C}) where C
+    AbstractWalkers._validate_atomic_components(lattice)
     counts = sum.(lattice.components)
     foreach(component -> fill!(component, false), lattice.components)
     available = collect(1:num_sites(lattice))
@@ -606,6 +607,7 @@ function lattice_random_walk!(lattice::SLattice)
 end
 
 function lattice_random_walk!(lattice::AtomicLattice)
+    AbstractWalkers._validate_atomic_components(lattice)
     _lattice_walk_draw!(lattice)
     return lattice
 end
@@ -810,7 +812,16 @@ end
 # ======================================================================
 
 _check_lattice_energy_model(::AbstractLattice, ::ClassicalHamiltonian) = nothing
-_check_lattice_energy_model(::AtomicLattice, ::PyMLPotential) = nothing
+function _check_lattice_energy_model(lattice::AtomicLattice,
+                                     ::ClassicalHamiltonian)
+    AbstractWalkers._validate_atomic_components(lattice)
+    return nothing
+end
+function _check_lattice_energy_model(lattice::AtomicLattice,
+                                     ::PyMLPotential)
+    AbstractWalkers._validate_atomic_components(lattice)
+    return nothing
+end
 function _check_lattice_energy_model(lattice::AbstractLattice,
                                      ::PyMLPotential)
     throw(ArgumentError(
@@ -819,21 +830,19 @@ function _check_lattice_energy_model(lattice::AbstractLattice,
 end
 
 """
-    random_microstate!(lattice::AbstractLattice; p::Float64=0.5)
+    random_microstate!(lattice::SLattice; p::Float64=0.5)
 
 Set each site occupied independently with probability `p`, producing a
 variable-N configuration suitable for grand-canonical sampling.
 
 # Arguments
-- `lattice::AbstractLattice`: The lattice to randomize. Multi-species
-  `AtomicLattice` configurations assign an occupied site to one uniformly
-  selected component while preserving single-site exclusion.
+- `lattice::SLattice`: The single-component lattice to randomize.
 - `p::Float64=0.5`: Per-site occupation probability.
 
 # Returns
-- `lattice::AbstractLattice`: The mutated lattice with a random microstate.
+- `lattice::SLattice`: The mutated lattice with a random microstate.
 """
-function random_microstate!(lattice::AbstractLattice; p::Float64=0.5)
+function random_microstate!(lattice::SLattice; p::Float64=0.5)
     for i in 1:num_sites(lattice)
         set_occupied!(lattice, i, rand() < p)
     end
@@ -842,6 +851,7 @@ end
 
 function random_microstate!(lattice::AtomicLattice{C}; p::Float64=0.5) where C
     0.0 <= p <= 1.0 || throw(ArgumentError("p must lie in [0, 1], got $p"))
+    AbstractWalkers._validate_atomic_components(lattice)
     foreach(component -> fill!(component, false), lattice.components)
     for site in 1:num_sites(lattice)
         rand() < p && (lattice.components[rand(1:C)][site] = true)
@@ -864,7 +874,7 @@ Insert a particle at a random empty site. Returns `true` if successful,
 - `lattice::SLattice`: The mutated lattice.
 - `site::Int`: The inserted site index, or 0 when unsuccessful.
 """
-function lattice_insert_particle!(lattice::AbstractLattice)
+function lattice_insert_particle!(lattice::SLattice)
     n_sites = num_sites(lattice)
     n_occ = n_occupied(lattice)
     if n_occ >= n_sites
@@ -878,6 +888,7 @@ function lattice_insert_particle!(lattice::AbstractLattice)
 end
 
 function lattice_insert_particle!(lattice::AtomicLattice{C}, component::Int=1) where C
+    AbstractWalkers._validate_atomic_components(lattice)
     checkbounds(lattice.components, component)
     empty_sites = findall(1:num_sites(lattice)) do site
         all(c -> !is_occupied(lattice, site, c), 1:C)
@@ -911,7 +922,7 @@ Delete a particle from a random occupied site. Returns `true` if successful,
 - `lattice::SLattice`: The mutated lattice.
 - `site::Int`: The vacated site index, or 0 when unsuccessful.
 """
-function lattice_delete_particle!(lattice::AbstractLattice)
+function lattice_delete_particle!(lattice::SLattice)
     n_occ = n_occupied(lattice)
     if n_occ == 0
         return false, lattice, 0
@@ -923,6 +934,7 @@ function lattice_delete_particle!(lattice::AbstractLattice)
 end
 
 function lattice_delete_particle!(lattice::AtomicLattice{C}, component::Int=1) where C
+    AbstractWalkers._validate_atomic_components(lattice)
     checkbounds(lattice.components, component)
     occupied_sites = occupied_indices(lattice, component)
     isempty(occupied_sites) && return false, lattice, 0
@@ -1178,10 +1190,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
     # Opt-in incremental energy path: anchor the unperturbed energy once per
     # walk (bounding floating-point drift to about n_steps ulps, reset by the
     # next walk's anchor) and advance it by exact O(z) site_flip_delta sums.
-    # Cluster proposals and Hamiltonians without supports_site_deltas fall
-    # back to the shipped full recompute, which also re-anchors the
-    # accumulator exactly. The default path computes the identical arithmetic
-    # in the identical order and draws the identical random stream.
+    # Cluster proposals and Hamiltonians without supports_site_deltas use a
+    # full recomputation, which also re-anchors the accumulator exactly.
     use_deltas = incremental && h isa ClassicalHamiltonian &&
                  supports_site_deltas(h)
     zero_e = 0.0 * unit(lattice.energy)
@@ -1293,8 +1303,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 end
                 set_occupied!(config, insert_site, true)
             else
-                # p_bias == 0: legacy path, bit-identical RNG stream (no
-                # channel draw; lattice_insert_particle! draws exactly once)
+                # With no biased channel, lattice_insert_particle! performs
+                # the single uniform empty-site draw.
                 success, _, insert_site = lattice_insert_particle!(config)
                 if !success
                     continue

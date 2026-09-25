@@ -62,13 +62,16 @@ function Base.show(io::IO, lattice::AtomicLattice)
     println(io, "    ASE surface          : ", lattice.surface)
     println(io, "    positions            : ", length(lattice.lattice_positions[:,1]), " grid points")
     println(io, "    supercell_dimensions : ", lattice.supercell_dimensions)
+    lattice.lattice_constant_c === nothing ||
+        println(io, "    hcp c lattice const. : ", lattice.lattice_constant_c)
     println(io, "    periodicity          : ", lattice.periodicity)
     println(io, "    adsorbate_atoms      : ", lattice.adsorbate_atoms)
     println(io, "    coverage             : ", coverage(lattice))
     println(io, "    occupied sites       : ", sum(sum, lattice.components), " / ", num_sites(lattice))
     println(io, "    component counts     : ", sum.(lattice.components))
     println(io, "    # nn                 : ", lattice.num_nearest_neighbors)
-    println()
+    println(io, "    image multiplicity   : ", lattice.image_multiplicity)
+    println(io)
 end
 
 

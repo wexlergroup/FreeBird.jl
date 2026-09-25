@@ -327,6 +327,9 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
             components=[[true, false, false, false],
                         [false, true, false, false]],
             adsorptions=:full)
+        @test_throws MethodError random_microstate!(mlattice; p=0.5)
+        @test_throws MethodError lattice_insert_particle!(mlattice)
+        @test_throws MethodError lattice_delete_particle!(mlattice)
         inserted, _, inserted_site = lattice_insert_particle!(mlattice, 2)
         @test inserted
         @test inserted_site in (3, 4)

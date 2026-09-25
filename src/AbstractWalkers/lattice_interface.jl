@@ -5,7 +5,7 @@
 # `MLattice` and `AtomicLattice` implement the same occupation contract.
 #
 # AtomicLattice supplies neighbor shells in the same site-index space and a
-# validated reflection table for periodic point-inversion moves. Reflection is
+# validated reflection map for periodic point-inversion moves. Reflection is
 # deliberately consumed inside `MonteCarloMoves` rather than exposed here: it
 # is geometry-specific proposal machinery, not part of the occupancy contract.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -77,6 +77,8 @@ function set_occupied!(lattice::MLattice, i::Int, v::Bool, c::Int=1)
 end
 
 function swap_sites!(lattice::MLattice{C,G}, a::Int, b::Int) where {C,G}
+    checkbounds(lattice.components[1], a)
+    checkbounds(lattice.components[1], b)
     a == b && return lattice
     for comp in 1:C
         lattice.components[comp][a], lattice.components[comp][b] =
@@ -112,6 +114,8 @@ function set_occupied!(lattice::AtomicLattice, i::Int, v::Bool, c::Int=1)
 end
 
 function swap_sites!(lattice::AtomicLattice, a::Int, b::Int)
+    checkbounds(lattice.components[1], a)
+    checkbounds(lattice.components[1], b)
     a == b && return lattice
     for component in lattice.components
         component[a], component[b] = component[b], component[a]

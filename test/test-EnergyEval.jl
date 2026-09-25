@@ -926,6 +926,47 @@
                   exact_liveset.walkers)
     end
 
+    @testset "AtomicLattice Python calculator metadata isolation" begin
+        atomic = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", surface=:fcc100,
+            supercell_dimensions=(2, 2, 2), lattice_constant=3.947,
+            periodicity=(true, true, false), adsorbate_atoms=["H"],
+            components=[1], num_nearest_neighbors=0,
+            type_of_sites=["hollow"])
+
+        namespace = FreeBird.EnergyEval.pydict()
+        FreeBird.EnergyEval.pyimport("builtins").exec(
+            """
+import copy
+
+class FreeBirdMetadataSensitiveCalculator:
+    def __init__(self):
+        self.previous_info = None
+        self.calls = 0
+        self.saw_adsorbate_info = []
+
+    def get_potential_energy(self, atoms):
+        self.calls += 1
+        self.saw_adsorbate_info.append("adsorbate_info" in atoms.info)
+        if self.previous_info is not None:
+            self.previous_info == atoms.info
+        self.previous_info = copy.deepcopy(atoms.info)
+        return float(len(atoms))
+""", namespace)
+        python_calc = namespace["FreeBirdMetadataSensitiveCalculator"]()
+        calc = PyMLPotential(
+            FreeBird.AbstractPotentials.ASEcalculator(python_calc))
+
+        expected = length(atomic.ase_lattice) * u"eV"
+        @test interacting_energy(atomic, calc) == expected
+        @test interacting_energy(deepcopy(atomic), calc) == expected
+        @test FreeBird.EnergyEval.pyconvert(Int, python_calc.calls) == 2
+        @test FreeBird.EnergyEval.pyconvert(
+            Vector{Bool}, python_calc.saw_adsorbate_info) == [false, false]
+        @test FreeBird.EnergyEval.pyconvert(
+            Bool, atomic.ase_lattice.info.__contains__("adsorbate_info"))
+    end
+
 
     @testset "ICETHamiltonian" begin
         # The mapping helpers are pure Julia; constructing ICETHamiltonian
@@ -933,7 +974,9 @@
 
         @test ICETHamiltonian <: ClassicalHamiltonian
         @test fieldnames(ICETHamiltonian) ==
-              (:calculator, :n_sites, :E_clean, :julia_to_icet)
+              (:calculator, :n_sites, :E_clean, :julia_to_icet,
+               :empty_occupation, :occupied_occupation, :energy_scale_to_eV,
+               :adsorbate_atom, :geometry_signature)
 
         lat = AtomicLattice{1,SquareLattice}(
             lattice_atom="Pd",
@@ -949,6 +992,31 @@
         # For fcc(100), the nearest-neighbor distance is a/sqrt(2).
         @test nn_distance(lat) ≈ 3.947 / sqrt(2)
         @test nn_distance(lat) ≈ 2.791 atol=1e-3
+
+        ase_cell = FreeBird.EnergyEval.pyconvert(
+            Matrix{Float64}, lat.ase_lattice.get_cell())
+        @test isnothing(FreeBird.EnergyEval._validate_icet_model_cell(
+            lat, ase_cell, (true, true, false)))
+        wrong_cell = copy(ase_cell)
+        wrong_cell[1:2, 1:2] .*= 1.05
+        @test_throws ArgumentError FreeBird.EnergyEval._validate_icet_model_cell(
+            lat, wrong_cell, (true, true, false))
+        @test_throws ArgumentError FreeBird.EnergyEval._validate_icet_model_cell(
+            lat, ase_cell, (true, false, false))
+        @test_throws ArgumentError FreeBird.EnergyEval._validate_icet_model_cell(
+            lat, ase_cell, (true, true, true))
+        tilted_cell = copy(ase_cell)
+        tilted_cell[1, 3] += 0.25
+        @test_throws ArgumentError FreeBird.EnergyEval._validate_icet_model_cell(
+            lat, tilted_cell, (true, true, false))
+
+        invalid_cache = deepcopy(lat)
+        invalid_positions = FreeBird.EnergyEval.pyconvert(
+            Matrix{Float64}, invalid_cache.ase_lattice.get_positions())
+        invalid_positions[1, 3] += 0.25
+        invalid_cache.ase_lattice.set_positions(invalid_positions)
+        @test_throws ArgumentError FreeBird.EnergyEval._validate_icet_model_cell(
+            invalid_cache, ase_cell, (true, true, false))
 
         @testset "build_icet_to_julia_map recovers a permutation" begin
             # ICET orders its sites its own way and can use a translated
@@ -985,10 +1053,61 @@
             bad = copy(icet_pos)
             bad[1, 1] += 1000.0
             bad[1, 2] += 1000.0
-            @test_throws Exception FreeBird.EnergyEval.build_icet_to_julia_map(lat, bad)
+            @test_throws ErrorException FreeBird.EnergyEval.build_icet_to_julia_map(
+                lat, bad)
+        end
+
+        @testset "occupation codes and energy scaling" begin
+            calculator_type = FreeBird.EnergyEval.pyimport("builtins").eval(
+                "type('FreeBirdMockICET', (), {'calculate_total': " *
+                "lambda self, occupations: float(sum(occupations))})",
+                FreeBird.EnergyEval.pydict())
+            calculator = calculator_type()
+            empty = deepcopy(lat)
+            empty.components[1] .= false
+            one_occupied = deepcopy(empty)
+            one_occupied.components[1][1] = true
+
+            h_eV = ICETHamiltonian(calculator, num_sites(lat), 0.0,
+                collect(1:num_sites(lat)), 0, 8, 1.0, "O",
+                FreeBird.EnergyEval._icet_geometry_signature(lat))
+            @test interacting_energy(empty, h_eV) == 0.0u"eV"
+            @test interacting_energy(one_occupied, h_eV) == 8.0u"eV"
+
+            h_meV = ICETHamiltonian(calculator, num_sites(lat), 0.0,
+                collect(1:num_sites(lat)), 0, 8, 1e-3, "O",
+                FreeBird.EnergyEval._icet_geometry_signature(lat))
+            @test interacting_energy(one_occupied, h_meV) == 0.008u"eV"
+
+            smaller = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=1,
+                type_of_sites=["hollow"])
+            @test_throws DimensionMismatch interacting_energy(smaller, h_eV)
+
+            same_size_different_geometry = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 8, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=1,
+                type_of_sites=["hollow"])
+            @test num_sites(same_size_different_geometry) == num_sites(lat)
+            @test_throws ArgumentError interacting_energy(
+                same_size_different_geometry, h_eV)
+
+            different_substrate = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pt", surface=:fcc100,
+                supercell_dimensions=(4, 4, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=2,
+                type_of_sites=["hollow"])
+            @test_throws ArgumentError interacting_energy(different_substrate, h_eV)
         end
 
         # Construction propagates import and missing-file failures.
-        @test_throws Exception ICETHamiltonian("no_such_cluster_expansion.ce", lat)
+        @test_throws FreeBird.EnergyEval.PyException ICETHamiltonian(
+            "no_such_cluster_expansion.ce", lat)
     end
 end

@@ -739,6 +739,7 @@
                 @test length(lattice.components) == 2
                 @test length(lattice.adsorptions) == 16
                 @test all(lattice.adsorptions)
+                @test_throws BoundsError swap_sites!(lattice, 17, 17)
 
                 # Custom parameters
                 custom_basis = [(0.0, 0.0, 0.0), (0.5, 0.5, 0.0)]
@@ -813,10 +814,8 @@
             end
 
             @testset "Interlayer spacing" begin
-                # Isotropic fix: with lattice_constant = 2.0 the out-of-plane
-                # spacing now follows it, so the nearest-neighbor shell mixes
-                # in-plane and interlayer bonds at the same distance 2.0
-                # (previously the interlayer bonds sat at 1.0, silently)
+                # With lattice_constant = 2.0, isotropic spacing places both
+                # in-plane and interlayer bonds at distance 2.0.
                 iso = MLattice{1,SquareLattice}(
                     lattice_constant=2.0,
                     supercell_dimensions=(3, 3, 2),
@@ -937,10 +936,8 @@
                     return sqrt(sum(abs2, d)), abs(d[3])
                 end
 
-                # Default path unchanged: no stacking keyword, stacking=:aligned
-                # and layer_offset=(0.0, 0.0) all reproduce the shipped
-                # vertical-c geometry field for field, on the default single
-                # layer and on an aligned three-layer cell
+                # The implicit and explicit aligned-stack inputs describe the
+                # same vertical-c geometry for one- and three-layer cells.
                 for (dims, c, per3, cutoffs, kw) in [
                         ((4, 2, 1), 1.0, false, [1.1], (;)),
                         ((4, 4, 3), h, true, [1.05, 1.80], (; interlayer_spacing=h))]
@@ -1563,7 +1560,7 @@
             @test length(sorted_nm) == 0
         end
 
-        @testset "nonempty outputs unchanged by the retyped helpers" begin
+        @testset "nonempty component splitting" begin
             mixed_at = FastSystem(atomic_system([:H => [1.0, 1.0, 1.0]u"Å",
                                                  :O => [2.0, 2.0, 2.0]u"Å",
                                                  :H => [3.0, 3.0, 3.0]u"Å"], box, pbc))
@@ -1723,6 +1720,14 @@
             num_nearest_neighbors=2, type_of_sites=["hollow"])
         @test occupied_site_count(specified) == [1, 3]
         @test coverage(specified) == 0.25
+        bit_mask = falses(16)
+        bit_mask[[2, 7]] .= true
+        from_bitvector = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O"], components=[bit_mask],
+            num_nearest_neighbors=0, type_of_sites=["hollow"])
+        @test from_bitvector.components == [Vector{Bool}(bit_mask)]
 
         @testset "multi-species occupancy and moves" begin
             exclusive = deepcopy(multispecies)
@@ -1801,13 +1806,75 @@
                 @test lattice.surface == surface
                 @test num_sites(lattice) == expected_sites
                 @test n_occupied(lattice) == round(Int, 0.25 * expected_sites)
-                @test nn_distance(lattice) > 0
-                @test size(lattice.reflection_table) ==
-                      (expected_sites, expected_sites)
+                if surface == :fcc211
+                    @test nn_distance(lattice) ≈ 4.0 / sqrt(2) atol=1e-10
+                else
+                    @test nn_distance(lattice) > 0
+                end
+                @test !lattice.reflection_row_built
                 count_before = n_occupied(lattice)
                 geometric_cluster_swap!(lattice, 0.35)
+                @test lattice.reflection_row_built
+                @test length(lattice.reflection_row) == expected_sites
+                @test lattice.reflection_pivot in 1:expected_sites
                 @test n_occupied(lattice) == count_before
             end
+
+            # Every named ASE site family contributes its complete periodic
+            # translational orbit; bridge families include every orientation.
+            family_cases = [
+                (:fcc110, GenericLattice, "Pd", (2, 3, 2),
+                 [("hollow", 1), ("longbridge", 1), ("ontop", 1), ("shortbridge", 1)]),
+                (:fcc111, TriangularLattice, "Pd", (2, 3, 2),
+                 [("bridge", 3), ("fcc", 1), ("hcp", 1), ("ontop", 1)]),
+                (:bcc100, SquareLattice, "Fe", (2, 3, 2),
+                 [("bridge", 2), ("hollow", 1), ("ontop", 1)]),
+                (:bcc110, GenericLattice, "Fe", (2, 3, 2),
+                 [("hollow", 1), ("longbridge", 1), ("ontop", 1), ("shortbridge", 1)]),
+                (:bcc111, TriangularLattice, "Fe", (2, 3, 3),
+                 [("hollow", 1), ("ontop", 1)]),
+                (:hcp0001, TriangularLattice, "Ti", (2, 3, 2),
+                 [("bridge", 3), ("fcc", 1), ("hcp", 1), ("ontop", 1)]),
+                (:hcp10m10, GenericLattice, "Ti", (2, 4, 2), [("ontop", 1)]),
+                (:diamond100, SquareLattice, "C", (2, 3, 4), [("ontop", 1)]),
+                (:diamond111, TriangularLattice, "C", (2, 3, 6), [("ontop", 1)]),
+            ]
+            for (surface, geometry, atom, dims, families) in family_cases
+                base_count = dims[1] * dims[2]
+                for (site, multiplicity) in families
+                    lattice = AtomicLattice{1,geometry}(
+                        lattice_atom=atom, surface=surface,
+                        supercell_dimensions=dims, lattice_constant=4.0,
+                        periodicity=(true, true, false), adsorbate_atoms=["H"],
+                        coverage=0.0, num_nearest_neighbors=0,
+                        type_of_sites=[site])
+                    @test num_sites(lattice) == multiplicity * base_count
+                    @test length(unique(lattice.all_sites)) == num_sites(lattice)
+                end
+            end
+
+            hcp = AtomicLattice{1,TriangularLattice}(
+                lattice_atom="Ti", surface=:hcp0001,
+                supercell_dimensions=(2, 2, 2), lattice_constant=2.95,
+                lattice_constant_c=4.8, periodicity=(true, true, false),
+                adsorbate_atoms=["H"], coverage=0.0,
+                num_nearest_neighbors=0, type_of_sites=["hcp"])
+            hcp_positions = FreeBird.AbstractWalkers.pyconvert(
+                Matrix{Float64}, hcp.ase_lattice.get_positions())
+            @test hcp.lattice_constant_c == 4.8
+            @test maximum(hcp_positions[:, 3]) - minimum(hcp_positions[:, 3]) ≈ 2.4
+            @test_throws ArgumentError AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+                lattice_constant_c=5.0, periodicity=(true, true, false),
+                adsorbate_atoms=["H"], coverage=0.0,
+                num_nearest_neighbors=0, type_of_sites=["hollow"])
+            @test_throws ArgumentError AtomicLattice{1,TriangularLattice}(
+                lattice_atom="Ti", surface=:hcp0001,
+                supercell_dimensions=(2, 2, 2), lattice_constant=2.95,
+                lattice_constant_c=0.0, periodicity=(true, true, false),
+                adsorbate_atoms=["H"], coverage=0.0,
+                num_nearest_neighbors=0, type_of_sites=["hcp"])
 
             triangular = AtomicLattice{1,TriangularLattice}(
                 lattice_atom="Pd", surface="FCC(111)",
@@ -1863,6 +1930,136 @@
                 periodicity=(true, true, false), adsorbate_atoms=["O"],
                 coverage=0.25, num_nearest_neighbors=1,
                 type_of_sites=["ontop"])
+            normalized_hcp = AtomicLattice{1,GenericLattice}(
+                lattice_atom="Ti", surface="hcp(10-10)",
+                supercell_dimensions=(2, 4, 2), lattice_constant=2.95,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=0,
+                type_of_sites=["ontop"])
+            @test normalized_hcp.surface == :hcp10m10
+        end
+
+        @testset "fcc100 site families and boundaries" begin
+            for dims in ((1, 1, 1), (2, 2, 1), (3, 4, 1)),
+                pbc in ((true, true, false), (false, false, false),
+                        (true, false, false), (false, true, false))
+                nx, ny, _ = dims
+                slab = AbstractWalkers._build_atomic_surface(:fcc100, "Pd", dims, 3.947)
+                slab.set_pbc(pbc)
+                expected = Dict(
+                    "ontop" => nx * ny,
+                    "bridge" => (pbc[1] ? nx : nx - 1) * ny +
+                                nx * (pbc[2] ? ny : ny - 1),
+                    "hollow" => (pbc[1] ? nx : nx - 1) *
+                                (pbc[2] ? ny : ny - 1),
+                )
+                for site in ("ontop", "bridge", "hollow")
+                    sites = AbstractWalkers._fcc100_surface_sites(
+                        slab, dims, pbc, [site])
+                    @test length(sites) == expected[site]
+                    @test length(unique(sites)) == length(sites)
+                end
+            end
+
+            periodic_bridge = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(4, 4, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=1,
+                type_of_sites=["bridge"])
+            finite_bridge = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(4, 4, 1), lattice_constant=3.947,
+                periodicity=(false, false, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=1,
+                type_of_sites=["bridge"])
+            mixed_bridge = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(3, 4, 1), lattice_constant=3.947,
+                periodicity=(true, false, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=0,
+                type_of_sites=["bridge"])
+            @test num_sites(periodic_bridge) == 32
+            @test num_sites(finite_bridge) == 24
+            @test num_sites(mixed_bridge) == 21
+
+            @test_throws ArgumentError AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+                periodicity=(true, true, true), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=1,
+                type_of_sites=["hollow"])
+
+            one_site_mlip = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(1, 1, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=0,
+                type_of_sites=["hollow"])
+            @test num_sites(one_site_mlip) == 1
+            @test isempty(only(one_site_mlip.neighbors))
+            @test_nowarn geometric_cluster_swap!(one_site_mlip, 0.5)
+
+            one_site_bulk = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(1, 1, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=1.0, num_nearest_neighbors=1,
+                image_multiplicity=true, type_of_sites=["hollow"])
+            @test one_site_bulk.image_multiplicity
+            @test only(only(one_site_bulk.neighbors)) == fill(1, 4)
+
+            rng = AbstractWalkers.Random
+            rng.seed!(0x5eed)
+            expected_next = rand()
+            rng.seed!(0x5eed)
+            AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=1,
+                type_of_sites=["hollow"])
+            @test rand() == expected_next
+        end
+
+        @testset "skew-cell minimum images" begin
+            triangular = AtomicLattice{1,TriangularLattice}(
+                lattice_atom="Pd", surface=:fcc111,
+                supercell_dimensions=(4, 4, 2), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=2,
+                type_of_sites=["fcc"])
+            @test all(length(shells[1]) == 6 for shells in triangular.neighbors)
+            @test all(length(shells[2]) == 6 for shells in triangular.neighbors)
+
+            cell = [1.0 0.5 0.0; 0.0 sqrt(3) / 2 0.0; 0.0 0.0 0.0]
+            reciprocal = zeros(3, 3)
+            reciprocal[1:2, 1:2] = inv(cell[1:2, 1:2])
+            displacement = cell * [0.49, 0.49, 0.0]
+            distance = AbstractWalkers._minimum_image_distance(
+                cell, reciprocal, (true, true, false), zeros(3), displacement)
+            expected_displacement = cell * [-0.51, 0.49, 0.0]
+            @test distance ≈ sqrt(sum(abs2, expected_displacement)) atol=1e-12
+
+            pathological_cell = [
+                1.6791675721341695 1.0904770604851692 0.0
+                0.0                0.021782811450899876 0.0
+                0.0                0.0                  0.0
+            ]
+            fractional = [-0.20256242401168, 0.46079445241201067, 0.0]
+            cartesian = pathological_cell * fractional
+            positions = [0.0 0.0 0.0;
+                         cartesian[1] cartesian[2] cartesian[3]]
+            cutoff = 0.29710382748644854
+            image_neighbors = AbstractWalkers.compute_neighbors(
+                pathological_cell, positions, (true, true, false), [cutoff];
+                image_multiplicity=true)
+            brute_count = 0
+            for n1 in -40:40, n2 in -40:40
+                image = cartesian + pathological_cell * [n1, n2, 0]
+                sqrt(sum(abs2, image)) <= cutoff && (brute_count += 1)
+            end
+            @test count(==(2), image_neighbors[1][1]) == brute_count
         end
         @test_throws ArgumentError AtomicLattice{1,SquareLattice}(
             lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
@@ -1888,6 +2085,7 @@
 
         @test num_sites(periodic) == 16
         @test num_sites(finite) == 9
+        @test endswith(sprint(show, periodic), "\n")
         @test num_lattice_components(periodic) == 1
         @test n_occupied(periodic) == sum(periodic.components[1])
         @test sort(vcat(occupied_indices(periodic), empty_indices(periodic))) ==
@@ -1910,11 +2108,68 @@
                     first(empty_indices(periodic)))
         @test count(periodic.components[1] .!= before) == 2
         @test periodic.ase_dirty
+        @test_throws BoundsError swap_sites!(periodic, 17, 17)
 
         sync_ase_lattice!(periodic)
         @test !periodic.ase_dirty
         @test neighbor_shell(periodic, 1) == periodic.neighbors[1][1]
-        @test !isempty(periodic.reflection_table)
+        FreeBird.AbstractWalkers._ensure_atomic_reflection_row!(periodic, 1)
+        @test !isempty(periodic.reflection_row)
+
+        directly_mutated = deepcopy(periodic)
+        sync_ase_lattice!(directly_mutated)
+        atoms_before = length(directly_mutated.ase_lattice)
+        directly_mutated.components[1][first(empty_indices(directly_mutated))] = true
+        @test !directly_mutated.ase_dirty
+        sync_ase_lattice!(directly_mutated)
+        @test length(directly_mutated.ase_lattice) == atoms_before + 1
+
+        invalid = deepcopy(multispecies)
+        invalid.components[2] .= invalid.components[1]
+        @test_throws ArgumentError sync_ase_lattice!(invalid)
+        push!(invalid.components, falses(num_sites(invalid)))
+        @test_throws DimensionMismatch sync_ase_lattice!(invalid)
+
+        invalid_geometry = deepcopy(periodic)
+        invalid_geometry.all_sites[1] = (123.0, 456.0)
+        @test_throws ArgumentError sync_ase_lattice!(invalid_geometry)
+        invalid_periodicity = deepcopy(periodic)
+        invalid_periodicity.periodicity = (false, true, false)
+        @test_throws ArgumentError sync_ase_lattice!(invalid_periodicity)
+        invalid_neighbors = deepcopy(periodic)
+        push!(invalid_neighbors.neighbors[1][1], 1)
+        @test_throws ArgumentError sync_ase_lattice!(invalid_neighbors)
+        invalid_cache = deepcopy(periodic)
+        cache_positions = FreeBird.AbstractWalkers.pyconvert(
+            Matrix{Float64}, invalid_cache.ase_lattice.get_positions())
+        cache_positions[1, 3] += 0.25
+        invalid_cache.ase_lattice.set_positions(cache_positions)
+        @test_throws ArgumentError sync_ase_lattice!(invalid_cache)
+        @test_throws ArgumentError nn_distance(invalid_cache)
+        @test_throws ArgumentError FreeBird.AbstractWalkers._ensure_atomic_reflection_row!(
+            invalid_cache, 1)
+        @test_throws ArgumentError FreeBird.AbstractWalkers._atomic_site_fractions(
+            invalid_cache)
+        @test_throws ArgumentError FreeBird.AbstractWalkers._motif_geometry(
+            invalid_cache)
+
+        invalid_adsorption_cell = deepcopy(periodic)
+        primitive_cell = FreeBird.AbstractWalkers.pyconvert(
+            Matrix{Float64},
+            invalid_adsorption_cell.ase_lattice.info["adsorbate_info"]["cell"])
+        primitive_cell[1, 1] += 0.25
+        invalid_adsorption_cell.ase_lattice.info["adsorbate_info"]["cell"] =
+            primitive_cell
+        @test_throws ArgumentError nn_distance(invalid_adsorption_cell)
+
+        multiple_orbits = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", surface=:fcc100,
+            supercell_dimensions=(4, 4, 1), lattice_constant=3.947,
+            periodicity=(true, true, false), adsorbate_atoms=["O"],
+            coverage=0.0, num_nearest_neighbors=1,
+            type_of_sites=["ontop", "hollow"])
+        @test_throws ArgumentError order_parameter_c2x2(multiple_orbits)
+        @test_throws ArgumentError order_parameter_stripe(multiple_orbits)
 
         @testset "square-lattice observables and motifs" begin
             ordered = deepcopy(periodic)

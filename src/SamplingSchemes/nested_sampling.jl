@@ -1927,13 +1927,13 @@ highest-Ω walker, record (Ω, E, N), replace with a decorrelated clone.
 
 - `stop_on_stall::Bool=false`: When true and `fail_count` reaches
   `allowed_fail_count`, warn once and return the partial ledger and the
-  intact live set (`fail_count` stays at threshold); the default keeps the
-  shipped warn-and-continue behavior byte-identically.
+  intact live set (`fail_count` stays at threshold); otherwise the run warns
+  and continues.
 - `record_move_rates::Bool=false`: When true the ledger gains the twelve
   per-iteration lattice acceptance columns (kernel key order,
   `_LATTICE_MOVE_RATE_COLUMNS`), snapshot-differenced from the run totals;
-  failed iterations fold into the next recorded row. The default keeps the
-  shipped schema.
+  failed iterations fold into the next recorded row. When false, these
+  optional columns are omitted.
 
 # Returns
 - `df::DataFrame`: Columns `[:iter, :omega, :energy, :num_particles]`.

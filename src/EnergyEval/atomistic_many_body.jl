@@ -77,14 +77,21 @@ end
 """
     interacting_energy(lattice::AtomicLattice, calc::PyMLPotential)
 
-Synchronize an `AtomicLattice`'s derived ASE cache, convert it to the
-`AtomsBase` representation expected by `AtomsCalculators`, and evaluate the
-wrapped Python calculator.
+Synchronize an `AtomicLattice`'s derived ASE cache and evaluate the wrapped
+Python calculator on an isolated ASE frame. Builder-only adsorption metadata is
+removed from the temporary frame because it contains nested NumPy arrays that
+some calculators cannot compare safely when checking whether a configuration
+has changed.
 """
 function interacting_energy(lattice::AtomicLattice, calc::PyMLPotential)
-    system = pyconvert(
-        AbstractSystem, sync_ase_lattice!(lattice).ase_lattice)
-    return interacting_energy(system, calc)
+    sync_ase_lattice!(lattice)
+    atoms = lattice.ase_lattice.copy()
+    if pyconvert(Bool, atoms.info.__contains__("adsorbate_info"))
+        atoms.info.pop("adsorbate_info")
+    end
+    energy = pyconvert(
+        Float64, calc.calc.calculator.get_potential_energy(atoms))
+    return energy * u"eV"
 end
 
 # variant with list_num_par/frozen passed by callers in LJ workflow

@@ -87,6 +87,7 @@ function enumerate_lattices(init_lattice::SLattice{G}) where {G}
 end
 
 function enumerate_lattices(init_lattice::AtomicLattice{C,G}) where {C,G}
+    AbstractWalkers._validate_atomic_components(init_lattice)
     total_sites = num_sites(init_lattice)
     labels = zeros(Int, total_sites)
     for c in 1:C

@@ -4,7 +4,7 @@
 Parameters for the Metropolis Monte Carlo algorithm.
 
 # Fields
-- `temperature::Float64`: The temperature of the system.
+- `temperatures::Vector{Float64}`: The temperature ladder in Kelvin.
 - `equilibrium_steps::Int64`: The number of steps to equilibrate the system.
 - `sampling_steps::Int64`: The number of steps to sample the system.
 - `step_size::Float64`: The step size for the random walk (for atomistic systems).
@@ -42,7 +42,7 @@ end
 
 """
     nvt_monte_carlo(
-        mc_routine::MCRoutine,
+        mc_routine::MCNewSample,
         lattice::AbstractLattice,
         h::ClassicalHamiltonian,
         temperature::Float64,
@@ -180,7 +180,9 @@ function nvt_monte_carlo(
         proposed_lattice = deepcopy(current_lattice)
 
         lattice_random_walk!(proposed_lattice)
-        proposed_energy = interacting_energy(proposed_lattice, calc).val
+        proposal_changed = proposed_lattice.components != current_lattice.components
+        proposed_energy = proposal_changed ?
+            interacting_energy(proposed_lattice, calc).val : current_energy
 
         # Metropolis-Hastings acceptance
         ΔE = proposed_energy - current_energy
@@ -368,7 +370,7 @@ Note: The Boltzmann constant is set to 8.617333262e-5 eV K\$^{-1}\$. Thus, the u
 should be in Kelvin, and the units of the energy should be in eV (defined in the Hamiltonian).
 
 # Arguments
-- `mc_routine::MCRoutine`: The Monte Carlo routine to use. For lattice sampling, use `MCNewSample`.
+- `mc_routine::MCNewSample`: The fixed-composition lattice move routine.
 - `lattice::AbstractLattice`: The initial lattice configuration.
 - `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
 - `mc_params::MetropolisMCParameters`: The parameters for the Metropolis Monte Carlo algorithm.
@@ -450,8 +452,8 @@ end
 
 """
     monte_carlo_sampling(
-        mc_routine::MCRoutine,
-        lattice::AbstractLattice,
+        mc_routine::MCNewSample,
+        lattice::AtomicLattice,
         calc::PyMLPotential,
         mc_params::MetropolisMCParameters;
         kb::Float64 = 8.617333262e-5 # eV/K
@@ -463,7 +465,7 @@ Note: The Boltzmann constant is set to 8.617333262e-5 eV K\$^{-1}\$. Thus, the u
 should be in Kelvin, and the units of the energy should be in eV (as computed by the ML potential).
 
 # Arguments
-- `mc_routine::MCRoutine`: The Monte Carlo routine to use. For lattice sampling, use `MCNewSample`.
+- `mc_routine::MCNewSample`: The Monte Carlo new-sample routine.
 - `lattice::AtomicLattice`: The initial lattice configuration.
 - `calc::PyMLPotential`: The Python-based machine learning potential calculator for energy evaluation.
 - `mc_params::MetropolisMCParameters`: The parameters for the Metropolis Monte Carlo algorithm.
@@ -476,7 +478,7 @@ should be in Kelvin, and the units of the energy should be in eV (as computed by
 - `acceptance_rates::Vector{Float64}`: The acceptance rates of the system at each temperature.
 """
 function monte_carlo_sampling(
-    mc_routine::MCRoutine,
+    mc_routine::MCNewSample,
     lattice::AtomicLattice,
     calc::PyMLPotential,
     mc_params::MetropolisMCParameters;

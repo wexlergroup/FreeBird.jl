@@ -104,6 +104,35 @@
                   for config in multi_configs)
         @test all(all(sum(component[site] for component in config.components) <= 1
                       for site in 1:num_sites(config)) for config in multi_configs)
+
+        empty_lattice = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O"], coverage=0.0,
+            num_nearest_neighbors=0, type_of_sites=["hollow"])
+        namespace = FreeBird.EnergyEval.pydict()
+        FreeBird.EnergyEval.pyimport("builtins").exec(
+            """
+class FreeBirdCountingCalculator:
+    def __init__(self):
+        self.calls = 0
+
+    def get_potential_energy(self, atoms):
+        self.calls += 1
+        return float(len(atoms))
+""", namespace)
+        counting_python_calc = namespace["FreeBirdCountingCalculator"]()
+        counting_calc = PyMLPotential(
+            FreeBird.AbstractPotentials.ASEcalculator(counting_python_calc))
+        null_energies, null_configs, null_accepted = nvt_monte_carlo(
+            MCNewSample(), empty_lattice, counting_calc, 300.0,
+            Int64(5), Int64(44))
+        @test FreeBird.EnergyEval.pyconvert(
+            Int, counting_python_calc.calls) == 1
+        @test null_accepted == 5
+        @test all(==(null_energies[1]), null_energies)
+        @test all(iszero(occupied_site_count(config)[1])
+                  for config in null_configs)
     end
 end
 

@@ -17,7 +17,7 @@ The parameter `p` controls the average cluster size: `p ≈ 0` gives single-site
 
 # Arguments
 - `lattice`: A supported periodic `MLattice`, or an `AtomicLattice` whose
-  adsorption-site set has a validated point-inversion table.
+  adsorption-site set has a validated point-inversion map.
 - `p::Float64`: Growth probability for BFS cluster construction (0 < p < 1).
 - `record::Union{Nothing,Vector{Tuple{Int,Int}}}=nothing`: When a vector is
   supplied, every applied (site, reflected_site) pair is appended to it;
@@ -172,6 +172,7 @@ function _build_geometric_cluster(lattice::AbstractLattice,
         push!(cluster, (s, r))
 
         # Grow to first-shell neighbors with probability p
+        isempty(lattice.neighbors[s]) && continue
         for n in lattice.neighbors[s][1]
             if n ∉ visited && rand() < p
                 push!(stack, n)
@@ -329,10 +330,10 @@ indices, and each site's layer is reflected alongside its in-plane
 position. The stacked site set is a Bravais lattice for any stacking
 offset, so the inversion is a symmetry of the whole site set and the
 first-shell cluster growth may cross layers freely. Offset stacks have a
-non-orthogonal supercell and must be built with `image_multiplicity=true`:
-the default minimum-image neighbour path takes the rounded image rather
-than the nearest one on a non-orthogonal supercell and can drop in-cutoff
-bonds (pre-existing neighbour-list behaviour, not changed here). At
+non-orthogonal supercell; the minimum-image neighbour path searches the
+nearby lattice translations and therefore handles that skew exactly.
+Use `image_multiplicity=true` only when a deliberately small periodic cell
+must count distinct images of the same site as separate bonds. At
 `supercell_dimensions[3] == 1` the layer term is identically zero, the
 pivot and seed draws are the same draws in the same order, and the
 integer arithmetic is the same, so single-layer trajectories are
@@ -415,20 +416,33 @@ end
 """
     geometric_cluster_swap!(lattice::AtomicLattice, p::Float64)
 
-Perform a periodic point-inversion cluster move using the validated reflection
-table constructed over `all_sites`. Every component mask is exchanged, so the
+Perform a periodic point-inversion cluster move using a validated reflection
+map over `all_sites`. Every component mask is exchanged, so the
 move preserves each species count exactly.
 """
 function geometric_cluster_swap!(lattice::AtomicLattice, p::Float64;
                                  record::Union{Nothing,Vector{Tuple{Int,Int}}}=nothing)
-    isempty(lattice.reflection_table) && throw(ArgumentError(
-        "the AtomicLattice adsorption-site set is not closed under periodic " *
-        "point inversion, so geometric cluster moves are unavailable for " *
-        "type_of_sites=$(lattice.type_of_sites) and periodicity=$(lattice.periodicity)"))
     n_sites = num_sites(lattice)
     pivot = rand(1:n_sites)
+    reflection_row = AbstractWalkers._ensure_atomic_reflection_row!(lattice, pivot)
+    if isempty(reflection_row)
+        # Conditional on a valid symmetry center, every valid pivot remains
+        # equally likely while only one O(M) mapping is stored.
+        for candidate in randperm(n_sites)
+            reflection_row = AbstractWalkers._ensure_atomic_reflection_row!(
+                lattice, candidate)
+            if !isempty(reflection_row)
+                pivot = candidate
+                break
+            end
+        end
+    end
+    isempty(reflection_row) && throw(ArgumentError(
+        "the AtomicLattice adsorption-site set has no periodic point-inversion " *
+        "center, so geometric cluster moves are unavailable for " *
+        "type_of_sites=$(lattice.type_of_sites) and periodicity=$(lattice.periodicity)"))
     seed = rand(1:n_sites)
-    reflect = site -> lattice.reflection_table[pivot, site]
+    reflect = site -> reflection_row[site]
     cluster = _build_geometric_cluster(lattice, seed, reflect, p)
     _apply_cluster_pairs!(lattice, cluster)
     if record !== nothing

@@ -34,13 +34,16 @@ end
 
 function _lit_minimum_occupied_distance(lattice::AtomicLattice)
     occupied = occupied_indices(lattice)
-    fractions = _LIT_AW._atomic_site_fractions(lattice)
-    inplane, _ = _lit_cell_geometry(lattice)
+    cell = _LIT_AW.pyconvert(Matrix{Float64}, lattice.ase_lattice.get_cell())
+    supercell = permutedims(cell)
+    reciprocal = zeros(3, 3)
+    reciprocal[1:2, 1:2] = inv(supercell[1:2, 1:2])
     distances = Float64[]
     for a in 1:(length(occupied) - 1), b in (a + 1):length(occupied)
-        delta = fractions[occupied[b]] - fractions[occupied[a]]
-        delta .-= round.(delta)
-        push!(distances, norm(inplane * delta))
+        push!(distances, _LIT_AW._minimum_image_distance(
+            supercell, reciprocal, lattice.periodicity,
+            view(lattice.lattice_positions, occupied[a], :),
+            view(lattice.lattice_positions, occupied[b], :)))
     end
     return minimum(distances)
 end
@@ -127,8 +130,10 @@ end
     @testset "O/Pd(111) p(2x2) overlayer" begin
         # Zheng & Altman, Surf. Sci. 462, 151-168 (2000),
         # doi:10.1016/S0039-6028(00)00599-9, report a (2x2) O structure at
-        # 0.25 ML on Pd(111).  A single fcc-site orbit must represent that
-        # coverage and its three symmetry-equivalent M-point peaks.
+        # 0.25 ML on Pd(111). The fcc-site assignment is supported by the
+        # LEED+DFT study doi:10.1016/S0039-6028(00)00814-1. A single fcc-site
+        # orbit must represent that coverage and its three symmetry-equivalent
+        # M-point peaks.
         base = AtomicLattice{1,TriangularLattice}(
             lattice_atom="Pd", surface=:fcc111,
             supercell_dimensions=(4, 4, 4), lattice_constant=3.947,

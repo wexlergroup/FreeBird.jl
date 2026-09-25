@@ -350,7 +350,7 @@ plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", la
 
 You should expect to see a single peak in the heat capacity curve around 40 K, and tailing off to zero at high temperatures.
 
-That's it! You have successfully run an exact enumeration simulation using the FreeBird.jl package.
+This completes the square-lattice exact-enumeration example.
 
 ## Atomic adsorption lattices
 
@@ -374,6 +374,7 @@ atomic = AtomicLattice{1,SquareLattice}(
     adsorbate_atoms=["O"],
     components=[1],
     num_nearest_neighbors=2,
+    image_multiplicity=true,
     type_of_sites=["hollow"],
 );
 (num_sites(atomic), occupied_site_count(atomic))
@@ -383,6 +384,12 @@ atomic = AtomicLattice{1,SquareLattice}(
 `coverage` to initialize a fraction of the sites. The `type_of_sites` argument
 selects site families such as `"ontop"`, `"bridge"`, or `"hollow"` when they
 are available on the chosen surface.
+Each selected family contributes independent candidate sites, and `coverage`
+is the occupied fraction of their combined count. Selecting several families
+does not prohibit simultaneous occupation of nearby sites from different
+families; use an energy model with the required repulsion or select one family.
+`image_multiplicity=true` makes this deliberately small periodic cell retain
+every periodic-image bond in each neighbor shell.
 
 Supported surfaces include low-index fcc, bcc, hcp, and diamond faces. The
 geometry type must match the surface: for example, `fcc100` uses
@@ -404,6 +411,7 @@ binary_atomic = AtomicLattice{2,SquareLattice}(
     adsorbate_atoms=["O", "H"],
     components=[1, 1],
     num_nearest_neighbors=2,
+    image_multiplicity=true,
     type_of_sites=["hollow"],
 );
 occupied_site_count(binary_atomic)

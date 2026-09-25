@@ -80,7 +80,7 @@ end
 """
     wang_landau(
         lattice::AbstractLattice,
-        h::ClassicalHamiltonian,
+        h,
         wl_params::WangLandauParameters
     )
 
@@ -94,7 +94,9 @@ Perform the Wang-Landau sampling scheme for a lattice or an atomistic system.
 
 # Arguments
 - `lattice::AbstractLattice`/`walker::AtomWalker`: The initial lattice/atomistic configuration.
-- `h::ClassicalHamiltonian`/`pot::AbstractPotential`: The Hamiltonian parameters for the lattice/atomistic system.
+- `h`/`pot::AbstractPotential`: The energy model for the lattice/atomistic
+  system. An `AtomicLattice` accepts either a `ClassicalHamiltonian` or a
+  `PyMLPotential`.
 - `wl_params::WangLandauParameters`: The parameters for the Wang-Landau sampling scheme.
 
 # Returns
@@ -106,9 +108,14 @@ Perform the Wang-Landau sampling scheme for a lattice or an atomistic system.
 """
 function wang_landau(
     lattice::AbstractLattice,
-    h::ClassicalHamiltonian,
+    h::Union{ClassicalHamiltonian,PyMLPotential},
     wl_params::WangLandauParameters
 )
+    if h isa PyMLPotential && !(lattice isa AtomicLattice)
+        throw(ArgumentError(
+            "PyMLPotential lattice sampling requires an AtomicLattice " *
+            "configuration; got $(typeof(lattice))"))
+    end
     # Set the random seed
     Random.seed!(wl_params.random_seed)
 

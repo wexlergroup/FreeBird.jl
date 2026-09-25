@@ -39,6 +39,30 @@ mutable struct MetropolisMCParameters <: SamplingParameters
     end
 end
 
+function _validate_atomic_nvt_inputs(temperature::Float64,
+                                     num_steps::Int64, kb::Float64)
+    isfinite(temperature) && temperature > 0.0 || throw(ArgumentError(
+        "temperature must be finite and positive, got $temperature"))
+    num_steps >= 0 || throw(ArgumentError(
+        "num_steps must be non-negative, got $num_steps"))
+    isfinite(kb) && kb > 0.0 || throw(ArgumentError(
+        "kb must be finite and positive, got $kb"))
+    return nothing
+end
+
+function _validate_atomic_nvt_parameters(parameters::MetropolisMCParameters,
+                                         kb::Float64)
+    parameters.equilibrium_steps >= 0 || throw(ArgumentError(
+        "equilibrium_steps must be non-negative"))
+    parameters.sampling_steps > 0 || throw(ArgumentError(
+        "sampling_steps must be positive"))
+    all(temp -> isfinite(temp) && temp > 0.0, parameters.temperatures) ||
+        throw(ArgumentError("temperatures must be finite and positive"))
+    isfinite(kb) && kb > 0.0 || throw(ArgumentError(
+        "kb must be finite and positive, got $kb"))
+    return nothing
+end
+
 
 """
     nvt_monte_carlo(
@@ -117,6 +141,52 @@ function nvt_monte_carlo(
         end
 
         # push!(df, (current_energy, deepcopy(current_lattice.components)))
+        energies[i] = current_energy
+        configurations[i] = deepcopy(current_lattice)
+    end
+
+    return energies, configurations, accepted_steps
+end
+
+"""
+    nvt_monte_carlo(MCNewSample(), lattice::AtomicLattice,
+                    potential::PyMLPotential, temperature, num_steps,
+                    random_seed; kb=8.617333262e-5)
+
+Sample fixed-composition `AtomicLattice` configurations with a Python-backed
+energy model. Returned configurations are independent snapshots.
+"""
+function nvt_monte_carlo(
+    ::MCNewSample,
+    lattice::AtomicLattice,
+    potential::PyMLPotential,
+    temperature::Float64,
+    num_steps::Int64,
+    random_seed::Int64;
+    kb::Float64=8.617_333_262e-5,
+)
+    _validate_atomic_nvt_inputs(temperature, num_steps, kb)
+
+    Random.seed!(random_seed)
+    energies = Vector{Float64}(undef, num_steps)
+    configurations = Vector{typeof(lattice)}(undef, num_steps)
+    accepted_steps = 0
+    current_lattice = deepcopy(lattice)
+    current_energy = interacting_energy(current_lattice, potential).val
+    beta = 1.0 / (kb * temperature)
+
+    for i in 1:num_steps
+        proposed_lattice = deepcopy(current_lattice)
+        lattice_random_walk!(proposed_lattice)
+        changed = proposed_lattice.components != current_lattice.components
+        proposed_energy = changed ?
+            interacting_energy(proposed_lattice, potential).val : current_energy
+        delta_energy = proposed_energy - current_energy
+        if delta_energy < 0.0 || rand() < exp(-beta * delta_energy)
+            current_lattice = proposed_lattice
+            current_energy = proposed_energy
+            accepted_steps += 1
+        end
         energies[i] = current_energy
         configurations[i] = deepcopy(current_lattice)
     end
@@ -336,8 +406,6 @@ function monte_carlo_sampling(
         equi_rate = equilibration_accepted_steps / mc_params.equilibrium_steps
 
         @info "Temperature: $temp K, Equilibration energy: $equi_mean, Variance: $(round(equi_var; sigdigits=4)), Acceptance rate: $(round(equi_rate; sigdigits=4))"
-
-
         # Sample the lattice. The production seed is derived from the
         # equilibration seed (random_seed + 1): passing the same seed replays
         # the equilibration random stream, correlating the two phases
@@ -370,6 +438,60 @@ function monte_carlo_sampling(
     end
 
     return energies, configs, cvs, acceptance_rates
+end
+
+"""
+    monte_carlo_sampling(MCNewSample(), lattice::AtomicLattice,
+                         potential::PyMLPotential, parameters; kb=...)
+
+Run fixed-composition Metropolis sampling for an `AtomicLattice` over the
+temperature ladder in `parameters`.
+"""
+function monte_carlo_sampling(
+    routine::MCNewSample,
+    lattice::AtomicLattice,
+    potential::PyMLPotential,
+    parameters::MetropolisMCParameters;
+    kb::Float64=8.617333262e-5,
+)
+    _validate_atomic_nvt_parameters(parameters, kb)
+
+    energies = Vector{Float64}(undef, length(parameters.temperatures))
+    cvs = similar(energies)
+    acceptance_rates = similar(energies)
+    configurations = Vector{typeof(lattice)}(undef, length(parameters.temperatures))
+    current_lattice = deepcopy(lattice)
+
+    for (i, temperature) in enumerate(parameters.temperatures)
+        production_start = if parameters.equilibrium_steps == 0
+            deepcopy(current_lattice)
+        else
+            equilibration_energies, equilibration_configurations,
+                equilibration_accepted = nvt_monte_carlo(
+                    routine, current_lattice, potential, temperature,
+                    parameters.equilibrium_steps, parameters.random_seed;
+                    kb=kb)
+            @info "Temperature: $temperature K, Equilibration energy: $(mean(equilibration_energies)), Variance: $(round(var(equilibration_energies); sigdigits=4)), Acceptance rate: $(round(equilibration_accepted / parameters.equilibrium_steps; sigdigits=4))"
+            equilibration_configurations[end]
+        end
+
+        sampled_energies, sampled_configurations, sampled_accepted =
+            nvt_monte_carlo(
+                routine, production_start, potential, temperature,
+                parameters.sampling_steps, parameters.random_seed + 1;
+                kb=kb)
+        mean_energy = mean(sampled_energies)
+        energy_variance = var(sampled_energies)
+        acceptance_rate = sampled_accepted / parameters.sampling_steps
+        energies[i] = mean_energy
+        cvs[i] = energy_variance / (kb * temperature^2)
+        acceptance_rates[i] = acceptance_rate
+        configurations[i] = sampled_configurations[end]
+        current_lattice = sampled_configurations[end]
+        @info "Temperature: $temperature K, Energy: $mean_energy, Variance: $(round(energy_variance; sigdigits=4)), Cv: $(round(cvs[i]; sigdigits=4)), Acceptance rate: $(round(acceptance_rate; sigdigits=4))"
+    end
+
+    return energies, configurations, cvs, acceptance_rates
 end
 
 """

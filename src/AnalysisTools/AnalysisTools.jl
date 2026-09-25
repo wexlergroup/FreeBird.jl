@@ -457,6 +457,64 @@ function gc_thermodynamic_stats(β::Float64,
 end
 
 """
+    gc_thermodynamic_stats(β, ωi, grand_energies, energies,
+                           component_numbers, chemical_potentials; kb=...)
+
+Compute grand-canonical thermodynamic averages for multiple lattice
+components. Rows of `component_numbers` are samples and columns are species.
+The returned `mean_N` vector follows component order.
+"""
+function gc_thermodynamic_stats(
+    β::Float64,
+    ωi::AbstractVector{<:Real},
+    grand_energies::AbstractVector{<:Real},
+    energies::AbstractVector{<:Real},
+    component_numbers::AbstractMatrix{<:Integer},
+    chemical_potentials::AbstractVector{<:Real};
+    kb::Float64=8.617333262e-5,
+)
+    n = length(ωi)
+    n == length(grand_energies) == length(energies) ==
+        size(component_numbers, 1) || throw(DimensionMismatch(
+            "weights, grand energies, energies, and particle-count rows " *
+            "must have the same length"))
+    C = length(chemical_potentials)
+    size(component_numbers, 2) == C || throw(DimensionMismatch(
+        "component_numbers has $(size(component_numbers, 2)) columns but " *
+        "$C chemical potentials were supplied"))
+    n == 0 && return NaN, NaN, fill(NaN, C)
+
+    log_terms = [log(ωi[i]) - β * grand_energies[i] for i in 1:n]
+    max_log = maximum(log_terms)
+    z = 0.0
+    u = 0.0
+    u2 = 0.0
+    n_sum = zeros(C)
+    en_sum = zeros(C)
+    for i in 1:n
+        w = exp(log_terms[i] - max_log)
+        e = energies[i]
+        z += w
+        u += w * e
+        u2 += w * e^2
+        for c in 1:C
+            nc = component_numbers[i, c]
+            n_sum[c] += w * nc
+            en_sum[c] += w * e * nc
+        end
+    end
+    z == 0.0 && return NaN, NaN, fill(NaN, C)
+
+    u /= z
+    u2 /= z
+    mean_N = n_sum ./ z
+    covariances = en_sum ./ z .- u .* mean_N
+    cv = kb * β^2 * (u2 - u^2 -
+                      sum(chemical_potentials .* covariances))
+    return u, cv, mean_N
+end
+
+"""
     gc_thermodynamic_stats(df::DataFrame, βs::Vector{Float64},
                            n_walkers::Int, μ::Float64;
                            n_cull::Int=1, ω0::Float64=1.0,
@@ -504,6 +562,57 @@ function gc_thermodynamic_stats(df::DataFrame,
             b, ωi, grand_es, Es, Ns, μ; kb=kb)
     end
 
+    return mean_Es, Cvs, mean_Ns
+end
+
+"""
+    gc_thermodynamic_stats(df, βs, n_walkers, chemical_potentials; ...)
+
+Reduce a multi-component GCNS ledger. A C-component ledger must contain
+`num_particles_1` through `num_particles_C`; `num_particles` is checked
+against their row-wise sum. The returned `mean_N` is a
+`length(βs) × C` matrix in component order.
+"""
+function gc_thermodynamic_stats(
+    df::DataFrame,
+    βs::Vector{Float64},
+    n_walkers::Int,
+    chemical_potentials::AbstractVector{<:Real};
+    n_cull::Int=1,
+    ω0::Float64=1.0,
+    kb::Float64=8.617333262e-5,
+    compression::Symbol=:geometric,
+)
+    mus = collect(Float64, chemical_potentials)
+    isempty(mus) && throw(ArgumentError(
+        "chemical_potentials must contain at least one component"))
+    all(isfinite, mus) || throw(ArgumentError(
+        "all chemical_potentials must be finite"))
+    count_names = [Symbol("num_particles_$c") for c in eachindex(mus)]
+    missing_names = setdiff(count_names, Symbol.(names(df)))
+    isempty(missing_names) || throw(ArgumentError(
+        "multi-component GCNS ledger is missing columns " *
+        "$(join(string.(missing_names), ", "))"))
+
+    component_numbers = hcat((Vector{Int}(df[!, name])
+                              for name in count_names)...)
+    totals = vec(sum(component_numbers; dims=2))
+    all(totals .== df.num_particles) || throw(ArgumentError(
+        "num_particles must equal the row-wise sum of the component counts"))
+
+    weights = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0,
+                 compression=compression)
+    energies = collect(Float64, df.energy)
+    grand_energies = energies .- component_numbers * mus
+    mean_Es = Vector{Float64}(undef, length(βs))
+    Cvs = Vector{Float64}(undef, length(βs))
+    mean_Ns = Matrix{Float64}(undef, length(βs), length(mus))
+    Threads.@threads for (i, b) in collect(enumerate(βs))
+        mean_Es[i], Cvs[i], mean_N = gc_thermodynamic_stats(
+            b, weights, grand_energies, energies, component_numbers, mus;
+            kb=kb)
+        mean_Ns[i, :] .= mean_N
+    end
     return mean_Es, Cvs, mean_Ns
 end
 

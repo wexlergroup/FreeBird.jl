@@ -3,9 +3,11 @@ abstract type LatticeWalkers <: AbstractLiveSet end
 
 
 """
-    assign_energy!(walker::LatticeWalker{C}, hamiltonian::ClassicalHamiltonian; perturb_energy::Float64=0.0)
+    assign_energy!(walker::LatticeWalker{C}, energy_model; perturb_energy::Float64=0.0)
 
-Assigns energy to the given `walker` based on the `hamiltonian`. If `perturb_energy` is non-zero, a small random perturbation is added to the energy.
+Assigns energy to the given `walker` based on a lattice Hamiltonian or, for an
+`AtomicLattice`, a `PyMLPotential`. If `perturb_energy` is non-zero, a small
+random perturbation is added to the energy.
 
 The energy comes from `interacting_energy(walker.configuration, hamiltonian)`, which must return an energy-dimensioned `Unitful.Quantity` (eV-convertible); a method returning anything else, e.g. a plain `Float64` from a custom Hamiltonian, raises a descriptive `ArgumentError` here rather than a `DimensionError` from the assignment arithmetic. This is the one return-type obligation of the custom-Hamiltonian extension contract (see the Custom Hamiltonians documentation page).
 
@@ -29,6 +31,22 @@ function assign_energy!(walker::LatticeWalker{C}, hamiltonian::ClassicalHamilton
             "method."))
     end
     # Assign the energy to the walker and, if perturb_energy is non-zero, give all walkers a small random (positive or negative) perturbation
+    walker.energy = raw + perturb_energy * (rand() - 0.5) * unit(walker.energy)
+    return walker
+end
+
+function assign_energy!(walker::LatticeWalker{C}, potential::PyMLPotential;
+                        perturb_energy::Float64=0.0) where C
+    walker.configuration isa AtomicLattice || throw(ArgumentError(
+        "PyMLPotential lattice energies require an AtomicLattice configuration; " *
+        "got $(typeof(walker.configuration))"))
+    raw = interacting_energy(walker.configuration, potential)
+    if !(raw isa Unitful.Energy)
+        throw(ArgumentError(
+            "interacting_energy must return an energy-dimensioned " *
+            "Unitful.Quantity (eV-convertible) for walker energies; got " *
+            "$(typeof(raw)) from $(nameof(typeof(potential)))."))
+    end
     walker.energy = raw + perturb_energy * (rand() - 0.5) * unit(walker.energy)
     return walker
 end
@@ -111,7 +129,6 @@ lattice entry points of `wang_landau` and `nvt_monte_carlo`, which take a
 raw lattice and never build a liveset.
 """
 function _warn_uncoupled_shells(cfg::AbstractLattice, hamiltonian)
-    cfg isa MLattice || return nothing
     n_coupled = _n_coupled_shells(hamiltonian)
     n_coupled === nothing && return nothing
     n_shells = length(cfg.cutoff_radii)
@@ -137,16 +154,31 @@ The `LatticeGasWalkers` struct represents a collection of lattice walkers for a 
 
 # Fields
 - `walkers::Vector{LatticeWalker{C}}`: A vector of lattice walkers.
-- `hamiltonian::ClassicalHamiltonian`: The lattice Hamiltonian associated with the walkers.
+- `hamiltonian::Union{ClassicalHamiltonian,PyMLPotential}`: The energy model
+  associated with the walkers. Python-backed ML potentials are supported only
+  when every walker contains an `AtomicLattice`.
 
 # Constructors
-- `LatticeGasWalkers(walkers::Vector{LatticeWalker{C}}, hamiltonian::ClassicalHamiltonian; assign_energy=true, perturb_energy::Float64=0.0)`: Constructs a new `LatticeGasWalkers` object with the given walkers and Hamiltonian. If `assign_energy` is `true`, the energy of each walker is assigned using the provided Hamiltonian. The optional `perturb_energy` parameter can be used to add a small perturbation to the assigned energy.
+- `LatticeGasWalkers(walkers::Vector{LatticeWalker{C}}, energy_model; assign_energy=true, perturb_energy::Float64=0.0)`: Constructs a `LatticeGasWalkers` object with the given walkers and energy model. If `assign_energy` is `true`, the provided model assigns each walker's energy. The optional `perturb_energy` parameter adds a small perturbation to the assigned energy.
 
 """
 struct  LatticeGasWalkers <: LatticeWalkers
     walkers::Vector{LatticeWalker{C}} where C
-    hamiltonian::ClassicalHamiltonian
-    function LatticeGasWalkers(walkers::Vector{LatticeWalker{C}}, hamiltonian::ClassicalHamiltonian; assign_energy=true, perturb_energy::Float64=0.0) where C
+    hamiltonian::Union{ClassicalHamiltonian,PyMLPotential}
+    function LatticeGasWalkers(
+        walkers::Vector{LatticeWalker{C}},
+        hamiltonian::Union{ClassicalHamiltonian,PyMLPotential};
+        assign_energy=true,
+        perturb_energy::Float64=0.0,
+    ) where C
+        if hamiltonian isa PyMLPotential &&
+           any(!(walker.configuration isa AtomicLattice) for walker in walkers)
+            bad = first(walker.configuration for walker in walkers
+                        if !(walker.configuration isa AtomicLattice))
+            throw(ArgumentError(
+                "PyMLPotential lattice livesets require AtomicLattice " *
+                "configurations; got $(typeof(bad))"))
+        end
         _warn_uncoupled_shells(walkers, hamiltonian)
         isempty(walkers) || _check_cluster_sites(hamiltonian, walkers[1].configuration)
         isempty(walkers) || _check_field_length(hamiltonian, walkers[1].configuration)
@@ -159,10 +191,7 @@ end
 
 function Base.show(io::IO, ls::LatticeGasWalkers)
     println(io, "LatticeGasWalkers($(eltype(ls.walkers)), $(typeof(ls.hamiltonian))):")
-    println(io, "    lattice_vectors:      ", ls.walkers[1].configuration.lattice_vectors)
-    println(io, "    supercell_dimensions: ", ls.walkers[1].configuration.supercell_dimensions)
-    println(io, "    periodicity:          ", ls.walkers[1].configuration.periodicity)
-    println(io, "    basis:                ", ls.walkers[1].configuration.basis)
+    AbstractWalkers.print_lattice_header(io, ls.walkers[1].configuration)
     if length(ls.walkers) > 10
         for i in 1:5
             println(io, "[$i] ", "energy = ", ls.walkers[i].energy, ", iter = ", ls.walkers[i].iter)
@@ -193,7 +222,10 @@ function print_lattice_walker_in_walkers(io::IO, walker::LatticeWalker{C}) where
             println(io, "          ", component)
         end
     else
-        AbstractWalkers.print_lattice(io, walker.configuration, walker.configuration.occupations)
+        # Render occupation data through the shared lattice interface.
+        print(io, "      ")
+        AbstractWalkers.print_occupation(io, walker.configuration)
+        println(io)
     end
 end
 

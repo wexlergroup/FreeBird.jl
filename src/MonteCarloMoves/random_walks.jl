@@ -311,14 +311,14 @@ function MC_random_walk_2D!(
 end
 
 """
-    MC_random_walk!(n_steps::Int, lattice::LatticeWalker, h::ClassicalHamiltonian, emax::Float64; energy_perturb::Float64=0.0, incremental::Bool=false)
+    MC_random_walk!(n_steps::Int, lattice::LatticeWalker, energy_model, emax::Float64; energy_perturb::Float64=0.0, incremental::Bool=false)
 
 Perform a Monte Carlo random walk on the lattice system.
 
 # Arguments
 - `n_steps::Int`: The number of Monte Carlo steps to perform.
 - `lattice::LatticeWalker`: The walker to perform the random walk on.
-- `h::ClassicalHamiltonian`: The lattice gas Hamiltonian.
+- `h`: A `ClassicalHamiltonian`, or a `PyMLPotential` for an `AtomicLattice`.
 - `emax::Float64`: The maximum energy allowed for accepting a move.
 - `energy_perturb::Float64=0.0`: The energy perturbation used to make degenerate configurations distinguishable.
 - `incremental::Bool=false`: Opt-in incremental energy evaluation (default
@@ -345,11 +345,13 @@ Perform a Monte Carlo random walk on the lattice system.
 """
 function MC_random_walk!(n_steps::Int,
                          lattice::LatticeWalker{C},
-                         h::ClassicalHamiltonian,
+                         h::Union{ClassicalHamiltonian,PyMLPotential},
                          emax::Float64;
                          energy_perturb::Float64=0.0,
                          incremental::Bool=false,
                          ) where C
+
+    _check_lattice_energy_model(lattice.configuration, h)
 
     n_accept = 0
     accept_this_walker = false
@@ -360,7 +362,8 @@ function MC_random_walk!(n_steps::Int,
     # site_flip_delta sums, the pattern of MC_grand_canonical_walk!. The
     # default path below is the shipped arithmetic in the shipped order with
     # the shipped random draws; the anchor is not evaluated on it.
-    use_deltas = incremental && C == 1 && supports_site_deltas(h)
+    use_deltas = incremental && C == 1 && h isa ClassicalHamiltonian &&
+                 supports_site_deltas(h)
     zero_e = 0.0 * unit(lattice.energy)
     raw = use_deltas ? interacting_energy(lattice.configuration, h) : zero_e
     step_delta = zero_e
@@ -419,13 +422,13 @@ function MC_random_walk!(n_steps::Int,
 end
 
 """
-    MC_new_sample!(lattice::LatticeWalker, h::ClassicalHamiltonian, emax::Float64; energy_perturb::Float64=0.0)
+    MC_new_sample!(lattice::LatticeWalker, energy_model, emax::Float64; energy_perturb::Float64=0.0)
 
 Generate a new sample for the lattice system.
 
 # Arguments
 - `lattice::LatticeWalker`: The walker to generate a new sample for.
-- `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
+- `h`: A `ClassicalHamiltonian`, or a `PyMLPotential` for an `AtomicLattice`.
 - `emax::Float64`: The maximum energy allowed for accepting a move.
 - `energy_perturb::Float64=0.0`: The energy perturbation used to make degenerate configurations distinguishable.
 
@@ -435,10 +438,12 @@ Generate a new sample for the lattice system.
 
 """
 function MC_new_sample!(lattice::LatticeWalker{C},
-                        h::ClassicalHamiltonian,
+                        h::Union{ClassicalHamiltonian,PyMLPotential},
                         emax::Float64;
                         energy_perturb::Float64=0.0,
                         ) where C
+
+    _check_lattice_energy_model(lattice.configuration, h)
 
     accept_this_walker = false
     emax = emax * unit(lattice.energy)
@@ -462,13 +467,13 @@ function MC_new_sample!(lattice::LatticeWalker{C},
 end
 
 """
-    MC_rejection_sampling!(lattice::LatticeWalker, h::ClassicalHamiltonian, emax::Float64; energy_perturb::Float64=0.0, max_iter=10_000)
+    MC_rejection_sampling!(lattice::LatticeWalker, energy_model, emax::Float64; energy_perturb::Float64=0.0, max_iter=10_000)
 
 Perform a Monte Carlo rejection sampling on the lattice system.
 
 # Arguments
 - `lattice::LatticeWalker`: The walker to perform the rejection sampling on.
-- `h::ClassicalHamiltonian`: The Hamiltonian containing the on-site and nearest-neighbor interaction energies.
+- `h`: A `ClassicalHamiltonian`, or a `PyMLPotential` for an `AtomicLattice`.
 - `emax::Float64`: The maximum energy allowed for accepting a move.
 - `energy_perturb::Float64=0.0`: The energy perturbation used to make degenerate configurations distinguishable.
 - `max_iter::Int=10_000`: The maximum number of iterations to perform.
@@ -479,11 +484,13 @@ Perform a Monte Carlo rejection sampling on the lattice system.
 
 """
 function MC_rejection_sampling!(lattice::LatticeWalker{C},
-                        h::ClassicalHamiltonian,
+                        h::Union{ClassicalHamiltonian,PyMLPotential},
                         emax::Float64;
                         energy_perturb::Float64=0.0,
                         max_iter::Int = 10_000,
                         ) where C
+
+    _check_lattice_energy_model(lattice.configuration, h)
 
     accept_this_walker = false
     emax = emax * unit(lattice.energy)
@@ -555,6 +562,20 @@ function generate_random_new_lattice_sample!(lattice::MLattice{C}) where C
     return lattice
 end
 
+function generate_random_new_lattice_sample!(lattice::AtomicLattice{C}) where C
+    AbstractWalkers._validate_atomic_components(lattice)
+    counts = sum.(lattice.components)
+    foreach(component -> fill!(component, false), lattice.components)
+    available = collect(1:num_sites(lattice))
+    for c in 1:C
+        chosen = sample(available, counts[c], replace=false, ordered=true)
+        lattice.components[c][chosen] .= true
+        filter!(site -> site ∉ chosen, available)
+    end
+    lattice.ase_dirty = true
+    return lattice
+end
+
 """
     generate_random_new_lattice_sample!(lattice::SLattice)
 
@@ -585,6 +606,12 @@ function lattice_random_walk!(lattice::SLattice)
     return lattice
 end
 
+function lattice_random_walk!(lattice::AtomicLattice)
+    AbstractWalkers._validate_atomic_components(lattice)
+    _lattice_walk_draw!(lattice)
+    return lattice
+end
+
 """
     _lattice_walk_draw!(lattice) -> (hop_from, hop_to)
 
@@ -599,6 +626,13 @@ function _lattice_walk_draw!(lattice::SLattice)
     hop_from = rand(eachindex(lattice.components[1]))
     # pick a random site to hop to (can be the same as hop_from)
     hop_to = rand(eachindex(lattice.components[1]))
+    _lattice_walk_apply!(lattice, hop_from, hop_to)
+    return hop_from, hop_to
+end
+
+function _lattice_walk_draw!(lattice::AtomicLattice)
+    hop_from = rand(1:num_sites(lattice))
+    hop_to = rand(1:num_sites(lattice))
     _lattice_walk_apply!(lattice, hop_from, hop_to)
     return hop_from, hop_to
 end
@@ -629,6 +663,15 @@ function _lattice_walk_apply!(lattice::SLattice, hop_from::Int, hop_to::Int)
         lattice.components[1][hop_from], lattice.components[1][hop_to] =
         lattice.components[1][hop_to], lattice.components[1][hop_from]
     end
+    return lattice
+end
+
+function _lattice_walk_apply!(lattice::AtomicLattice, hop_from::Int, hop_to::Int)
+    from = ntuple(c -> is_occupied(lattice, hop_from, c),
+                  num_lattice_components(lattice))
+    to = ntuple(c -> is_occupied(lattice, hop_to, c),
+                num_lattice_components(lattice))
+    from != to && swap_sites!(lattice, hop_from, hop_to)
     return lattice
 end
 
@@ -713,14 +756,14 @@ end
 
 
 """
-    MC_cluster_walk!(n_steps::Int, lattice::LatticeWalker{C}, h::ClassicalHamiltonian, emax::Float64, cluster_p::Float64; energy_perturb::Float64=0.0)
+    MC_cluster_walk!(n_steps::Int, lattice::LatticeWalker{C}, energy_model, emax::Float64, cluster_p::Float64; energy_perturb::Float64=0.0)
 
 Perform a sequence of geometric cluster moves on the lattice system, accepting each if `E < emax`.
 
 # Arguments
 - `n_steps::Int`: The number of cluster move attempts to perform.
 - `lattice::LatticeWalker{C}`: The walker to perform cluster moves on.
-- `h::ClassicalHamiltonian`: The lattice Hamiltonian.
+- `h`: A `ClassicalHamiltonian`, or a `PyMLPotential` for an `AtomicLattice`.
 - `emax::Float64`: The maximum energy allowed for accepting a move (dimensionless).
 - `cluster_p::Float64`: The growth probability for BFS cluster construction.
 - `energy_perturb::Float64=0.0`: Energy perturbation to break degeneracies.
@@ -732,10 +775,11 @@ Perform a sequence of geometric cluster moves on the lattice system, accepting e
 """
 function MC_cluster_walk!(n_steps::Int,
                           lattice::LatticeWalker{C},
-                          h::ClassicalHamiltonian,
+                          h::Union{ClassicalHamiltonian,PyMLPotential},
                           emax::Float64,
                           cluster_p::Float64;
                           energy_perturb::Float64=0.0) where C
+    _check_lattice_energy_model(lattice.configuration, h)
     n_accept = 0
     accept_this_walker = false
     emax_u = emax * unit(lattice.energy)
@@ -767,6 +811,24 @@ end
 # Grand-canonical move primitives
 # ======================================================================
 
+_check_lattice_energy_model(::AbstractLattice, ::ClassicalHamiltonian) = nothing
+function _check_lattice_energy_model(lattice::AtomicLattice,
+                                     ::ClassicalHamiltonian)
+    AbstractWalkers._validate_atomic_components(lattice)
+    return nothing
+end
+function _check_lattice_energy_model(lattice::AtomicLattice,
+                                     ::PyMLPotential)
+    AbstractWalkers._validate_atomic_components(lattice)
+    return nothing
+end
+function _check_lattice_energy_model(lattice::AbstractLattice,
+                                     ::PyMLPotential)
+    throw(ArgumentError(
+        "PyMLPotential lattice sampling requires an AtomicLattice " *
+        "configuration; got $(typeof(lattice))"))
+end
+
 """
     random_microstate!(lattice::SLattice; p::Float64=0.5)
 
@@ -781,9 +843,20 @@ variable-N configuration suitable for grand-canonical sampling.
 - `lattice::SLattice`: The mutated lattice with a random microstate.
 """
 function random_microstate!(lattice::SLattice; p::Float64=0.5)
-    for i in eachindex(lattice.components[1])
-        lattice.components[1][i] = rand() < p
+    for i in 1:num_sites(lattice)
+        set_occupied!(lattice, i, rand() < p)
     end
+    return lattice
+end
+
+function random_microstate!(lattice::AtomicLattice{C}; p::Float64=0.5) where C
+    0.0 <= p <= 1.0 || throw(ArgumentError("p must lie in [0, 1], got $p"))
+    AbstractWalkers._validate_atomic_components(lattice)
+    foreach(component -> fill!(component, false), lattice.components)
+    for site in 1:num_sites(lattice)
+        rand() < p && (lattice.components[rand(1:C)][site] = true)
+    end
+    lattice.ase_dirty = true
     return lattice
 end
 
@@ -804,14 +877,35 @@ Insert a particle at a random empty site. Returns `true` if successful,
 """
 function lattice_insert_particle!(lattice::SLattice)
     n_sites = num_sites(lattice)
-    n_occ = sum(lattice.components[1])
+    n_occ = n_occupied(lattice)
     if n_occ >= n_sites
         return false, lattice, 0
     end
     # Collect empty site indices
-    empty_sites = findall(.!lattice.components[1])
+    empty_sites = empty_indices(lattice)
     site = rand(empty_sites)
-    lattice.components[1][site] = true
+    set_occupied!(lattice, site, true)
+    return true, lattice, site
+end
+
+function lattice_insert_particle!(lattice::AtomicLattice{C}, component::Int=1) where C
+    AbstractWalkers._validate_atomic_components(lattice)
+    checkbounds(lattice.components, component)
+    empty_sites = findall(1:num_sites(lattice)) do site
+        all(c -> !is_occupied(lattice, site, c), 1:C)
+    end
+    isempty(empty_sites) && return false, lattice, 0
+    site = rand(empty_sites)
+    set_occupied!(lattice, site, true, component)
+    return true, lattice, site
+end
+
+function lattice_insert_particle!(lattice::MLattice{C}, component::Int) where C
+    checkbounds(lattice.components, component)
+    empty_sites = _multispecies_empty_sites(lattice)
+    isempty(empty_sites) && return false, lattice, 0
+    site = rand(empty_sites)
+    set_occupied!(lattice, site, true, component)
     return true, lattice, site
 end
 
@@ -831,18 +925,37 @@ Delete a particle from a random occupied site. Returns `true` if successful,
   addition: two-name destructures of the previous return keep working.
 """
 function lattice_delete_particle!(lattice::SLattice)
-    n_occ = sum(lattice.components[1])
+    n_occ = n_occupied(lattice)
     if n_occ == 0
         return false, lattice, 0
     end
-    occupied_sites = findall(lattice.components[1])
+    occupied_sites = occupied_indices(lattice)
     site = rand(occupied_sites)
-    lattice.components[1][site] = false
+    set_occupied!(lattice, site, false)
+    return true, lattice, site
+end
+
+function lattice_delete_particle!(lattice::AtomicLattice{C}, component::Int=1) where C
+    AbstractWalkers._validate_atomic_components(lattice)
+    checkbounds(lattice.components, component)
+    occupied_sites = occupied_indices(lattice, component)
+    isempty(occupied_sites) && return false, lattice, 0
+    site = rand(occupied_sites)
+    set_occupied!(lattice, site, false, component)
+    return true, lattice, site
+end
+
+function lattice_delete_particle!(lattice::MLattice{C}, component::Int) where C
+    checkbounds(lattice.components, component)
+    occupied_sites = occupied_indices(lattice, component)
+    isempty(occupied_sites) && return false, lattice, 0
+    site = rand(occupied_sites)
+    set_occupied!(lattice, site, false, component)
     return true, lattice, site
 end
 
 """
-    lattice_biased_sites(lattice::SLattice; predicate::Symbol=:contact, shells::Int=1)
+    lattice_biased_sites(lattice::AbstractLattice; predicate::Symbol=:contact, shells::Int=1)
 
 Return the indices of empty sites selected by an occupancy predicate over
 neighbor shells `1:shells`:
@@ -861,7 +974,7 @@ Useful as a nested-sampling observable, e.g.
 Throws `ArgumentError` for an unknown predicate, `shells < 1`, or `shells`
 exceeding the lattice's neighbor-shell count.
 """
-function lattice_biased_sites(lattice::SLattice; predicate::Symbol=:contact, shells::Int=1)
+function lattice_biased_sites(lattice::AbstractLattice; predicate::Symbol=:contact, shells::Int=1)
     if predicate !== :contact && predicate !== :cavity
         throw(ArgumentError("unknown predicate :$predicate; expected :contact or :cavity"))
     end
@@ -876,14 +989,15 @@ function lattice_biased_sites(lattice::SLattice; predicate::Symbol=:contact, she
             "lattice provides only $n_shells (= length(cutoff_radii)); " *
             "extend cutoff_radii so every counted shell exists"))
     end
-    occ = lattice.components[1]
+    n_components = num_lattice_components(lattice)
+    occupied_at(site) = any(c -> is_occupied(lattice, site, c), 1:n_components)
     sites = Int[]
-    for site in eachindex(occ)
-        occ[site] && continue
+    for site in 1:num_sites(lattice)
+        occupied_at(site) && continue
         has_occupied_neighbor = false
         for shell in 1:shells
             for nb in neighbors[site][shell]
-                if occ[nb]
+                if occupied_at(nb)
                     has_occupied_neighbor = true
                     break
                 end
@@ -899,7 +1013,7 @@ end
 
 """
     MC_grand_canonical_walk!(n_steps::Int, lattice::LatticeWalker{1},
-                             h::ClassicalHamiltonian, omega_max::Float64,
+                             h, omega_max::Float64,
                              mu::Float64;
                              p_move::Float64=0.5, p_insert::Float64=0.25,
                              energy_perturb::Float64=0.0, n_max::Int=typemax(Int),
@@ -948,7 +1062,8 @@ attempt.
 # Arguments
 - `n_steps::Int`: Number of MCMC steps.
 - `lattice::LatticeWalker{1}`: The walker (single component).
-- `h::ClassicalHamiltonian`: The lattice Hamiltonian.
+- `h`: A `ClassicalHamiltonian`, or a `PyMLPotential` when the walker contains
+  an `AtomicLattice`.
 - `omega_max::Float64`: Upper bound on grand potential Ω = E − μN (unitless).
 - `mu::Float64`: Chemical potential (unitless, in same energy units as Hamiltonian).
 - `p_move::Float64=0.5`: Probability of a fixed-N move.
@@ -1004,7 +1119,7 @@ attempt.
 """
 function MC_grand_canonical_walk!(n_steps::Int,
                                   lattice::LatticeWalker{1},
-                                  h::ClassicalHamiltonian,
+                                  h::Union{ClassicalHamiltonian,PyMLPotential},
                                   omega_max::Float64,
                                   mu::Float64;
                                   p_move::Float64=0.5,
@@ -1020,6 +1135,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                   bias_shells::Int=1,
                                   incremental::Bool=false,
                                   swap_mode::Symbol=:uniform_pair)
+    _check_lattice_energy_model(lattice.configuration, h)
     if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
         throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
     end
@@ -1100,7 +1216,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
     # back to the shipped full recompute, which also re-anchors the
     # accumulator exactly. The default path computes the identical arithmetic
     # in the identical order and draws the identical random stream.
-    use_deltas = incremental && supports_site_deltas(h)
+    use_deltas = incremental && h isa ClassicalHamiltonian &&
+                 supports_site_deltas(h)
     zero_e = 0.0 * unit(lattice.energy)
     # The unperturbed-energy anchor serves two consumers: the incremental
     # path advances it by exact deltas, and a detected null swap carries it
@@ -1115,7 +1232,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
     for _ in 1:n_steps
         r = rand()
         config = lattice.configuration
-        n = sum(config.components[1])
+        n = n_occupied(config)
         was_null = false
 
         if r < p_move
@@ -1140,13 +1257,13 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     if n == 0 || n == n_sites
                         continue
                     end
-                    hop_from = rand(findall(config.components[1]))
-                    hop_to = rand(findall(.!config.components[1]))
+                    hop_from = rand(occupied_indices(config))
+                    hop_to = rand(empty_indices(config))
                     if use_deltas
                         step_delta = site_flip_delta(config, h, hop_from)
-                        config.components[1][hop_from] = !config.components[1][hop_from]
+                        set_occupied!(config, hop_from, false)
                         step_delta += site_flip_delta(config, h, hop_to)
-                        config.components[1][hop_to] = !config.components[1][hop_to]
+                        set_occupied!(config, hop_to, true)
                     else
                         _lattice_walk_apply!(config, hop_from, hop_to)
                     end
@@ -1156,13 +1273,15 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     # with the second delta evaluated on the intermediate
                     # state; an equal-occupancy pair performs no flips and
                     # contributes exactly zero.
-                    hop_from = rand(eachindex(config.components[1]))
-                    hop_to = rand(eachindex(config.components[1]))
-                    if config.components[1][hop_from] != config.components[1][hop_to]
+                    hop_from = rand(1:num_sites(config))
+                    hop_to = rand(1:num_sites(config))
+                    if is_occupied(config, hop_from) != is_occupied(config, hop_to)
                         step_delta = site_flip_delta(config, h, hop_from)
-                        config.components[1][hop_from] = !config.components[1][hop_from]
+                        old_from = is_occupied(config, hop_from)
+                        old_to = is_occupied(config, hop_to)
+                        set_occupied!(config, hop_from, old_to)
                         step_delta += site_flip_delta(config, h, hop_to)
-                        config.components[1][hop_to] = !config.components[1][hop_to]
+                        set_occupied!(config, hop_to, old_from)
                     else
                         was_null = true
                     end
@@ -1171,8 +1290,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     # Post-exchange classification: a non-null pair still
                     # differs after the exchange; an equal-occupancy pair
                     # was a no-op
-                    was_null = config.components[1][hop_from] ==
-                               config.components[1][hop_to]
+                    was_null = is_occupied(config, hop_from) ==
+                               is_occupied(config, hop_to)
                 end
                 move_type = :move
                 swap_attempted += 1
@@ -1202,11 +1321,11 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     # as lattice_insert_particle!, inlined to capture the site
                     # for the composite density (keep in lockstep with it)
                     insert_uniform_attempted += 1
-                    empty_sites = findall(.!config.components[1])
+                    empty_sites = empty_indices(config)
                     insert_site = rand(empty_sites)
                     insert_from_biased = false
                 end
-                config.components[1][insert_site] = true
+                set_occupied!(config, insert_site, true)
             else
                 # p_bias == 0: no sub-channel draw; lattice_insert_particle!
                 # draws the site exactly once
@@ -1234,9 +1353,9 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 # Inlined uniform deletion (the same single rand(::Vector)
                 # draw as lattice_delete_particle!) to capture the vacated
                 # site for the reverse composite density (keep in lockstep)
-                occupied_sites = findall(config.components[1])
+                occupied_sites = occupied_indices(config)
                 deleted_site = rand(occupied_sites)
-                config.components[1][deleted_site] = false
+                set_occupied!(config, deleted_site, false)
             else
                 success, _, deleted_site = lattice_delete_particle!(config)
                 if !success
@@ -1265,7 +1384,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             proposed_raw = interacting_energy(config, h)
         end
         proposed_energy = proposed_raw + perturbation_energy
-        n_new = sum(config.components[1])
+        n_new = n_occupied(config)
         proposed_omega = proposed_energy - mu * n_new * unit(lattice.energy)
 
         if proposed_omega >= omega_max_u
@@ -1361,6 +1480,312 @@ function MC_grand_canonical_walk!(n_steps::Int,
             delete_attempted=delete_attempted, delete_accepted=delete_accepted)
 end
 
+"""Return the globally empty sites of an exclusion-based multi-species lattice."""
+function _multispecies_empty_sites(lattice::AbstractLattice)
+    C = num_lattice_components(lattice)
+    return [site for site in 1:num_sites(lattice)
+            if all(c -> !is_occupied(lattice, site, c), 1:C)]
+end
+
+"""Return sites occupied by any component of a multi-species lattice."""
+function _multispecies_occupied_sites(lattice::AbstractLattice)
+    C = num_lattice_components(lattice)
+    return [site for site in 1:num_sites(lattice)
+            if any(c -> is_occupied(lattice, site, c), 1:C)]
+end
+
+"""Per-component particle counts, in component-index order."""
+_component_particle_counts(lattice::AbstractLattice) =
+    [n_occupied(lattice, c) for c in 1:num_lattice_components(lattice)]
+
+"""Grand-potential scalar E - sum(mu[c] * N[c]), in energy units."""
+function _multispecies_omega(energy, lattice::AbstractLattice,
+                             chemical_potentials::AbstractVector{<:Real})
+    counts = _component_particle_counts(lattice)
+    return energy - sum(chemical_potentials[c] * counts[c]
+                        for c in eachindex(counts)) * unit(energy)
+end
+
+"""
+    MC_grand_canonical_walk!(n_steps, walker::LatticeWalker{C}, h,
+                             omega_max, chemical_potentials; z0=ones(C), ...)
+
+Multi-species lattice grand-canonical constrained walk, selected by a vector of
+chemical potentials.
+
+The target constrained prior is proportional to `prod(z0[c]^N[c])`, with at
+most one species on each site. Insertion and deletion first choose a component
+uniformly, then choose a globally empty site or a site occupied by that
+component. The component-selection probabilities cancel between each forward
+and reverse pair, giving
+
+    R_insert(c) = z0[c] * (p_delete/p_insert) * (M-N)/(N[c]+1)
+    R_delete(c) = (1/z0[c]) * (p_insert/p_delete) * N[c]/(M-N+1).
+
+Fixed-N local and geometric-cluster moves exchange complete site states, so
+every component count is conserved. `n_max` remains a cap on total occupancy.
+The optional biased insertion channel uses the same global empty-site predicate
+and composite-density correction as the single-species method.
+
+Incremental energy deltas are intentionally unavailable here:
+`site_flip_delta` supports only single-component lattices. The full Hamiltonian
+is re-evaluated after each non-null proposal.
+"""
+function MC_grand_canonical_walk!(
+    n_steps::Int,
+    lattice::LatticeWalker{C},
+    h::Union{ClassicalHamiltonian,PyMLPotential},
+    omega_max::Float64,
+    chemical_potentials::AbstractVector{<:Real};
+    p_move::Float64=0.5,
+    p_insert::Float64=0.25,
+    energy_perturb::Float64=0.0,
+    n_max::Int=typemax(Int),
+    clusters_freq::Int=0,
+    swaps_freq::Int=1,
+    cluster_p::Float64=0.3,
+    z0::AbstractVector{<:Real}=ones(C),
+    p_bias::Float64=0.0,
+    bias_predicate::Symbol=:contact,
+    bias_shells::Int=1,
+    incremental::Bool=false,
+    swap_mode::Symbol=:uniform_pair,
+) where C
+    _check_lattice_energy_model(lattice.configuration, h)
+    length(chemical_potentials) == C || throw(DimensionMismatch(
+        "chemical_potentials must contain one value per lattice component " *
+        "($C), got $(length(chemical_potentials))"))
+    all(isfinite, chemical_potentials) || throw(ArgumentError(
+        "chemical_potentials must all be finite"))
+    length(z0) == C || throw(DimensionMismatch(
+        "z0 must contain one reference fugacity per lattice component ($C), " *
+        "got $(length(z0))"))
+    all(x -> isfinite(x) && x > 0, z0) || throw(ArgumentError(
+        "every z0 reference fugacity must be finite and positive"))
+    incremental && throw(ArgumentError(
+        "incremental=true is not available for multi-species lattice walks; " *
+        "site_flip_delta supports only single-component lattices"))
+    if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
+        throw(ArgumentError(
+            "p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
+    end
+    if !(0.0 <= p_bias <= 1.0)
+        throw(ArgumentError("p_bias must satisfy 0 <= p_bias <= 1"))
+    end
+    if bias_predicate !== :contact && bias_predicate !== :cavity
+        throw(ArgumentError(
+            "unknown bias_predicate :$bias_predicate; expected :contact or :cavity"))
+    end
+    bias_shells >= 1 || throw(ArgumentError(
+        "bias_shells must be >= 1, got $bias_shells"))
+    if swap_mode !== :uniform_pair && swap_mode !== :occupied_empty
+        throw(ArgumentError(
+            "unknown swap_mode :$swap_mode; expected :uniform_pair or :occupied_empty"))
+    end
+    if p_bias > 0.0
+        nbrs = lattice.configuration.neighbors
+        n_shells = isempty(nbrs) ? 0 : length(nbrs[1])
+        bias_shells <= n_shells || throw(ArgumentError(
+            "the biased insertion channel spans $bias_shells neighbor shells " *
+            "but the lattice provides only $n_shells"))
+    end
+
+    config = lattice.configuration
+    # This kernel implements the same single-site exclusion represented by
+    # AtomicLattice. Fail early if a custom/MLattice configuration violates it.
+    for site in 1:num_sites(config)
+        sum(is_occupied(config, site, c) for c in 1:C) <= 1 ||
+            throw(ArgumentError(
+                "multi-species grand-canonical walks require single-site " *
+                "exclusion; site $site is occupied by multiple components"))
+    end
+
+    p_delete = 1.0 - p_move - p_insert
+    n_sites = num_sites(config)
+    n_cap = min(n_sites, n_max)
+    omega_max_u = omega_max * unit(lattice.energy)
+    total_fixed_n_freq = clusters_freq + swaps_freq
+    p_cluster = total_fixed_n_freq > 0 ?
+        clusters_freq / total_fixed_n_freq : 0.0
+
+    n_accept = 0
+    accepted_any = false
+    cluster_accepted = 0
+    cluster_total = 0
+    swap_attempted = 0
+    swap_accepted = 0
+    swap_null_attempted = 0
+    swap_null_accepted = 0
+    insert_uniform_attempted = 0
+    insert_uniform_accepted = 0
+    insert_biased_attempted = 0
+    insert_biased_accepted = 0
+    delete_attempted = 0
+    delete_accepted = 0
+
+    hop_from = 0
+    hop_to = 0
+    changed_component = 0
+    insert_site = 0
+    deleted_site = 0
+    insert_from_biased = false
+    cluster_pairs = Tuple{Int,Int}[]
+    biased_set = Int[]
+    raw = interacting_energy(config, h)
+
+    for _ in 1:n_steps
+        r = rand()
+        counts = _component_particle_counts(config)
+        n_total = sum(counts)
+        was_null = false
+
+        if r < p_move
+            if p_cluster > 0.0 && rand() < p_cluster
+                empty!(cluster_pairs)
+                geometric_cluster_swap!(config, cluster_p; record=cluster_pairs)
+                move_type = :cluster
+                cluster_total += 1
+            else
+                if swap_mode === :occupied_empty
+                    occupied = _multispecies_occupied_sites(config)
+                    empty = _multispecies_empty_sites(config)
+                    (isempty(occupied) || isempty(empty)) && continue
+                    hop_from = rand(occupied)
+                    hop_to = rand(empty)
+                    _lattice_walk_apply!(config, hop_from, hop_to)
+                else
+                    hop_from = rand(1:n_sites)
+                    hop_to = rand(1:n_sites)
+                    before_from = ntuple(c -> is_occupied(config, hop_from, c), C)
+                    before_to = ntuple(c -> is_occupied(config, hop_to, c), C)
+                    was_null = before_from == before_to
+                    was_null || _lattice_walk_apply!(config, hop_from, hop_to)
+                end
+                move_type = :move
+                swap_attempted += 1
+                was_null && (swap_null_attempted += 1)
+            end
+        elseif r < p_move + p_insert
+            (n_total >= n_cap || p_insert <= 0.0) && continue
+            changed_component = rand(1:C)
+            if p_bias > 0.0
+                biased_set = lattice_biased_sites(
+                    config; predicate=bias_predicate, shells=bias_shells)
+                if rand() < p_bias
+                    insert_biased_attempted += 1
+                    isempty(biased_set) && continue
+                    insert_site = rand(biased_set)
+                    insert_from_biased = true
+                else
+                    insert_uniform_attempted += 1
+                    insert_site = rand(_multispecies_empty_sites(config))
+                    insert_from_biased = false
+                end
+                set_occupied!(config, insert_site, true, changed_component)
+            else
+                success, _, insert_site = lattice_insert_particle!(
+                    config, changed_component)
+                success || continue
+                insert_uniform_attempted += 1
+                insert_from_biased = false
+            end
+            move_type = :insert
+        else
+            (n_total == 0 || p_delete <= 0.0) && continue
+            changed_component = rand(1:C)
+            counts[changed_component] == 0 && continue
+            success, _, deleted_site = lattice_delete_particle!(
+                config, changed_component)
+            success || continue
+            delete_attempted += 1
+            move_type = :delete
+        end
+
+        perturbation = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
+        proposed_raw = was_null ? raw : interacting_energy(config, h)
+        proposed_energy = proposed_raw + perturbation
+        proposed_omega = _multispecies_omega(
+            proposed_energy, config, chemical_potentials)
+        if proposed_omega >= omega_max_u
+            _gc_revert_move!(config, move_type, hop_from, hop_to,
+                             cluster_pairs, insert_site, deleted_site,
+                             changed_component)
+            continue
+        end
+
+        accept = true
+        if move_type == :insert
+            nc = counts[changed_component]
+            if p_bias > 0.0
+                q_fwd = p_insert * ((insert_site in biased_set ?
+                    p_bias / length(biased_set) : 0.0) +
+                    (1.0 - p_bias) / (n_sites - n_total))
+                ratio = z0[changed_component] * p_delete /
+                        ((nc + 1) * q_fwd)
+            else
+                ratio = z0[changed_component] * (p_delete / p_insert) *
+                        (n_sites - n_total) / (nc + 1)
+            end
+            ratio < 1.0 && rand() >= ratio && (accept = false)
+        elseif move_type == :delete
+            nc = counts[changed_component]
+            if p_bias > 0.0
+                rev_set = lattice_biased_sites(
+                    config; predicate=bias_predicate, shells=bias_shells)
+                q_rev = p_insert * ((deleted_site in rev_set ?
+                    p_bias / length(rev_set) : 0.0) +
+                    (1.0 - p_bias) / (n_sites - n_total + 1))
+                if q_rev == 0.0
+                    accept = false
+                else
+                    ratio = nc * q_rev /
+                            (z0[changed_component] * p_delete)
+                    ratio < 1.0 && rand() >= ratio && (accept = false)
+                end
+            else
+                ratio = (p_insert / p_delete) * nc /
+                        (z0[changed_component] * (n_sites - n_total + 1))
+                ratio < 1.0 && rand() >= ratio && (accept = false)
+            end
+        end
+
+        if accept
+            raw = proposed_raw
+            lattice.energy = proposed_energy
+            n_accept += 1
+            accepted_any = true
+            if move_type == :cluster
+                cluster_accepted += 1
+            elseif move_type == :move
+                swap_accepted += 1
+                was_null && (swap_null_accepted += 1)
+            elseif move_type == :insert
+                insert_from_biased ?
+                    (insert_biased_accepted += 1) :
+                    (insert_uniform_accepted += 1)
+            else
+                delete_accepted += 1
+            end
+        else
+            _gc_revert_move!(config, move_type, hop_from, hop_to,
+                             cluster_pairs, insert_site, deleted_site,
+                             changed_component)
+        end
+    end
+
+    return accepted_any, n_accept / max(n_steps, 1), lattice,
+           cluster_accepted, cluster_total,
+           (swap_attempted=swap_attempted, swap_accepted=swap_accepted,
+            swap_null_attempted=swap_null_attempted,
+            swap_null_accepted=swap_null_accepted,
+            cluster_attempted=cluster_total, cluster_accepted=cluster_accepted,
+            insert_uniform_attempted=insert_uniform_attempted,
+            insert_uniform_accepted=insert_uniform_accepted,
+            insert_biased_attempted=insert_biased_attempted,
+            insert_biased_accepted=insert_biased_accepted,
+            delete_attempted=delete_attempted, delete_accepted=delete_accepted)
+end
+
 """
     _gc_revert_move!(config, move_type, hop_from, hop_to, cluster_pairs,
                      insert_site, deleted_site)
@@ -1379,9 +1804,26 @@ recorded site back. No random draws.
     elseif move_type == :cluster
         _apply_cluster_pairs!(config, cluster_pairs)
     elseif move_type == :insert
-        config.components[1][insert_site] = false
+        set_occupied!(config, insert_site, false)
     else # :delete
-        config.components[1][deleted_site] = true
+        set_occupied!(config, deleted_site, true)
+    end
+    return config
+end
+
+@inline function _gc_revert_move!(config, move_type::Symbol,
+                                  hop_from::Int, hop_to::Int,
+                                  cluster_pairs::Vector{Tuple{Int,Int}},
+                                  insert_site::Int, deleted_site::Int,
+                                  component::Int)
+    if move_type == :move
+        _lattice_walk_apply!(config, hop_from, hop_to)
+    elseif move_type == :cluster
+        _apply_cluster_pairs!(config, cluster_pairs)
+    elseif move_type == :insert
+        set_occupied!(config, insert_site, false, component)
+    else
+        set_occupied!(config, deleted_site, true, component)
     end
     return config
 end

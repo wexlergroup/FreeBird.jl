@@ -1,6 +1,5 @@
 using Documenter
 using FreeBird
-using Plots
 
 makedocs(;
     pages=[

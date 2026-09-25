@@ -118,21 +118,18 @@ using Random
         logc7 = [log((K7 - 1 - j) / (K7 - j)) for j in 0:(n7 - 1)]
         @test abs(exp(sum(logc7)) - (K7 - n7) / K7) <= 1e-14
 
-        # (b) tie-free uniform column: the new method with its ω0 = 1.0 default
-        # matches the legacy iteration-based weights called as
-        # ωᵢ(1:n, K; ω0=(K+1)/K). Calibrated max per-element rel dev 1.705e-14.
+        # (b) tie-free uniform column: the log-compression method matches the
+        # one-based iteration weights with the normalized ω0 = 1 convention.
         n = 250
         shells_u = ωᵢ(fill(log(K / (K + 1)), n))
-        shells_l = ωᵢ(collect(1:n), K; ω0=(K + 1) / K)
+        shells_l = ωᵢ(collect(1:n), K; ω0=1.0)
         @test all(shells_u .> 0)
         @test all(abs.(shells_u .- shells_l) .<= 1e-12 .* shells_l)
 
-        # (c) legacy-method pins on fixed inputs: the iteration-based code path
-        # is untouched by the fix. Closed form ω0*(1/(K+1))*(K/(K+1))^i at
-        # K = 48, ω0 = 49/48, i in (1, 5, 20): exactly (1/49)*(48/49)^(i-1);
-        # digits below are the shipped code path's evaluation (repr, dev SHA
-        # cfa19b8 semantics).
-        w_leg = ωᵢ([1, 5, 20], 48; ω0=49 / 48)
+        # (c) one-based iteration pins on fixed inputs. The first discarded
+        # shell carries r^0, so at K = 48 and ω0 = 1 the closed form is
+        # (1/49)*(48/49)^(i-1).
+        w_leg = ωᵢ([1, 5, 20], 48; ω0=1.0)
         @test isapprox(w_leg[1], 0.020408163265306117; rtol=1e-13)
         @test isapprox(w_leg[2], 0.018792499586397383; rtol=1e-13)
         @test isapprox(w_leg[3], 0.013793100784800585; rtol=1e-13)
@@ -249,12 +246,12 @@ using Random
         return log(sum(w .* exp.(-beta .* E)))
     end
 
-    # per-N evidence, legacy accounting on the same ledger: iteration-based
-    # shells with the conventional ω0 = (K+1)/K, tail q^n split over the live set
+    # per-N evidence from the one-based iteration ledger: normalized shells
+    # with ω0 = 1 and tail q^n split over the live set
     function ln_evidence_legacy(df, live, K, beta)
         n = nrow(df)
         q = K / (K + 1)
-        w = vcat(ωᵢ(df.iter, K; ω0=(K + 1) / K),
+        w = vcat(ωᵢ(df.iter, K; ω0=1.0),
                  fill(q^n / length(live), length(live)))
         E = vcat(df.emax, live)
         return log(sum(w .* exp.(-beta .* E)))
@@ -321,7 +318,7 @@ using Random
         zrows = findall(iszero, df.emax)
         shells_new = ωᵢ(df.log_compression)
         P_new = sum(shells_new[zrows])
-        shells_leg = ωᵢ(df.iter, K; ω0=(K + 1) / K)
+        shells_leg = ωᵢ(df.iter, K; ω0=1.0)
         P_leg = sum(shells_leg[zrows])
         return log(P_new / f_plateau^N), log(P_leg / f_plateau^N), P_leg
     end
@@ -398,8 +395,8 @@ using Random
         @test abs(dev_mass_new) <= GATE_MASS_N1
 
         # (c) the flipped-accounting contrast on the SAME ledger: the legacy
-        # iteration-based ωᵢ(iters, K; ω0=(K+1)/K) charges the plateau
-        # n_tie*ln((K+1)/K), bounded below 1 nat, instead of ln(1/(1-f)):
+        # The one-based iteration route still charges a plateau as ordinary
+        # culls, rather than using the tie-aware ln(1/(1-f)) contraction:
         #  - the recorded plateau mass fails the same calibrated gate
         #    (1.87x the gate at calibration, low side);
         @test abs(dev_mass_leg) > GATE_MASS_N1
@@ -408,7 +405,7 @@ using Random
         #    every evidence and reweighted observable below inherits, is
         #    overestimated: ln(S_leg/S_true) fails high (+1.56 at calibration;
         #    structurally >= +1.37 for any n_tie <= K at this f)
-        total_leg = sum(ωᵢ(df.iter, K; ω0=(K + 1) / K)) + (K / (K + 1))^nrow(df)
+        total_leg = sum(ωᵢ(df.iter, K; ω0=1.0)) + (K / (K + 1))^nrow(df)
         S_leg = total_leg - P_leg
         S_true = 1 - f_plateau
         @test log(S_leg / S_true) > 1.0

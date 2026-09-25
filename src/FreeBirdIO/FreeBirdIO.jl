@@ -393,6 +393,7 @@ function convert_walker_to_system(at::LatticeWalker)
         atomic_lattice_schema=1,
         energy=at.energy.val,
         iter=at.iter,
+        energy_convention="bare_E_v1",
         freebird_walker="AtomicLattice",
         lattice_geometry=geometry,
         lattice_atom=lattice.lattice_atom,

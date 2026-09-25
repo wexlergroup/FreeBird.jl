@@ -464,7 +464,9 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
             liveset, gc_params, Int64(20), mc_routine, save_strategy)
  
         @test df isa DataFrame
-        @test names(df) == ["iter", "omega", "energy", "num_particles"]
+        @test names(df) == ["iter", "omega", "energy", "num_particles",
+                            "energy_convention"]
+        @test all(==("bare_E_v1"), df.energy_convention)
         @test nrow(df) <= 20
         @test nrow(df) > 0  # At least some steps should succeed
         @test eltype(df.iter) == Int
@@ -508,7 +510,8 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
             liveset, params, Int64(100), routine, save)
 
         @test nrow(df) > 0
-        @test readline("atomic_gcns.csv") == "iter,omega,energy,num_particles"
+        @test readline("atomic_gcns.csv") ==
+              "iter,omega,energy,num_particles,energy_convention"
         @test !isempty(read_configs("atomic_gcns.traj.extxyz"))
         restored = read_walkers("atomic_gcns.ls.extxyz")
         @test length(restored) == length(final_liveset.walkers)
@@ -627,7 +630,9 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
             liveset, params, Int64(12), MCGrandCanonicalMoves(), save)
 
         @test nrow(df) > 0
-        @test names(df) == ["iter", "omega", "energy", "num_particles"]
+        @test names(df) == ["iter", "omega", "energy", "num_particles",
+                            "energy_convention"]
+        @test all(==("bare_E_v1"), df.energy_convention)
         @test all(isfinite, df.energy)
         @test all(walker.configuration isa AtomicLattice
                   for walker in final_liveset.walkers)
@@ -655,7 +660,9 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
 
         @test nrow(multi_df) > 0
         @test names(multi_df) == ["iter", "omega", "energy", "num_particles",
-                                  "num_particles_1", "num_particles_2"]
+                                  "energy_convention", "num_particles_1",
+                                  "num_particles_2"]
+        @test all(==("bare_E_v1"), multi_df.energy_convention)
         @test all(isfinite, multi_df.energy)
         @test multi_df.num_particles ==
               multi_df.num_particles_1 .+ multi_df.num_particles_2
@@ -700,7 +707,9 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
 
         @test nrow(df) > 0
         @test names(df) == ["iter", "omega", "energy", "num_particles",
-                            "num_particles_1", "num_particles_2"]
+                            "energy_convention", "num_particles_1",
+                            "num_particles_2"]
+        @test all(==("bare_E_v1"), df.energy_convention)
         @test df.num_particles == df.num_particles_1 .+ df.num_particles_2
         @test all(df.num_particles .<= 3)
         @test all(final_liveset.walkers) do walker
@@ -895,7 +904,7 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
         # Compute NS thermodynamic stats
         mean_E_ns, Cv_ns, mean_N_ns = gc_thermodynamic_stats(
             df, [beta_test], n_walkers, mu_val)
- 
+
         # Compare with exact values (generous tolerances for stochastic algorithm)
         @test mean_E_ns[1] ≈ exact_mean_E rtol=0.3
         @test mean_N_ns[1] ≈ exact_mean_N rtol=0.3
@@ -956,7 +965,9 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
             liveset_cl, gc_params_cl, Int64(50), mc_routine_cl, save_cl)
 
         @test df_cl isa DataFrame
-        @test names(df_cl) == ["iter", "omega", "energy", "num_particles"]
+        @test names(df_cl) == ["iter", "omega", "energy", "num_particles",
+                               "energy_convention"]
+        @test all(==("bare_E_v1"), df_cl.energy_convention)
         @test nrow(df_cl) > 0
         @test length(updated_liveset_cl.walkers) == 10
 
@@ -1366,13 +1377,14 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
 
         # Schema pins and per-column closure welds, both drivers
         d_ig, p_ig = ll_igref(99210, 60; record=true)
-        @test names(d_ig) == vcat(["iter", "emax", "num_particles"], rate12)
+        @test names(d_ig) == vcat(["iter", "emax", "num_particles",
+                                   "energy_convention"], rate12)
         for name in rate12
             @test sum(d_ig[!, name]) == get(p_ig.move_stats, Symbol(name), 0)
         end
         d_om, p_om = ll_omega(99211, 60; record=true)
         @test names(d_om) == vcat(["iter", "omega", "energy",
-                                   "num_particles"], rate12)
+                                   "num_particles", "energy_convention"], rate12)
         for name in rate12
             @test sum(d_om[!, name]) == get(p_om.move_stats, Symbol(name), 0)
         end
@@ -1380,7 +1392,8 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
         # Recording on or off never touches the trajectory, either driver
         d_on, _ = ll_igref(99212, 40; record=true)
         d_off, _ = ll_igref(99212, 40)
-        @test names(d_off) == ["iter", "emax", "num_particles"]
+        @test names(d_off) == ["iter", "emax", "num_particles",
+                               "energy_convention"]
         @test d_on.emax == d_off.emax
         @test d_on.num_particles == d_off.num_particles
         o_on, _ = ll_omega(99213, 40; record=true)

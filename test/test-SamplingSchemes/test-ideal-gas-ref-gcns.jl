@@ -301,7 +301,8 @@
 
         df, live_E, live_N = igref_run(igref_template, ham_ni, 1.0, n_walkers, 3000)
         @test nrow(df) > 0
-        @test names(df) == ["iter", "emax", "num_particles"]
+        @test names(df) == ["iter", "emax", "num_particles", "energy_convention"]
+        @test all(df.energy_convention .== "bare_E_v1")
         # E-sorted NS: recorded energy ceilings are non-increasing
         @test issorted(df.emax, rev=true)
 
@@ -311,7 +312,7 @@
         Ts = [200.0, 300.0, 500.0]
         stats = gc_thermodynamic_stats_ideal_ref(
             df, igref_n_sites, 1.0, μs, Ts, n_walkers;
-            ω0=(n_walkers + 1) / n_walkers, live_emax=live_E, live_numbers=live_N)
+            live_emax=live_E, live_numbers=live_N)
         stats_notail = gc_thermodynamic_stats_ideal_ref(
             df, igref_n_sites, 1.0, μs, Ts, n_walkers)
 
@@ -326,8 +327,11 @@
             @test isapprox(stats.mean_U[i, j], eps_ads * meanN_exact; rtol=0.10)
         end
 
-        # The live-set tail adds positive prior mass: logΞ strictly increases
-        @test all(stats.logXi .> stats_notail.logXi)
+        # The live-set tail adds non-negative prior mass. After 3000 iterations
+        # it is small enough to round away at some grid points, so require that
+        # logΞ never decreases and that the correction is visible somewhere.
+        @test all(stats.logXi .>= stats_notail.logXi)
+        @test any(stats.logXi .> stats_notail.logXi)
 
         # N_eff collapses out of the reweighting window: the far point
         # (μ = -0.08 at T = 200 K, |βμ - ln z0| ≈ 4.6) must have a much
@@ -367,20 +371,16 @@
         Ts = [300.0, 400.0]
 
         # Exact grand-canonical reference: enumerate all 2^16 microstates once
-        E_vals = Vector{Float64}(undef, 2^igref_n_sites)
-        N_vals = Vector{Int}(undef, 2^igref_n_sites)
-        lattice = deepcopy(igref_template)
-        for mask in 0:(2^igref_n_sites - 1)
-            for site in 1:igref_n_sites
-                lattice.components[1][site] = ((mask >> (site - 1)) & 1) == 1
-            end
-            E_vals[mask+1] = interacting_energy(lattice, ham).val
-            N_vals[mask+1] = sum(lattice.components[1])
-        end
+        E_q, N_vals = grand_canonical_exact_enumeration(igref_template, ham)
+        E_vals = [e.val for e in E_q]
 
         stats = gc_thermodynamic_stats_ideal_ref(
             df, igref_n_sites, z0, μs, Ts, n_walkers;
-            ω0=(n_walkers + 1) / n_walkers, live_emax=live_E, live_numbers=live_N)
+            live_emax=live_E, live_numbers=live_N)
+
+        @test size(stats.cv) == (length(μs), length(Ts))
+        @test size(stats.c_omega) == size(stats.cv)
+        @test size(stats.c_N) == size(stats.cv)
 
         for (j, T) in enumerate(Ts), (i, μ) in enumerate(μs)
             β = 1 / (kb * T)
@@ -401,6 +401,19 @@
             @test isapprox(stats.logXi[i, j], logXi_exact; atol=1.5)
             @test isapprox(stats.mean_N[i, j], meanN_exact; rtol=0.10)
             @test isapprox(stats.mean_U[i, j], meanU_exact; rtol=0.10)
+
+            # The heat capacities are wired through the same
+            # _gc_heat_capacities as the other two estimators, so what is
+            # checked here is the wiring — right moments in, right shape out —
+            # not the definitions. Those are pinned by the ideal-gas closed
+            # form in test-atomistic-gcns-fixed-n.jl, where C_E and C_N vanish
+            # exactly and C_Ω = k_Bβ²μ²Var(N), and by the Var(Ω) comparison in
+            # test-AnalysisTools.jl. Second moments off a reweighted NS run are
+            # far noisier than the means above, so a numeric tolerance here
+            # would have to be so wide it would assert nothing.
+            @test isfinite(stats.cv[i, j])
+            @test isfinite(stats.c_omega[i, j])
+            @test isfinite(stats.c_N[i, j])
             @test isapprox(stats.var_N[i, j], varN_exact; rtol=0.25)
         end
     end
@@ -480,7 +493,7 @@
         # With a zero Hamiltonian every configuration has E = 0 (up to the
         # 1e-12 tie-breaking tags), so at z = z0 the reweighting factor is 1
         # and logΞ must equal M·ln(1+z0) EXACTLY when the dead weights use
-        # ω0 = (K+n_cull)/K and the live-set tail closes the ladder:
+        # the one-based shell weights and the live-set tail close the ladder:
         # Σω = (1 - r^n) + r^n = 1, independent of n and of the sampled N_j.
         # This is an algebraic identity test of the weight bookkeeping — it
         # would catch any ω0/tail double counting.
@@ -491,7 +504,7 @@
         @test nrow(df) > 0
         stats = gc_thermodynamic_stats_ideal_ref(
             df, igref_n_sites, 1.0, [0.0], [300.0], n_walkers;
-            ω0=(n_walkers + 1) / n_walkers, live_emax=live_E, live_numbers=live_N)
+            live_emax=live_E, live_numbers=live_N)
         # β|E| ≲ 4e-11 from the tie-breaking tags; atol dominated by that
         @test isapprox(stats.logXi[1, 1], igref_n_sites * log(2.0); atol=1e-6)
     end
@@ -991,7 +1004,7 @@
         # missing walkers' share of the residual mass X_n = (K/(K+1))^10.
         K_g, J_g = 8, 10
         df_g = DataFrame(iter=1:J_g, emax=zeros(J_g), num_particles=fill(3, J_g))
-        w0_g = (K_g + 1) / K_g
+        w0_g = 1.0
         full_E, full_N = zeros(K_g), fill(3, K_g)
         half_E, half_N = zeros(4), fill(3, 4)
 

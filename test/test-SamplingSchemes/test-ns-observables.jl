@@ -976,7 +976,8 @@
             observables=[:n_check => count_N, :psi => order_parameter_c2x2])
         obs_cleanup()
 
-        @test names(df) == ["iter", "emax", "num_particles", "n_check", "psi"]
+        @test names(df) == ["iter", "emax", "num_particles",
+                            "energy_convention", "n_check", "psi"]
         @test eltype(df.n_check) == Float64
         @test eltype(df.psi) == Float64
         # The load-bearing check: the observable column, evaluated on the
@@ -993,7 +994,8 @@
         df2, _, _ = ideal_gas_referenced_nested_sampling(
             ls2, params2, Int64(50), mc, obs_save)
         obs_cleanup()
-        @test names(df2) == ["iter", "emax", "num_particles"]
+        @test names(df2) == ["iter", "emax", "num_particles",
+                             "energy_convention"]
     end
 
     # ================================================================
@@ -1011,7 +1013,8 @@
             observables=[:n_check => count_N])
         obs_cleanup()
 
-        @test names(df) == ["iter", "omega", "energy", "num_particles", "n_check"]
+        @test names(df) == ["iter", "omega", "energy", "num_particles",
+                            "energy_convention", "n_check"]
         @test df.n_check == Float64.(df.num_particles)
     end
 
@@ -1053,7 +1056,7 @@
         live_N = [1, 2]
         live_a = [8.0, 16.0]
         K, z0, M = 4, 1.0, 16
-        ω0 = (K + 1) / K
+        ω0 = 1.0
         μs = [-0.02, 0.03]
         Ts = [300.0, 600.0]
 
@@ -1065,7 +1068,7 @@
             observable_cols=[:a], live_observables=Dict(:a => live_a))
 
         # Independent linear-space reference for the closed-form weighted sums
-        w0 = ω0 * (1 / (K + 1)) .* (K / (K + 1)) .^ df.iter
+        w0 = ω0 * (1 / (K + 1)) .* (K / (K + 1)) .^ (df.iter .- 1)
         wt = fill((K / (K + 1))^3 / K, 2)      # tail carries no ω0 factor
         w_all = vcat(w0, wt)
         E_all = vcat(df.emax, live_E)
@@ -1115,7 +1118,8 @@
         stats3 = gc_thermodynamic_stats_ideal_ref(df, M, z0, μs, Ts, K)
         @test isempty(stats3.observables)
         @test keys(stats3) == (:logXi, :mean_N, :var_N, :mean_U, :N_eff,
-                               :var_U, :cov_UN, :p_N, :N_support, :observables)
+                               :var_U, :cov_UN, :p_N, :N_support, :observables,
+                               :cv, :c_omega, :c_N)
         lX, mN, vN, mU, Ne = stats3
         @test lX == stats3.logXi && Ne == stats3.N_eff
 
@@ -1149,7 +1153,7 @@
         kb = 8.617333262e-5
         M = 4
         K = 3
-        ω0 = (K + 1) / K
+        ω0 = 1.0
         N_values = [0, 1, 2]
         T_grid = [300.0, 600.0] .* u"K"
         μ_grid = [-0.05, 0.02] .* u"eV"
@@ -1170,8 +1174,8 @@
         # Independent linear-space reference. Sector 1: two dead points plus
         # a two-entry tail (n_iters = 2). Sector 2: empty ladder, tail mass
         # exactly 1 split over three copies of the sector energy.
-        w1 = vcat(ω0 * (1 / (K + 1)) .* (K / (K + 1)) .^ df1.iter,
-                  fill(ω0 * (K / (K + 1))^2 / 2, 2))
+        w1 = vcat(ω0 * (1 / (K + 1)) .* (K / (K + 1)) .^ (df1.iter .- 1),
+                  fill((K / (K + 1))^2 / 2, 2))
         E1 = vcat(df1.emax, live_E[2])
         a1 = vcat(df1.psi, live_psi[2][:psi])
         binom = [1.0, 4.0, 6.0]                       # C(4, N)
@@ -1234,7 +1238,8 @@
             n_walkers=K, ω0=ω0, live_emax=live_E)
         @test keys(stats_nc) == (:logXi, :mean_N, :var_N, :mean_U,
                                  :log_Z_N, :N_values, :var_U, :cov_UN,
-                                 :p_N, :N_support, :observables)
+                                 :p_N, :N_support, :observables,
+                                 :cv, :c_omega, :c_N)
         @test isempty(stats_nc.observables)
         @test stats_nc.logXi ≈ stats.logXi rtol = 1e-14
 
@@ -1344,7 +1349,7 @@
         live_psi_ig = [order_parameter_c2x2(w.configuration) for w in final_ig.walkers]
 
         st_ig = gc_thermodynamic_stats_ideal_ref(df_ig, M, z0, μs, Ts, K_ig;
-            ω0=(K_ig + 1) / K_ig, live_emax=live_E_ig, live_numbers=live_N_ig,
+            ω0=1.0, live_emax=live_E_ig, live_numbers=live_N_ig,
             observable_cols=[:psi], live_observables=Dict(:psi => live_psi_ig))
 
         n_gated = 0
@@ -1402,7 +1407,7 @@
 
         st_fn = gc_thermodynamic_stats_fixed_N(dfs, collect(0:M), M,
             μs .* u"eV", Ts .* u"K";
-            n_walkers=K_fn, n_cull=1, ω0=(K_fn + 1) / K_fn,
+            n_walkers=K_fn, n_cull=1, ω0=1.0,
             live_emax=live_E_fn,
             observable_cols=[:psi], live_observables=live_psi_fn)
 
@@ -1512,11 +1517,12 @@
         live_psi_ig = [order_parameter_sqrt3(w.configuration) for w in final_ig.walkers]
 
         st_ig = gc_thermodynamic_stats_ideal_ref(df_ig, M, z0, μs, Ts, K_ig;
-            ω0=(K_ig + 1) / K_ig, live_emax=live_E_ig, live_numbers=live_N_ig,
+            ω0=1.0, live_emax=live_E_ig, live_numbers=live_N_ig,
             observable_cols=[:psi], live_observables=Dict(:psi => live_psi_ig))
 
         # Ledger integrity: on this cell every configuration obeys psi <= 1/3
-        @test names(df_ig) == ["iter", "emax", "num_particles", "psi"]
+        @test names(df_ig) == ["iter", "emax", "num_particles",
+                               "energy_convention", "psi"]
         @test all(0.0 .<= df_ig.psi .<= 1 / 3)
 
         n_gated = 0
@@ -1550,7 +1556,8 @@
             observables=[:psi => order_parameter_sqrt3])
         obs_cleanup()
 
-        @test names(df_gc) == ["iter", "omega", "energy", "num_particles", "psi"]
+        @test names(df_gc) == ["iter", "omega", "energy", "num_particles",
+                               "energy_convention", "psi"]
         @test all(0.0 .<= df_gc.psi .<= 1 / 3)
 
         β300 = 1.0 / (kb * 300.0)
@@ -1701,11 +1708,12 @@
         live_psi_ig = [order_parameter_stripe(w.configuration) for w in final_ig.walkers]
 
         st_ig = gc_thermodynamic_stats_ideal_ref(df_ig, M, z0, μs, Ts, K_ig;
-            ω0=(K_ig + 1) / K_ig, live_emax=live_E_ig, live_numbers=live_N_ig,
+            ω0=1.0, live_emax=live_E_ig, live_numbers=live_N_ig,
             observable_cols=[:stripe], live_observables=Dict(:stripe => live_psi_ig))
 
         # Ledger integrity: 0 <= Psi <= 1/2 row by row
-        @test names(df_ig) == ["iter", "emax", "num_particles", "stripe"]
+        @test names(df_ig) == ["iter", "emax", "num_particles",
+                               "energy_convention", "stripe"]
         @test all(0.0 .<= df_ig.stripe .<= 1 / 2)
 
         n_gated = 0
@@ -1741,7 +1749,8 @@
             observables=[:stripe => (cfg -> order_parameter_stripe(cfg))])
         obs_cleanup()
 
-        @test names(df_gc) == ["iter", "omega", "energy", "num_particles", "stripe"]
+        @test names(df_gc) == ["iter", "omega", "energy", "num_particles",
+                               "energy_convention", "stripe"]
         @test all(0.0 .<= df_gc.stripe .<= 1 / 2)
 
         β300 = 1.0 / (kb * 300.0)
@@ -1921,13 +1930,14 @@
         live_psi_ig = [diag_quad(w.configuration) for w in final_ig.walkers]
 
         st_ig = gc_thermodynamic_stats_ideal_ref(df_ig, M, z0, μs, Ts, K_ig;
-            ω0=(K_ig + 1) / K_ig, live_emax=live_E_ig, live_numbers=live_N_ig,
+            ω0=1.0, live_emax=live_E_ig, live_numbers=live_N_ig,
             observable_cols=[:psi_diag],
             live_observables=Dict(:psi_diag => live_psi_ig))
 
         # Ledger integrity: the class-count bound (n0 - n2)^2 + (n1 - n3)^2
         # <= 32 per quadrature component caps the diagonal quadrature at 1/2
-        @test names(df_ig) == ["iter", "emax", "num_particles", "psi_diag"]
+        @test names(df_ig) == ["iter", "emax", "num_particles",
+                               "energy_convention", "psi_diag"]
         @test all(0.0 .<= df_ig.psi_diag .<= 1 / 2 + 1e-12)
 
         n_gated = 0
@@ -2154,7 +2164,7 @@
         # Ledger integrity: columns, range, and the quarter-integer
         # lattice of 4-site-layer coverages
         @test names(df_ig) == ["iter", "emax", "num_particles",
-                               "theta1", "theta2", "theta3"]
+                               "energy_convention", "theta1", "theta2", "theta3"]
         for col in (df_ig.theta1, df_ig.theta2, df_ig.theta3)
             @test all(0.0 .<= col .<= 1.0)
             @test all(isinteger.(4 .* col))
@@ -2166,7 +2176,7 @@
                        [layer_coverage(w.configuration, k) for w in final_ig.walkers]
                        for k in 1:3)
         st = gc_thermodynamic_stats_ideal_ref(df_ig, M, z0, μs, Ts, K_ig;
-            ω0=(K_ig + 1) / K_ig, live_emax=live_E, live_numbers=live_N,
+            ω0=1.0, live_emax=live_E, live_numbers=live_N,
             observable_cols=[:theta1, :theta2, :theta3], live_observables=live_th)
 
         # var_U and cov_UN are exercised by the existing end-to-end
@@ -2383,7 +2393,8 @@
 
         # Ledger integrity: columns, range, and the ninth-integer
         # lattice of 9-site-layer coverages
-        @test names(df_ig) == ["iter", "emax", "num_particles", "theta1", "theta2"]
+        @test names(df_ig) == ["iter", "emax", "num_particles",
+                               "energy_convention", "theta1", "theta2"]
         for col in (df_ig.theta1, df_ig.theta2)
             @test all(0.0 .<= col .<= 1.0)
             @test all(isinteger.(9 .* col))
@@ -2395,7 +2406,7 @@
                           [layer_coverage(w.configuration, k) for w in final_ig.walkers]
                           for k in 1:2)
         st_ig = gc_thermodynamic_stats_ideal_ref(df_ig, M, z0, μs, Ts, K_ig;
-            ω0=(K_ig + 1) / K_ig, live_emax=live_E_ig, live_numbers=live_N_ig,
+            ω0=1.0, live_emax=live_E_ig, live_numbers=live_N_ig,
             observable_cols=[:theta1, :theta2], live_observables=live_th_ig)
 
         n_gated = 0
@@ -2464,7 +2475,7 @@
 
         st_fn = gc_thermodynamic_stats_fixed_N(dfs, collect(0:M), M,
             μs .* u"eV", Ts_fn .* u"K";
-            n_walkers=K_fn, n_cull=1, ω0=(K_fn + 1) / K_fn,
+            n_walkers=K_fn, n_cull=1, ω0=1.0,
             live_emax=live_E_fn,
             observable_cols=[:theta1, :theta2], live_observables=live_th_fn)
 
@@ -2500,7 +2511,7 @@
         obs_cleanup()
 
         @test names(df_gc) == ["iter", "omega", "energy", "num_particles",
-                               "theta1", "theta2"]
+                               "energy_convention", "theta1", "theta2"]
         for col in (df_gc.theta1, df_gc.theta2)
             @test all(0.0 .<= col .<= 1.0)
             @test all(isinteger.(9 .* col))
@@ -2755,7 +2766,7 @@
         # gate, same tolerances
         function gate_leg(df, final_ls)
             @test names(df) == ["iter", "emax", "num_particles",
-                                "theta1", "theta2", "theta3"]
+                                "energy_convention", "theta1", "theta2", "theta3"]
             for col in (df.theta1, df.theta2, df.theta3)
                 @test all(0.0 .<= col .<= 1.0)
                 @test all(isinteger.(4 .* col))
@@ -2766,7 +2777,7 @@
                            [layer_coverage(w.configuration, k) for w in final_ls.walkers]
                            for k in 1:3)
             st = gc_thermodynamic_stats_ideal_ref(df, M, z0, μs, Ts, K_ig;
-                ω0=(K_ig + 1) / K_ig, live_emax=live_E, live_numbers=live_N,
+                ω0=1.0, live_emax=live_E, live_numbers=live_N,
                 observable_cols=[:theta1, :theta2, :theta3],
                 live_observables=live_th)
             n_gated = 0
@@ -3007,7 +3018,7 @@
         tce_liveN = [Int(sum(w.configuration.components[1])) for w in tce_out.walkers]
         tce_livePsi = Dict(:psi => [order_parameter_p2x2(w.configuration) for w in tce_out.walkers])
         tce_st = gc_thermodynamic_stats_ideal_ref(tce_df, 16, 1.0, tce_mus, tce_Ts,
-            100; ω0=101 / 100, live_emax=tce_liveE, live_numbers=tce_liveN,
+            100; ω0=1.0, live_emax=tce_liveE, live_numbers=tce_liveN,
             observable_cols=[:psi], live_observables=tce_livePsi)
         for (i, mu) in enumerate(tce_mus), (j, T) in enumerate(tce_Ts)
             lnXi, mN, mU, mPsi = tce_exact(mu, T)
@@ -3110,7 +3121,7 @@
         xh_liveE = [w.energy.val for w in xh_out.walkers]
         xh_liveN = [Int(sum(w.configuration.components[1])) for w in xh_out.walkers]
         xh_stA = gc_thermodynamic_stats_ideal_ref(xh_df, 18, 1.0, xh_mus, xh_Ts,
-            200; ω0=201 / 200, live_emax=xh_liveE, live_numbers=xh_liveN)
+            200; ω0=1.0, live_emax=xh_liveE, live_numbers=xh_liveN)
         xh_dfB = copy(xh_df)
         xh_dfB.emax = copy(xh_df.U_b)
         xh_liveEB = [begin
@@ -3118,7 +3129,7 @@
                          ustrip(u"eV", interacting_energy(xprobe, xh_hamB))
                      end for w in xh_out.walkers]
         xh_stB = gc_thermodynamic_stats_ideal_ref(xh_dfB, 18, 1.0, xh_mus, xh_Ts,
-            200; ω0=201 / 200, live_emax=xh_liveEB, live_numbers=xh_liveN)
+            200; ω0=1.0, live_emax=xh_liveEB, live_numbers=xh_liveN)
         for (i, mu) in enumerate(xh_mus), (j, T) in enumerate(xh_Ts)
             @test abs(xh_stA.logXi[i, j] - xh_exact(eA, mu, T)) < 1.0
             @test abs(xh_stB.logXi[i, j] - xh_exact(eB, mu, T)) < 1.0
@@ -3472,7 +3483,8 @@
             MCGrandCanonicalMoves(p_move=0.5, p_insert=0.25,
                 clusters_freq=1, swaps_freq=1), obs_save)
         obs_cleanup()
-        @test names(ra_df) == ["iter", "emax", "num_particles"]
+        @test names(ra_df) == ["iter", "emax", "num_particles",
+                               "energy_convention"]
         @test issorted(ra_df.emax, rev=true)
         # The fixed-N branch really alternated local swaps and cluster
         # moves, and cluster proposals were accepted on the anisotropic
@@ -3483,7 +3495,7 @@
         ra_liveE = [w.energy.val for w in ra_out.walkers]
         ra_liveN = [Int(sum(w.configuration.components[1])) for w in ra_out.walkers]
         ra_st = gc_thermodynamic_stats_ideal_ref(ra_df, 16, ra_z0, ra_mus, ra_Ts,
-            200; ω0=201 / 200, live_emax=ra_liveE, live_numbers=ra_liveN)
+            200; ω0=1.0, live_emax=ra_liveE, live_numbers=ra_liveN)
         ra_lnXi_tol = [10.6, 7.9, 5.9]
         ra_N_tol = [7.9, 9.7, 8.6]
         ra_U_tol = [0.41, 0.21, 0.33]
@@ -3779,7 +3791,7 @@
             liveE = [w.energy.val for w in out.walkers]
             liveN = [Int(sum(w.configuration.components[1])) for w in out.walkers]
             st = gc_thermodynamic_stats_ideal_ref(df, 12, cb_z0, cb_mus, cb_Ts,
-                120; ω0=121 / 120, live_emax=liveE, live_numbers=liveN)
+                120; ω0=1.0, live_emax=liveE, live_numbers=liveN)
             return (df=df, st=st, pout=pout)
         end
 
@@ -3820,7 +3832,8 @@
             # (no log_compression column: the lattice step methods keep the
             # four-value return; pinned for MCRandomWalkClone ladders in
             # test-ns-plateau-ties.jl)
-            @test names(mem.df) == ["iter", "emax", "num_particles"]
+            @test names(mem.df) == ["iter", "emax", "num_particles",
+                                    "energy_convention"]
             @test issorted(mem.df.emax, rev=true)
             # the ladder reaches the ground manifold (full occupancy), up to
             # the run's 1e-9 tie-breaking perturbation
@@ -3913,7 +3926,8 @@
                 MCGrandCanonicalMoves(p_move=0.4, p_insert=0.3), obs_save)
             obs_cleanup()
             @test nrow(lm_df) > 0
-            @test names(lm_df) == ["iter", "emax", "num_particles"]
+            @test names(lm_df) == ["iter", "emax", "num_particles",
+                                   "energy_convention"]
             @test issorted(lm_df.emax, rev=true)
             # Ledger-level composition pin: every dead point sits on
             # E = eps N
@@ -3921,7 +3935,7 @@
             lm_liveE = [w.energy.val for w in lm_out.walkers]
             lm_liveN = [Int(sum(w.configuration.components[1])) for w in lm_out.walkers]
             lm_st = gc_thermodynamic_stats_ideal_ref(lm_df, lm_M, 1.0, lm_mus,
-                lm_Ts, 100; ω0=101 / 100, live_emax=lm_liveE, live_numbers=lm_liveN)
+                lm_Ts, 100; ω0=1.0, live_emax=lm_liveE, live_numbers=lm_liveN)
             for (j, T) in enumerate(lm_Ts), (i, mu) in enumerate(lm_mus)
                 i == 1 && continue      # the out-of-window point
                 beta = 1 / (lm_kb * T)

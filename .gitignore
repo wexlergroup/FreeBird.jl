@@ -12,3 +12,4 @@ output*
 *.extxyz
 *.swp
 .DS_Store
+.CondaPkg/

@@ -244,6 +244,7 @@ end
         frames = read_configs(filename)
         @test length(frames) == 1
         @test frames[1].data[:freebird_walker] == "AtomicLattice"
+        @test frames[1].data[:energy_convention] == "bare_E_v1"
         @test frames[1].data[:atomic_lattice_schema] == 1
         @test frames[1].data[:ase_surface] == "fcc100"
         @test startswith(frames[1].data[:site_geometry_fingerprint], "fnv64=")

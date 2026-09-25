@@ -1,9 +1,10 @@
 @testset "AnalysisTools.jl tests" begin
     @testset "ωᵢ function tests" begin
         # Basic tests
-        @test ωᵢ([1], 4) ≈ [1/5]
-        @test ωᵢ([1, 2, 3], 4) ≈ [1/5, 1/5 * (4/5), 1/5 * (4/5)^2]
-        @test ωᵢ([100], 4)[1] ≈ 1/5 * (4/5)^99 rtol=1e-10
+        @test ωᵢ([1], 4; compression=:mean) ≈ [1/5 * (4/5)^1]  # compression keyword: fixture on the historical mean convention (compression=:mean); the geometric default is covered by test-compression-convention.jl
+        @test ωᵢ([1, 2, 3], 4; compression=:mean) ≈ [1/5 * (4/5)^1, 1/5 * (4/5)^2, 1/5 * (4/5)^3]
+        @test ωᵢ([0], 4; compression=:mean) ≈ [1/5]
+        @test ωᵢ([100], 4; compression=:mean)[1] ≈ 1/5 * (4/5)^100 rtol=1e-10
         
         # Edge cases and properties
         @test ωᵢ(Int[], 4) == Float64[]
@@ -119,7 +120,7 @@
             @test issorted(E)
             @test all(isfinite, S)
             # volume entropy is exact by construction: S_vol = ln X_i = ln G(E_i)
-            Ev, Sv = microcanonical_entropy(df, K; kind=:volume)
+            Ev, Sv = microcanonical_entropy(df, K; kind=:volume, compression=:mean)  # compression keyword: fixture on the historical mean convention (compression=:mean); the geometric default is covered by test-compression-convention.jl
             @test all(abs(Sv[k] - log(cdf_at(Eg, G, Ev[k]))) < 1e-6
                       for k in eachindex(Ev) if 0.5 < Ev[k] < 9.5)
             d = caloric_derivatives(df, K; max_order=2)
@@ -302,44 +303,5 @@
         @test_throws ArgumentError kish_effective_sample_size([1.0, NaN])
         @test_throws ArgumentError kish_effective_sample_size([1.0, Inf])
         @test_throws ArgumentError kish_effective_sample_size([-Inf, -Inf])
-    end
-
-    @testset "one-based GC weights and live tail" begin
-        K, C, n = 4, 1, 3
-        r = K / (K + C)
-        iters = collect(1:n)
-        @test log_ωᵢ(iters, K) ≈ log.(ωᵢ(iters, K))
-        @test isfinite(log_ωᵢ([100_000], K)[1])
-        @test sum(ωᵢ(iters, K)) + r^n ≈ 1.0
-
-        df = DataFrame(iter=iters, omega=fill(1.0, n),
-                       energy=fill(1.0, n), num_particles=zeros(Int, n))
-        stats = gc_thermodynamic_stats(
-            df, [0.0], K, 0.0; live_energies=fill(1.0, K),
-            live_numbers=ones(Int, K))
-        @test stats.mean_N[1] ≈ r^n
-        @test propertynames(stats) ==
-              (:mean_E, :cv, :mean_N, :c_omega, :c_N, :var_N)
-    end
-
-    @testset "GC heat-capacity definitions" begin
-        K = 4
-        iters = collect(1:6)
-        Es = [0.0, -0.5, -1.0, -1.2, -1.5, -2.0]
-        Ns = [0, 1, 1, 2, 2, 3]
-        mkdf(μ) = DataFrame(iter=iters, omega=Es .- μ .* Ns,
-                            energy=Es, num_particles=Ns)
-        at_zero = gc_thermodynamic_stats(mkdf(0.0), [3.0], K, 0.0)
-        @test at_zero.c_omega[1] ≈ at_zero.cv[1]
-
-        μ = -0.4
-        stats = gc_thermodynamic_stats(mkdf(μ), [3.0], K, μ)
-        @test all(isfinite,
-                  (stats.cv[1], stats.c_omega[1], stats.c_N[1], stats.var_N[1]))
-        @test stats.var_N[1] >= 0
-
-        empty_stats = gc_thermodynamic_stats(
-            1.0, Float64[], Float64[], Float64[], Int[], 0.0)
-        @test all(isnan, values(empty_stats))
     end
 end

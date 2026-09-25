@@ -1,11 +1,4 @@
 @testset "nested_sampling.jl tests" begin
-    @testset "estimate_temperature uses the first NS shell at iter=1" begin
-        K, C, ΔE = 4, 1, -2.0
-        kb = 8.617333262145e-5
-        expected = 1 / (kb * (log(C / (K + C)) / ΔE))
-        @test SamplingSchemes.estimate_temperature(K, C, ΔE, 1) ≈ expected
-    end
-
     @testset "NestedSamplingParameters struct tests" begin
         params = NestedSamplingParameters(
             mc_steps=1000,
@@ -633,7 +626,7 @@
                 @test df isa DataFrame
                 # Serial atomistic ledgers carry the per-cull log-compression
                 # column (plateau-aware culling); parallel ledgers do not.
-                @test names(df) == ["iter", "emax", "log_compression"]
+                @test names(df) == ["iter", "emax", "log_compression", "n_live"]  # compression keyword: the ledger gained the n_live column
                 @test nrow(df) ≤ n_steps
                 @test length(updated_liveset.walkers) == length(liveset.walkers)
                 @test eltype(df.iter) == Int

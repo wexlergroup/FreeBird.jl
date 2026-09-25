@@ -814,8 +814,10 @@
             end
 
             @testset "Interlayer spacing" begin
-                # With lattice_constant = 2.0, isotropic spacing places both
-                # in-plane and interlayer bonds at distance 2.0.
+                # Isotropic fix: with lattice_constant = 2.0 the out-of-plane
+                # spacing now follows it, so the nearest-neighbor shell mixes
+                # in-plane and interlayer bonds at the same distance 2.0
+                # (previously the interlayer bonds sat at 1.0, silently)
                 iso = MLattice{1,SquareLattice}(
                     lattice_constant=2.0,
                     supercell_dimensions=(3, 3, 2),
@@ -936,8 +938,10 @@
                     return sqrt(sum(abs2, d)), abs(d[3])
                 end
 
-                # The implicit and explicit aligned-stack inputs describe the
-                # same vertical-c geometry for one- and three-layer cells.
+                # Default path unchanged: no stacking keyword, stacking=:aligned
+                # and layer_offset=(0.0, 0.0) all reproduce the shipped
+                # vertical-c geometry field for field, on the default single
+                # layer and on an aligned three-layer cell
                 for (dims, c, per3, cutoffs, kw) in [
                         ((4, 2, 1), 1.0, false, [1.1], (;)),
                         ((4, 4, 3), h, true, [1.05, 1.80], (; interlayer_spacing=h))]
@@ -1560,7 +1564,7 @@
             @test length(sorted_nm) == 0
         end
 
-        @testset "nonempty component splitting" begin
+        @testset "nonempty outputs unchanged by the retyped helpers" begin
             mixed_at = FastSystem(atomic_system([:H => [1.0, 1.0, 1.0]u"Å",
                                                  :O => [2.0, 2.0, 2.0]u"Å",
                                                  :H => [3.0, 3.0, 3.0]u"Å"], box, pbc))

@@ -27,6 +27,17 @@ e.g. (0.25, 0.75) means that the step size will decrease if the acceptance rate 
   has been fully evicted without replacement. `0` (the default) means no plateau block is
   in progress; the field is set and cleared by `nested_sampling_step!` and should not be
   set by callers.
+- `compression::Symbol`: The compression convention the serial atomistic step methods
+  charge for an ordinary cull from `n_live` walkers into the `log_compression` ledger
+  column: `:geometric` (the default) charges `-1/n_live`, the mean of `ln t` for the
+  shrinkage factor `t ~ Beta(n_live, 1)` (Skilling's convention); `:mean` charges
+  `log(n_live/(n_live + 1))`, the log of the mean of `t`, which reproduces ledgers written
+  before this field existed bit for bit. Plateau-tie evictions charge
+  `log((n_live - 1)/n_live)` under both, since that factor is a volume-fraction estimate
+  rather than a moment of a shrinkage variate. The choice never enters a walk or an
+  acceptance decision: it changes the recorded column and nothing else. See `ωᵢ` in
+  `AnalysisTools` for the reduction-side keyword of the same name and the size of the
+  difference between the conventions.
 """
 mutable struct NestedSamplingParameters <: SamplingParameters
     mc_steps::Int64
@@ -47,6 +58,7 @@ mutable struct NestedSamplingParameters <: SamplingParameters
     cluster_adjust_iterations::Vector{Int}
     plateau_refill_target::Int64
     move_stats::Dict{Symbol,Int}
+    compression::Symbol
 end
 
 function NestedSamplingParameters(;
@@ -68,8 +80,10 @@ function NestedSamplingParameters(;
             cluster_adjust_iterations::Vector{Int}=Int[],
             plateau_refill_target::Int64=0,
             move_stats::Dict{Symbol,Int}=Dict{Symbol,Int}(),
+            compression::Symbol=:geometric,
             )
-    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, accept_range, fail_count, allowed_fail_count, energy_perturbation, random_seed, cluster_p, cluster_accepted, cluster_total, cluster_p_history, cluster_accept_history, cluster_adjust_iterations, plateau_refill_target, move_stats)
+    _check_compression(compression)
+    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, accept_range, fail_count, allowed_fail_count, energy_perturbation, random_seed, cluster_p, cluster_accepted, cluster_total, cluster_p_history, cluster_accept_history, cluster_adjust_iterations, plateau_refill_target, move_stats, compression)
 end
 
 """
@@ -567,7 +581,7 @@ function update_iter!(liveset::AbstractLiveSet)
     end
 end
 
-const _RESERVED_LEDGER_COLUMNS = (:iter, :emax, :omega, :energy, :num_particles, :log_compression,
+const _RESERVED_LEDGER_COLUMNS = (:iter, :emax, :omega, :energy, :num_particles, :log_compression, :n_live,
                                   :move_attempted, :move_accepted, :insert_attempted,
                                   :insert_accepted, :delete_attempted, :delete_accepted,
                                   :insert_biased_attempted, :insert_biased_accepted,
@@ -627,7 +641,7 @@ Estimate the temperature for the nested sampling algorithm from dlog(ω)/dE.
 """
 function estimate_temperature(n_walkers::Int, n_cull::Int, ediff::Float64, iter::Int=1)
     ω = (n_cull / (n_walkers + n_cull)) *
-        (n_walkers / (n_walkers + n_cull))^(iter - 1)
+        (n_walkers / (n_walkers + n_cull))^iter
     β = log(ω) / ediff
     kb = 8.617333262145e-5 # eV/K
     T = 1 / (kb * β) # in Kelvin
@@ -653,6 +667,29 @@ function _tie_block_length(walkers)
     return n
 end
 
+# Compression conventions charged by the serial atomistic step methods (the reduction-side
+# keyword of the same name lives in `AnalysisTools.ωᵢ`). An ordinary cull from n live walkers
+# leaves the fraction t ~ Beta(n, 1) of the enclosed prior volume: :geometric charges
+# E[ln t] = -1/n (Skilling's convention), :mean charges ln E[t] = ln(n/(n+1)) (the log of the mean
+# of t, the historical value). A plateau-tie eviction charges ln((n-1)/n) under both: that factor is a volume-fraction
+# estimate (each live point stands for 1/n of the current volume), not a moment of a shrinkage
+# variate. The charge is bookkeeping only; no walk, acceptance or ordering decision reads it.
+const _COMPRESSION_CONVENTIONS = (:geometric, :mean)
+
+function _check_compression(compression::Symbol)
+    compression in _COMPRESSION_CONVENTIONS || throw(ArgumentError(
+        "compression must be :geometric or :mean (got :$compression)"))
+    return compression
+end
+
+function _ordinary_cull_log_t(n_live::Int, compression::Symbol)
+    compression === :geometric && return -1.0 / n_live
+    compression === :mean && return log(n_live / (n_live + 1))
+    # the constructors validate the field, but the structs are mutable: a value set afterwards
+    # must not be charged silently as either convention
+    _check_compression(compression)
+end
+
 """
     nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCRoutine)
 
@@ -664,15 +701,21 @@ when two or more live walkers tie the ceiling bit-exactly, the tied walkers are 
 one by one without replacement, each eviction compressing the prior volume by
 `(n_live - 1)/n_live` with the shrinking live count, and the live set is refilled by
 cloning and decorrelating survivors below the plateau only once the last tied walker has
-been evicted. A normal (unique-ceiling) cull compresses by `n_live/(n_live + 1)` as
-before. The per-cull log-compression is returned as a fifth value and recorded by the
-[`nested_sampling`](@ref) driver in a `log_compression` ledger column, consumed by the
-log-compression method of `ωᵢ`; for tie-free ledgers the column is uniformly
-`log(K/(K+1))` and the legacy iteration-based weights are unchanged. One documented
+been evicted. A normal (unique-ceiling) cull is charged according to
+`ns_params.compression`: `-1/n_live` under the default `:geometric` (the mean of `ln t`
+for the shrinkage factor `t ~ Beta(n_live, 1)`, Skilling's convention) or
+`log(n_live/(n_live + 1))` under `:mean` (the log of the mean of `t`, the historical charge). The
+per-cull log-compression is returned as a fifth value and recorded by the
+[`nested_sampling`](@ref) driver in a `log_compression` ledger column, beside an `n_live`
+column holding the live count the cull was made from (so a ledger converts between the
+conventions exactly, tie blocks and short refills included); the column is consumed by
+the log-compression method of `ωᵢ`. For tie-free ledgers the column is uniformly `-1/K`
+(`:geometric`) or `log(K/(K+1))` (`:mean`), and the iteration-based `ωᵢ` with the matching
+`compression` keyword gives the same weights. One documented
 corner keeps the previous semantics: if the ENTIRE live set ties (every walker on the
 plateau), no survivor samples the sub-plateau region, so the step falls back to the
-ordinary clone-and-walk cull with replacement, charging `n_live/(n_live + 1)`; the
-plateau under-compression bias of that corner is confined to runs whose live set is
+ordinary clone-and-walk cull with replacement, charged as an ordinary cull under
+`ns_params.compression`; the plateau under-compression bias of that corner is confined to runs whose live set is
 entirely on a plateau, which for an i.i.d. initialization occurs with probability
 `f^K` for plateau prior fraction `f` (about 1% at `f = 0.91`, `K = 48`, but about 21%
 at `K = 16` — raise `K` when the vacuum fraction is large). This plateau handling
@@ -774,7 +817,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         update_iter!(liveset)
         ns_params.fail_count = 0
         iter = liveset.walkers[1].iter
-        log_t = log(n_live / (n_live + 1))
+        log_t = _ordinary_cull_log_t(n_live, ns_params.compression)
     else
         # @warn "Failed to accept MC move"
         emax = missing
@@ -1037,7 +1080,7 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSampl
         update_iter!(liveset)
         ns_params.fail_count = 0
         iter = liveset.walkers[1].iter
-        log_t = log(n_live / (n_live + 1))
+        log_t = _ordinary_cull_log_t(n_live, ns_params.compression)
     else
         # @warn "Failed to accept MC move"
         emax = missing
@@ -1409,8 +1452,8 @@ Perform a nested sampling loop for a given number of steps.
   ledger, supported for the serial atomistic routines (`MCRandomWalkMaxE`,
   `MCRandomWalkClone`, `MCGalileanWalk`) on an `AtomWalkers` liveset only;
   other liveset or routine types throw up front, since their step methods
-  run different kernels. When true the ledger declares `log_compression`
-  eagerly, then the routine's rate columns (`move_attempted`/`move_accepted`
+  run different kernels. When true the ledger declares `log_compression` and
+  `n_live` eagerly, then the routine's rate columns (`move_attempted`/`move_accepted`
   for the random-walk routines, the five Galilean counters for the
   reflective one), then a `step_size` column recording the adapted value at
   each row push; observables follow. Deltas are snapshot-differenced run
@@ -1420,7 +1463,8 @@ Perform a nested sampling loop for a given number of steps.
 
 # Returns
 - `df`: A DataFrame containing the iteration number and maximum energy for each step,
-  plus one column per requested observable.
+  the per-cull `log_compression` and `n_live` columns for the serial atomistic
+  routines, plus one column per requested observable.
 - `liveset`: The updated set of walkers.
 - `ns_params`: The updated nested sampling parameters.
 """
@@ -1467,6 +1511,7 @@ function nested_sampling(liveset::AbstractLiveSet,
         # emit log_t, so the lazy log_compression addition below never fires
         # first and the column order is deterministic
         df[!, :log_compression] = Float64[]
+        df[!, :n_live] = Int[]
         for name in can_rate_cols
             df[!, name] = Int[]
         end
@@ -1504,6 +1549,10 @@ function nested_sampling(liveset::AbstractLiveSet,
             sort_by_energy!(liveset)
             culled = liveset.walkers[1]
         end
+        # The live count the step culls from (the count its charge uses); recorded
+        # beside log_compression so that a ledger converts between the compression
+        # conventions exactly, tie blocks and short refills included
+        n_live_row = length(liveset.walkers)
         step_ret = nested_sampling_step!(liveset, ns_params, mc_routine; ns_iteration=i)
         iter, emax, liveset, ns_params = step_ret[1], step_ret[2], step_ret[3], step_ret[4]
         # Serial atomistic steps additionally return the per-cull log-compression
@@ -1530,6 +1579,7 @@ function nested_sampling(liveset::AbstractLiveSet,
                 # value, and the first accepted row is the first push, so the
                 # column can be added lazily without backfilling.
                 df[!, :log_compression] = Float64[]
+                df[!, :n_live] = Int[]
             end
             if record_move_rates
                 # Snapshot-differenced per-iteration deltas plus the adapted
@@ -1540,14 +1590,14 @@ function nested_sampling(liveset::AbstractLiveSet,
                 rate_row = (snap .- can_rate_prev..., ns_params.step_size)
                 can_rate_prev = snap
                 push!(df, observables === nothing ?
-                    (iter, emax.val, log_t, rate_row...) :
-                    (iter, emax.val, log_t, rate_row...,
+                    (iter, emax.val, log_t, n_live_row, rate_row...) :
+                    (iter, emax.val, log_t, n_live_row, rate_row...,
                      (Float64(f(culled.configuration)) for (_, f) in observables)...))
             else
                 row = observables === nothing ? (iter, emax.val) :
                     (iter, emax.val,
                      (Float64(f(culled.configuration)) for (_, f) in observables)...)
-                push!(df, log_t === missing ? row : (row..., log_t))
+                push!(df, log_t === missing ? row : (row..., log_t, n_live_row))
             end
             dead_point_callback === nothing || dead_point_callback(iter, culled)
         end
@@ -1928,13 +1978,13 @@ highest-Ω walker, record (Ω, E, N), replace with a decorrelated clone.
 
 - `stop_on_stall::Bool=false`: When true and `fail_count` reaches
   `allowed_fail_count`, warn once and return the partial ledger and the
-  intact live set (`fail_count` stays at threshold); otherwise the run warns
-  and continues.
+  intact live set (`fail_count` stays at threshold); the default keeps the
+  shipped warn-and-continue behavior byte-identically.
 - `record_move_rates::Bool=false`: When true the ledger gains the twelve
   per-iteration lattice acceptance columns (kernel key order,
   `_LATTICE_MOVE_RATE_COLUMNS`), snapshot-differenced from the run totals;
-  failed iterations fold into the next recorded row. When false, these
-  optional columns are omitted.
+  failed iterations fold into the next recorded row. The default keeps the
+  shipped schema.
 
 # Returns
 - `df::DataFrame`: Columns `[:iter, :omega, :energy, :num_particles]`.
@@ -1953,8 +2003,6 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
                                          dead_point_callback::Union{Nothing,Function}=nothing,
                                          stop_on_stall::Bool=false,
                                          record_move_rates::Bool=false)
-    Random.seed!(gc_params.random_seed)
-
     # Initialize walkers with random microstates
     _init_gc_walkers!(liveset, gc_params)
     _warn_perturbation_scale(liveset, gc_params.energy_perturbation)
@@ -1976,7 +2024,7 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
     empty!(gc_params.move_stats)
 
     df = DataFrame(iter=Int[], omega=Float64[], energy=Float64[],
-                   num_particles=Int[], energy_convention=String[])
+                   num_particles=Int[])
     if is_multicomponent
         for c in 1:n_components
             df[!, Symbol("num_particles_$c")] = Int[]
@@ -2054,10 +2102,10 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
             end
             component_row = is_multicomponent ? Tuple(component_counts) : ()
             if observables === nothing
-                push!(df, (iter, omega.val, energy.val, n_par, "bare_E_v1",
+                push!(df, (iter, omega.val, energy.val, n_par,
                            component_row..., lat_rate_row...))
             else
-                push!(df, (iter, omega.val, energy.val, n_par, "bare_E_v1",
+                push!(df, (iter, omega.val, energy.val, n_par,
                            component_row..., lat_rate_row...,
                            (Float64(f(culled.configuration)) for (_, f) in observables)...))
             end
@@ -2377,8 +2425,6 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
                                               dead_point_callback::Union{Nothing,Function}=nothing,
                                               stop_on_stall::Bool=false,
                                               record_move_rates::Bool=false)
-    Random.seed!(params.random_seed)
-
     # Initialize walkers as i.i.d. draws from the Bernoulli(z0/(1+z0)) prior
     _init_ideal_gas_ref_walkers!(liveset, params)
     _warn_perturbation_scale(liveset, params.energy_perturbation)
@@ -2396,8 +2442,7 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
     # cluster-move configuration above
     empty!(params.move_stats)
 
-    df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[],
-                   energy_convention=String[])
+    df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[])
     if record_move_rates
         for name in _LATTICE_MOVE_RATE_COLUMNS
             df[!, name] = Int[]
@@ -2454,9 +2499,9 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
                 lat_rate_row = ()
             end
             if observables === nothing
-                push!(df, (iter, emax.val, n_par, "bare_E_v1", lat_rate_row...))
+                push!(df, (iter, emax.val, n_par, lat_rate_row...))
             else
-                push!(df, (iter, emax.val, n_par, "bare_E_v1", lat_rate_row...,
+                push!(df, (iter, emax.val, n_par, lat_rate_row...,
                            (Float64(f(culled.configuration)) for (_, f) in observables)...))
             end
             dead_point_callback === nothing || dead_point_callback(iter, culled)
@@ -2506,7 +2551,7 @@ the shape of the serial random-walk step (plateau-aware tie eviction included,
 with refill walks running the reflective kernel below the plateau), with the
 replacement clone drawn from the survivors and decorrelated through
 `MC_galilean_walk!`. Returns the serial steps' five-value shape, so the driver
-records `log_compression` as usual.
+records `log_compression` and `n_live` as usual.
 """
 function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCGalileanWalk; ns_iteration::Int=0)
     sort_by_energy!(liveset)
@@ -2555,7 +2600,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
         update_iter!(liveset)
         ns_params.fail_count = 0
         iter = liveset.walkers[1].iter
-        log_t = log(n_live / (n_live + 1))
+        log_t = _ordinary_cull_log_t(n_live, ns_params.compression)
     else
         emax = missing
         ns_params.fail_count += 1
@@ -2762,6 +2807,12 @@ default keeps the energy-sorted construction); both enter the post-run reduction
   scalar's law rather than at the ground-state sector; see the stall contract of
   `ideal_gas_referenced_nested_sampling`.
 
+- `compression::Symbol`: The convention charged for an ordinary cull into the
+  `log_compression` column, `:geometric` (the default, `-1/n_live`, the mean of `ln t`
+  for `t ~ Beta(n_live, 1)`) or `:mean` (`log(n_live/(n_live + 1))`, the historical
+  value); plateau-tie evictions charge `log((n_live - 1)/n_live)` under both.
+  Bookkeeping only: no walk, acceptance or ordering decision reads it. See
+  `NestedSamplingParameters` and `ωᵢ` in `AnalysisTools`.
 Two fields carried by sibling parameter structs are deliberately absent. No
 `energy_perturbation`: exact energy ties are handled by the plateau-aware eviction
 machinery, and perturbing recorded energies would break the exactly-zero closed-form
@@ -2785,6 +2836,7 @@ mutable struct AtomisticIGRefGCNSParameters <: SamplingParameters
     move_stats::Dict{Symbol,Int}
     n_max::Int64
     chemical_potential::typeof(0.0u"eV")
+    compression::Symbol
 end
 
 """
@@ -2793,7 +2845,7 @@ end
         initial_step_size=0.5, step_size=0.5, step_size_lo=0.01, step_size_up=2.0,
         accept_range=(0.25, 0.75), fail_count=0, allowed_fail_count=100,
         plateau_refill_target=0, refill_fail_budget=0, move_stats=Dict{Symbol,Int}(),
-        n_max=typemax(Int64), chemical_potential=0.0u"eV")
+        n_max=typemax(Int64), chemical_potential=0.0u"eV", compression=:geometric)
 
 Convenience constructor for `AtomisticIGRefGCNSParameters`. `reference_activity` (z0)
 must be positive; choose it so z0V sits near the particle-number range of interest, as
@@ -2820,7 +2872,9 @@ function AtomisticIGRefGCNSParameters(;
     move_stats::Dict{Symbol,Int}=Dict{Symbol,Int}(),
     n_max::Int64=typemax(Int64),
     chemical_potential::typeof(0.0u"eV")=0.0u"eV",
+    compression::Symbol=:geometric,
 )
+    _check_compression(compression)
     if reference_activity <= 0.0u"Å^-3"
         throw(ArgumentError("reference_activity must be positive"))
     end
@@ -2839,7 +2893,7 @@ function AtomisticIGRefGCNSParameters(;
         mc_steps, reference_activity, species,
         initial_step_size, step_size, step_size_lo, step_size_up, accept_range,
         fail_count, allowed_fail_count, plateau_refill_target, refill_fail_budget, move_stats,
-        n_max, chemical_potential,
+        n_max, chemical_potential, compression,
     )
 end
 
@@ -3226,7 +3280,7 @@ function nested_sampling_step!(liveset::AtomWalkers,
         update_iter!(liveset)
         params.fail_count = 0
         iter = liveset.walkers[1].iter
-        log_t = log(n_live / (n_live + 1))
+        log_t = _ordinary_cull_log_t(n_live, params.compression)
     else
         emax = missing
         num_particles = missing
@@ -3365,7 +3419,7 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers,
         update_iter!(liveset)
         params.fail_count = 0
         iter = liveset.walkers[1].iter
-        log_t = log(n_live / (n_live + 1))
+        log_t = _ordinary_cull_log_t(n_live, params.compression)
     else
         emax = missing
         num_particles = missing
@@ -3526,7 +3580,7 @@ compression bookkeeping stays exact either way, since every charge uses the actu
 live count).
 
 # Returns
-- `df::DataFrame`: Columns `[:iter, :emax, :num_particles, :log_compression]`, plus
+- `df::DataFrame`: Columns `[:iter, :emax, :num_particles, :log_compression, :n_live]`, plus
   `:omega` (the culled walker's Ω = E − μN) under a nonzero `chemical_potential`, plus
   the acceptance columns when requested, plus one column per requested observable.
   Zero-accept runs return the schema with no rows.
@@ -3569,7 +3623,7 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
     # A nonzero chemical potential adds the :omega column (the culled walker's
     # Ω = E − μN, the ordering scalar); the default schema is unchanged
     omega_active = !iszero(mu)
-    df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[], log_compression=Float64[])
+    df = DataFrame(iter=Int[], emax=Float64[], num_particles=Int[], log_compression=Float64[], n_live=Int[])
     omega_active && (df[!, :omega] = Float64[])
     rate_cols = _move_rate_columns(mc_routine)
     if record_move_rates
@@ -3608,6 +3662,8 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
             culled = liveset.walkers[1]
         end
 
+        # the live count the step culls from, recorded beside log_compression
+        n_live_row = length(liveset.walkers)
         iter, emax, n_par, liveset, params, log_t = nested_sampling_step!(
             liveset, params, mc_routine; ns_iteration=i, z0V=z0V)
 
@@ -3645,9 +3701,9 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
             # values, so it equals the ceiling the step enforced bit-for-bit
             omega_row = omega_active ? ((emax - mu * n_par).val,) : ()
             if observables === nothing
-                push!(df, (iter, emax.val, n_par, log_t, omega_row..., rate_row...))
+                push!(df, (iter, emax.val, n_par, log_t, n_live_row, omega_row..., rate_row...))
             else
-                push!(df, (iter, emax.val, n_par, log_t, omega_row..., rate_row...,
+                push!(df, (iter, emax.val, n_par, log_t, n_live_row, omega_row..., rate_row...,
                            (Float64(f(culled.configuration)) for (_, f) in observables)...))
             end
             dead_point_callback === nothing || dead_point_callback(iter, culled)

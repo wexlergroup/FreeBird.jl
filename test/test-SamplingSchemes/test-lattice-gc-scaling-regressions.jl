@@ -84,7 +84,7 @@
         live_N = [Int(sum(w.configuration.components[1]))
                   for w in ls_out.walkers]
         s = gc_thermodynamic_stats_ideal_ref(df, 16, 1.0, [cap_mu], [cap_T],
-            64; ω0=65 / 64, live_emax=live_E, live_numbers=live_N)
+            64; ω0=65 / 64, compression=:mean, live_emax=live_E, live_numbers=live_N)  # compression keyword: fixture on the historical mean convention (compression=:mean)
         return abs(s.logXi[1, 1] - cap_lnXi), abs(s.mean_N[1, 1] - cap_meanN)
     end
 

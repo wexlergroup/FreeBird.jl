@@ -10,7 +10,7 @@ using CSV, Arrow
 using Unitful
 
 export read_output
-export ωᵢ, log_ωᵢ, partition_function, internal_energy, cv
+export ωᵢ, partition_function, internal_energy, cv
 export gc_thermodynamic_stats
 export gc_thermodynamic_stats_fixed_N
 export microcanonical_entropy, caloric_derivatives, inflection_transitions
@@ -36,43 +36,106 @@ function read_output(filename::String)
     return DataFrame(data)
 end
 
+# Compression conventions of the iteration-based weights. An ordinary cull from K live
+# walkers leaves the fraction t ~ Beta(K, 1) of the enclosed prior volume: :geometric takes
+# ln X_i = i E[ln t] = -i/K (Skilling), :mean takes X_i = E[t]^i = (K/(K+1))^i (the historical
+# formula). The sampler-side field of the same name lives on the serial atomistic parameter
+# structs in SamplingSchemes; this module keeps its own guard because it loads after them.
+const _COMPRESSION_CONVENTIONS = (:geometric, :mean)
+
+function _check_compression(compression::Symbol)
+    compression in _COMPRESSION_CONVENTIONS || throw(ArgumentError(
+        "compression must be :geometric or :mean (got :$compression)"))
+    return compression
+end
+
+# (log prefactor, log ratio) of the iteration-based shells: shell i carries
+# log ω_i = log ω0 + log_pref + i * log_r. Under :mean the two values are the operands the
+# previous inline expressions used, so the :mean arithmetic is unchanged operand for operand.
+function _shell_law(n_walkers::Int, n_cull::Int, compression::Symbol)
+    _check_compression(compression)
+    if compression === :mean
+        return log(n_cull / (n_walkers + n_cull)), log(n_walkers / (n_walkers + n_cull))
+    end
+    c = n_cull / n_walkers
+    return log(expm1(c)), -c
+end
+
+# The closure idiom of the mean convention, ω0 = (K + n_cull)/K, undoes that convention's shell
+# offset; under :geometric the shells and the live tail already close to one at ω0 = 1, and the
+# idiom inflates the total mass to 1 + (1 - X_n)/K (about 1/K nats in a log evidence). Callers that
+# moved to the new default without dropping the idiom get one warning per reduction.
+function _warn_geometric_omega0(ω0::Float64, n_walkers::Int, n_cull::Int)
+    if ω0 == (n_walkers + n_cull) / n_walkers
+        @warn "ω0 = (n_walkers + n_cull)/n_walkers is the closure idiom of compression=:mean; under " *
+              "compression=:geometric the shells and the live tail close to one at ω0 = 1, and this " *
+              "ω0 inflates the total prior mass by about 1/n_walkers"
+    end
+    return nothing
+end
+
 """
-    ωᵢ(iters::Vector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
+    ωᵢ(iters::Vector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0,
+       compression::Symbol=:geometric)
 
 Calculates the \$\\omega\$ factors for the given number of iterations and walkers.
 The \$\\omega\$ factors account for the fractions of phase-space volume sampled during
-each nested sampling iteration, defined as:
-```math
-\\omega_i = \\frac{C}{K+C} \\left(\\frac{K}{K+C}\\right)^{i-1}
-```
-where \$K\$ is the number of walkers, \$C\$ is the number of culled walkers, 
-and \$i\$ is the iteration number.
+each nested sampling iteration. Two conventions exist for the prior mass \$X_i\$ that
+remains after \$i\$ iterations of \$C\$ culls from \$K\$ walkers:
+
+- `compression=:geometric` (the default), the mean of \$\\ln X_i\$:
+  ```math
+  \\ln X_i = -\\frac{iC}{K}, \\qquad \\omega_i = X_{i-1} - X_i = e^{-iC/K}\\left(e^{C/K} - 1\\right),
+  ```
+  Skilling's convention (Bayesian Analysis 1, 833 (2006)): for \$C = 1\$ each cull leaves
+  the fraction \$t \\sim \\mathrm{Beta}(K, 1)\$ of the enclosed volume, with
+  \$\\mathbb{E}[\\ln t] = -1/K\$. The shells \$\\omega_1, \\ldots, \\omega_n\$ sum to
+  \$\\omega_0 (1 - X_n)\$, so with the default \$\\omega_0 = 1\$ they close to one with the
+  live tail \$X_n\$.
+- `compression=:mean`, the mean of \$X_i\$ (for \$C = 1\$; the general form below is the historical formula):
+  ```math
+  X_i = \\left(\\frac{K}{K+C}\\right)^i, \\qquad \\omega_i = \\frac{C}{K+C} \\left(\\frac{K}{K+C}\\right)^i,
+  ```
+  the historical formula (\$\\omega_i = X_i - X_{i+1}\$, which the conventional
+  \$\\omega_0 = (K+C)/K\$ turns into \$X_{i-1} - X_i\$). It reproduces every reduction made
+  before the keyword existed bit for bit.
+
+For \$C = 1\$ the two differ in \$\\ln X_i\$ by \$i\\ln(K/(K+1)) + i/K = i/(2K^2) - i/(3K^3) +
+\\ldots\$, positive at every \$i\$. With the mean shrinkage the partition-function estimate
+is unbiased conditional on the recorded energies, but over repeated runs the recorded
+energies and the realized compressions are correlated, and the expectation of \$\\ln Z\$
+exceeds the truth by about \$i_{\\mathrm{dom}}/(2K^2)\$ (of order \$D/(2K)\$ for a run of depth
+\$D\$ nats whose weight sits near its end); the geometric shrinkage removes that first-order
+term and is the center of a shell-compression bootstrap that redraws the shrinkage factors
+as \$\\ln t_i = \\ln u_i / K\$. Both branches return
+linear weights, which underflow to `0.0` once \$iC/K\$ exceeds about 745; the
+thermodynamic-stats functions assemble their weights in log space for that reason.
 
 # Arguments
 - `iters::Vector{Int}`: The iteration numbers.
 - `n_walkers::Int`: The number of walkers.
 - `n_cull::Int`: The number of culled walkers. Default is 1.
 - `ω0::Float64`: The initial \$\\omega\$ factor. Default is 1.0.
+- `compression::Symbol`: `:geometric` (default) or `:mean`; any other value throws an
+  `ArgumentError`. For `n_cull > 1` the geometric branch charges `-n_cull/n_walkers` per
+  iteration, the first-order expansion of the mean branch's `log(K/(K+C))`; neither branch
+  is the exact expectation of `ln t` for a simultaneous multi-walker cull (that is
+  \$\\psi(K-C+1) - \\psi(K+1)\$). Passing the mean convention's closure idiom
+  `ω0 = (K+C)/K` under `:geometric` inflates the total mass by about `1/K` and emits a warning.
 
 # Returns
 - A vector of \$\\omega\$ factors.
 """
-function ωᵢ(iters::AbstractVector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0)
-    ωi = ω0 * (n_cull/(n_walkers+n_cull)) *
-          (n_walkers/(n_walkers+n_cull)).^(iters .- 1)
-    return ωi
-end
-
-"""
-    log_ωᵢ(iters, n_walkers; n_cull=1, ω0=1.0)
-
-Build the one-based nested-sampling shell weights directly in log space,
-avoiding underflow in long runs.
-"""
-function log_ωᵢ(iters::AbstractVector{Int}, n_walkers::Int;
-                n_cull::Int=1, ω0::Float64=1.0)
-    return (log(ω0) + log(n_cull / (n_walkers + n_cull))) .+
-           (iters .- 1) .* log(n_walkers / (n_walkers + n_cull))
+function ωᵢ(iters::AbstractVector{Int}, n_walkers::Int; n_cull::Int=1, ω0::Float64=1.0,
+            compression::Symbol=:geometric)
+    _check_compression(compression)
+    if compression === :mean
+        ωi = ω0 * (n_cull/(n_walkers+n_cull)) * (n_walkers/(n_walkers+n_cull)).^iters
+        return ωi
+    end
+    _warn_geometric_omega0(ω0, n_walkers, n_cull)
+    c = n_cull / n_walkers
+    return ω0 .* exp.(log(expm1(c)) .- iters .* c)
 end
 
 """
@@ -85,11 +148,18 @@ methods. Row `i`'s shell is
 \\omega_i = X_{i-1} - X_i, \\qquad X_i = \\omega_0 \\prod_{j \\le i} t_j,
 ```
 where \$t_j = \\exp(\\texttt{log\\_compression}_j)\$ is the compression factor charged
-for cull \$j\$ (`n/(n+1)` for an ordinary cull from `n` live walkers, `(n-1)/n` for a
-plateau tie evicted without replacement). For a tie-free fixed-`K` ledger the column is
-uniformly `log(K/(K+1))` and this method with the default `ω0 = 1.0` agrees with the
-one-based iteration method `ωᵢ(1:n, K)` up to floating-point evaluation order.
-Ledgers containing plateau tie blocks
+for cull \$j\$: for an ordinary cull from `n` live walkers `e^{-1/n}` under the serial
+steps' default `compression=:geometric` or `n/(n+1)` under `:mean`, and `(n-1)/n` for a
+plateau tie evicted without replacement under both (see `NestedSamplingParameters`). The
+ledger's `n_live` column holds the live count each cull was made from, so a ledger converts
+between the conventions exactly: replace each ordinary row's charge by the other
+convention's value at its `n_live` and keep the tie rows. For a tie-free fixed-`K` ledger
+the column is uniformly `-1/K` (`:geometric`) or `log(K/(K+1))` (`:mean`), and this method
+with the default `ω0 = 1.0` agrees with the iteration-based method as `ωᵢ(1:n, K)` or
+`ωᵢ(1:n, K; ω0=(K+1)/K, compression=:mean)` up to floating-point evaluation
+order: here `ω0` is the total prior mass before the first cull, whereas the `(K+1)/K`
+factor conventionally passed to the iteration-based method only undoes that method's
+iteration-count offset — do not pass it here. Ledgers containing plateau tie blocks
 REQUIRE this method, since the iteration-based weights assume a constant per-cull
 compression and over-compress plateaus.
 
@@ -252,6 +322,7 @@ where \$\\mathrm{dof}\$ is the degrees of freedom, \$k_B\$ is the Boltzmann cons
 - `n_walkers::Int`: The number of walkers.
 - `n_cull::Int`: The number of culled walkers. Default is 1.
 - `ω0::Float64`: The initial \$\\omega\$ factor. Default is 1.0.
+- `compression::Symbol`: Shell convention passed to `ωᵢ`, `:geometric` (default) or `:mean`.
 
 # Returns
 - A vector of constant-volume heat capacities.
@@ -261,8 +332,9 @@ function cv(df::DataFrame,
             dof::Int, n_walkers::Int; 
             n_cull::Int=1, 
             ω0::Float64=1.0, 
-            kb::Float64=8.617333262e-5)
-    ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
+            kb::Float64=8.617333262e-5,
+            compression::Symbol=:geometric)
+    ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0, compression=compression)
     Ei = df.emax .- minimum(df.emax)
     cvs = Vector{Float64}(undef, length(βs))
     Threads.@threads for (i, b) in collect(enumerate(βs))
@@ -340,34 +412,22 @@ function gc_thermodynamic_stats(β::Float64,
                                  numbers::Vector{Int},
                                  μ::Float64;
                                  kb::Float64=8.617333262e-5)
-    return _gc_stats_logw(β, log.(ωi), grand_energies, energies, numbers, μ;
-                          kb=kb)
-end
-
-function _gc_stats_logw(β::Float64,
-                        log_ωi::Vector{Float64},
-                        grand_energies::Vector{Float64},
-                        energies::Vector{Float64},
-                        numbers::Vector{Int},
-                        μ::Float64;
-                        kb::Float64=8.617333262e-5)
-    n = length(log_ωi)
+    n = length(ωi)
     if n != length(grand_energies) || n != length(energies) || n != length(numbers)
         throw(DimensionMismatch("All input vectors must have the same length"))
     end
     if n == 0
-        return _gc_stats_nan()
+        return NaN, NaN, NaN
     end
 
     # Log-sum-exp for numerical stability
-    log_terms = [log_ωi[i] - β * grand_energies[i] for i in 1:n]
+    log_terms = [log(ωi[i]) - β * grand_energies[i] for i in 1:n]
     max_log = maximum(log_terms)
 
     z = 0.0
     u = 0.0   # ⟨E⟩
     u2 = 0.0  # ⟨E²⟩
     n_sum = 0.0  # ⟨N⟩
-    n2_sum = 0.0 # ⟨N²⟩
     en_sum = 0.0 # ⟨EN⟩
 
     for i in 1:n
@@ -376,103 +436,49 @@ function _gc_stats_logw(β::Float64,
         u += w * energies[i]
         u2 += w * energies[i]^2
         n_sum += w * numbers[i]
-        n2_sum += w * numbers[i]^2
         en_sum += w * energies[i] * numbers[i]
     end
 
     if z == 0.0
-        return _gc_stats_nan()
+        return NaN, NaN, NaN
     end
 
     u /= z
     u2 /= z
     n_avg = n_sum / z
-    n2_avg = n2_sum / z
     en_avg = en_sum / z
 
     var_e = u2 - u^2
-    var_n = n2_avg - n_avg^2
     cov_en = en_avg - u * n_avg
 
-    cv, c_omega, c_N = _gc_heat_capacities(
-        var_e, cov_en, var_n, n_avg, β, μ, kb)
-
-    return (mean_E=u, cv=cv, mean_N=n_avg, c_omega=c_omega,
-            c_N=c_N, var_N=var_n)
-end
-
-function _gc_heat_capacities(var_e::Float64, cov_en::Float64,
-                             var_n::Float64, n_avg::Float64,
-                             β::Float64, μ::Float64, kb::Float64)
     cv = kb * β^2 * (var_e - μ * cov_en)
-    c_omega = kb * β^2 * (var_e - 2μ * cov_en + μ^2 * var_n)
-    n_scale = max(1.0, abs(n_avg))
-    c_N = var_n > 1e-12 * n_scale^2 ?
-          kb * β^2 * (var_e - cov_en^2 / var_n) :
-          kb * β^2 * var_e
-    return cv, c_omega, c_N
-end
 
-_gc_stats_nan() =
-    (mean_E=NaN, cv=NaN, mean_N=NaN, c_omega=NaN, c_N=NaN, var_N=NaN)
-
-function _warn_if_reweighting(df::DataFrame, Es::Vector{Float64},
-                              Ns::Vector{Int}, μ::Float64)
-    (isempty(Es) || !hasproperty(df, :omega)) && return nothing
-    ω_recorded = collect(Float64, df.omega)
-    length(ω_recorded) == length(Es) || return nothing
-    resid = maximum(abs.(ω_recorded .- (Es .- μ .* Ns)); init=0.0)
-    tol = 1e-6 * max(1.0, maximum(abs, Es; init=1.0))
-    resid <= tol && return nothing
-    k = findfirst(!=(0), Ns)
-    μ_run = k === nothing ? nothing : (Es[k] - ω_recorded[k]) / Ns[k]
-    @warn "gc_thermodynamic_stats: requested μ differs from the sampled μ; " *
-          "post-hoc reweighting is supported but loses efficiency as the " *
-          "difference grows." requested_μ=μ μ_run=μ_run maxlog=1
-    return nothing
-end
-
-function _warn_if_reweighting(df::DataFrame, Es::Vector{Float64},
-                              Ns::Matrix{Int}, μs::Vector{Float64})
-    (isempty(Es) || !hasproperty(df, :omega)) && return nothing
-    ω_recorded = collect(Float64, df.omega)
-    length(ω_recorded) == length(Es) || return nothing
-    grand_es = Es .- Ns * μs
-    resid = maximum(abs.(ω_recorded .- grand_es); init=0.0)
-    tol = 1e-6 * max(1.0, maximum(abs, Es; init=1.0))
-    resid <= tol && return nothing
-    @warn "gc_thermodynamic_stats: requested chemical potentials differ " *
-          "from those represented by the sampled grand potentials; " *
-          "post-hoc reweighting is supported but loses efficiency as the " *
-          "difference grows." requested_chemical_potentials=μs maxlog=1
-    return nothing
+    return u, cv, n_avg
 end
 
 """
     gc_thermodynamic_stats(β, ωi, grand_energies, energies,
                            component_numbers, chemical_potentials; kb=...)
 
-Multi-component form of [`gc_thermodynamic_stats`](@ref). Rows of
-`component_numbers` are samples and columns are species. The fixed-chemical-
-potential heat capacity is
-
-    C = k_B β² [Var(E) − Σᶜ μᶜ Cov(E, Nᶜ)].
-
-Returns `(mean_E, Cv, mean_N)`, where `mean_N` is a vector in component order.
+Compute grand-canonical thermodynamic averages for multiple lattice
+components. Rows of `component_numbers` are samples and columns are species.
+The returned `mean_N` vector follows component order.
 """
-function gc_thermodynamic_stats(β::Float64,
-                                 ωi::AbstractVector{<:Real},
-                                 grand_energies::AbstractVector{<:Real},
-                                 energies::AbstractVector{<:Real},
-                                 component_numbers::AbstractMatrix{<:Integer},
-                                 chemical_potentials::AbstractVector{<:Real};
-                                 kb::Float64=8.617333262e-5)
+function gc_thermodynamic_stats(
+    β::Float64,
+    ωi::AbstractVector{<:Real},
+    grand_energies::AbstractVector{<:Real},
+    energies::AbstractVector{<:Real},
+    component_numbers::AbstractMatrix{<:Integer},
+    chemical_potentials::AbstractVector{<:Real};
+    kb::Float64=8.617333262e-5,
+)
     n = length(ωi)
-    C = length(chemical_potentials)
     n == length(grand_energies) == length(energies) ==
         size(component_numbers, 1) || throw(DimensionMismatch(
             "weights, grand energies, energies, and particle-count rows " *
             "must have the same length"))
+    C = length(chemical_potentials)
     size(component_numbers, 2) == C || throw(DimensionMismatch(
         "component_numbers has $(size(component_numbers, 2)) columns but " *
         "$C chemical potentials were supplied"))
@@ -502,10 +508,9 @@ function gc_thermodynamic_stats(β::Float64,
     u /= z
     u2 /= z
     mean_N = n_sum ./ z
-    mean_EN = en_sum ./ z
-    var_e = u2 - u^2
-    covariances = mean_EN .- u .* mean_N
-    cv = kb * β^2 * (var_e - sum(chemical_potentials .* covariances))
+    covariances = en_sum ./ z .- u .* mean_N
+    cv = kb * β^2 * (u2 - u^2 -
+                      sum(chemical_potentials .* covariances))
     return u, cv, mean_N
 end
 
@@ -513,7 +518,8 @@ end
     gc_thermodynamic_stats(df::DataFrame, βs::Vector{Float64},
                            n_walkers::Int, μ::Float64;
                            n_cull::Int=1, ω0::Float64=1.0,
-                           kb::Float64=8.617333262e-5)
+                           kb::Float64=8.617333262e-5,
+                           compression::Symbol=:geometric)
 
 Compute grand-canonical thermodynamic stats from a GC-NS output DataFrame.
 
@@ -529,6 +535,7 @@ normalization.
 - `n_cull::Int=1`: Number of walkers culled per iteration.
 - `ω0::Float64=1.0`: Initial phase-space volume.
 - `kb::Float64`: Boltzmann constant (default: eV/K).
+- `compression::Symbol=:geometric`: Shell convention passed to `ωᵢ` (`:geometric` or `:mean`).
 
 # Returns
 - `(mean_E, Cv, mean_N)`: Vectors of ⟨E⟩, C_{V,μ}, and ⟨N⟩ at each β.
@@ -539,89 +546,52 @@ function gc_thermodynamic_stats(df::DataFrame,
                                  μ::Float64;
                                  n_cull::Int=1,
                                  ω0::Float64=1.0,
-                                 live_energies=nothing,
-                                 live_numbers=nothing,
-                                 kb::Float64=8.617333262e-5)
-    log_ωi = log_ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
-    Es = collect(Float64, df.energy)
-    Ns = collect(Int, df.num_particles)
-    grand_es = Es .- μ .* Ns
-    _warn_if_reweighting(df, Es, Ns, μ)
+                                 kb::Float64=8.617333262e-5,
+                                 compression::Symbol=:geometric)
+    ωi = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0, compression=compression)
+    grand_es = df.omega
+    Es = df.energy
+    Ns = df.num_particles
 
-    if live_energies !== nothing && !isempty(live_energies)
-        live_numbers === nothing &&
-            throw(ArgumentError("live_energies given without live_numbers"))
-        length(live_energies) == length(live_numbers) ||
-            throw(DimensionMismatch(
-                "live_energies and live_numbers must have the same length"))
-        n_iters = isempty(df.iter) ? 0 : maximum(df.iter)
-        log_tail = n_iters * log(n_walkers / (n_walkers + n_cull)) -
-                   log(n_walkers)
-        Es_live = collect(Float64, live_energies)
-        Ns_live = collect(Int, live_numbers)
-        log_ωi = vcat(log_ωi, fill(log_tail, length(Es_live)))
-        grand_es = vcat(grand_es, Es_live .- μ .* Ns_live)
-        Es = vcat(Es, Es_live)
-        Ns = vcat(Ns, Ns_live)
-    end
-
-    nβ = length(βs)
-    mean_Es = Vector{Float64}(undef, nβ)
-    Cvs = Vector{Float64}(undef, nβ)
-    mean_Ns = Vector{Float64}(undef, nβ)
-    c_omegas = Vector{Float64}(undef, nβ)
-    c_Ns = Vector{Float64}(undef, nβ)
-    var_Ns = Vector{Float64}(undef, nβ)
+    mean_Es = Vector{Float64}(undef, length(βs))
+    Cvs = Vector{Float64}(undef, length(βs))
+    mean_Ns = Vector{Float64}(undef, length(βs))
 
     Threads.@threads for (i, b) in collect(enumerate(βs))
-        r = _gc_stats_logw(b, log_ωi, grand_es, Es, Ns, μ; kb=kb)
-        mean_Es[i] = r.mean_E
-        Cvs[i] = r.cv
-        mean_Ns[i] = r.mean_N
-        c_omegas[i] = r.c_omega
-        c_Ns[i] = r.c_N
-        var_Ns[i] = r.var_N
+        mean_Es[i], Cvs[i], mean_Ns[i] = gc_thermodynamic_stats(
+            b, ωi, grand_es, Es, Ns, μ; kb=kb)
     end
 
-    return (mean_E=mean_Es, cv=Cvs, mean_N=mean_Ns,
-            c_omega=c_omegas, c_N=c_Ns, var_N=var_Ns)
+    return mean_Es, Cvs, mean_Ns
 end
 
 """
     gc_thermodynamic_stats(df, βs, n_walkers, chemical_potentials; ...)
 
-Reduce a multi-component GC-NS ledger at the requested chemical potentials.
-A C-component ledger must contain
-`num_particles_1` through `num_particles_C`; the aggregate `num_particles`
-column is checked against their row-wise sum. Grand energies are reconstructed
-from each row's bare energy and component counts, so the ledger can be
-reweighted to chemical potentials other than those used during sampling.
-
-Pass both `live_energies` and `live_component_numbers` to include the remaining
-live-set prior mass. `live_component_numbers` must have one row per live energy
-and one column per component. Shell and live-tail weights are built in log space
-to avoid underflow in long runs. The returned `mean_N` is a
+Reduce a multi-component GCNS ledger. A C-component ledger must contain
+`num_particles_1` through `num_particles_C`; `num_particles` is checked
+against their row-wise sum. The returned `mean_N` is a
 `length(βs) × C` matrix in component order.
 """
-function gc_thermodynamic_stats(df::DataFrame,
-                                 βs::Vector{Float64},
-                                 n_walkers::Int,
-                                 chemical_potentials::AbstractVector{<:Real};
-                                 n_cull::Int=1,
-                                 ω0::Float64=1.0,
-                                 live_energies=nothing,
-                                 live_component_numbers=nothing,
-                                 kb::Float64=8.617333262e-5)
+function gc_thermodynamic_stats(
+    df::DataFrame,
+    βs::Vector{Float64},
+    n_walkers::Int,
+    chemical_potentials::AbstractVector{<:Real};
+    n_cull::Int=1,
+    ω0::Float64=1.0,
+    kb::Float64=8.617333262e-5,
+    compression::Symbol=:geometric,
+)
     mus = collect(Float64, chemical_potentials)
-    C = length(mus)
-    C > 0 || throw(ArgumentError(
+    isempty(mus) && throw(ArgumentError(
         "chemical_potentials must contain at least one component"))
     all(isfinite, mus) || throw(ArgumentError(
         "all chemical_potentials must be finite"))
-    count_names = [Symbol("num_particles_$c") for c in 1:C]
+    count_names = [Symbol("num_particles_$c") for c in eachindex(mus)]
     missing_names = setdiff(count_names, Symbol.(names(df)))
     isempty(missing_names) || throw(ArgumentError(
-        "multi-component GC-NS ledger is missing columns " *
+        "multi-component GCNS ledger is missing columns " *
         "$(join(string.(missing_names), ", "))"))
 
     component_numbers = hcat((Vector{Int}(df[!, name])
@@ -630,43 +600,17 @@ function gc_thermodynamic_stats(df::DataFrame,
     all(totals .== df.num_particles) || throw(ArgumentError(
         "num_particles must equal the row-wise sum of the component counts"))
 
-    log_weights = log_ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0)
+    weights = ωᵢ(df.iter, n_walkers; n_cull=n_cull, ω0=ω0,
+                 compression=compression)
     energies = collect(Float64, df.energy)
     grand_energies = energies .- component_numbers * mus
-    _warn_if_reweighting(df, energies, component_numbers, mus)
-
-    if live_energies !== nothing || live_component_numbers !== nothing
-        live_energies === nothing && throw(ArgumentError(
-            "live_component_numbers given without live_energies"))
-        live_component_numbers === nothing && throw(ArgumentError(
-            "live_energies given without live_component_numbers"))
-        live_counts = Matrix{Int}(live_component_numbers)
-        live_es = collect(Float64, live_energies)
-        size(live_counts, 1) == length(live_es) || throw(DimensionMismatch(
-            "live_energies and live_component_numbers must have the same " *
-            "number of rows"))
-        size(live_counts, 2) == C || throw(DimensionMismatch(
-            "live_component_numbers has $(size(live_counts, 2)) columns, " *
-            "expected $C"))
-        n_iters = isempty(df.iter) ? 0 : maximum(df.iter)
-        log_tail = n_iters * log(n_walkers / (n_walkers + n_cull)) -
-                   log(n_walkers)
-        log_weights = vcat(log_weights, fill(log_tail, length(live_es)))
-        energies = vcat(energies, live_es)
-        component_numbers = vcat(component_numbers, live_counts)
-        grand_energies = vcat(
-            grand_energies, live_es .- live_counts * mus)
-    end
-
-    weights = isempty(log_weights) ? Float64[] :
-        exp.(log_weights .- maximum(log_weights))
     mean_Es = Vector{Float64}(undef, length(βs))
     Cvs = Vector{Float64}(undef, length(βs))
-    mean_Ns = Matrix{Float64}(undef, length(βs), C)
+    mean_Ns = Matrix{Float64}(undef, length(βs), length(mus))
     Threads.@threads for (i, b) in collect(enumerate(βs))
         mean_Es[i], Cvs[i], mean_N = gc_thermodynamic_stats(
-            b, weights, grand_energies, energies, component_numbers,
-            mus; kb=kb)
+            b, weights, grand_energies, energies, component_numbers, mus;
+            kb=kb)
         mean_Ns[i, :] .= mean_N
     end
     return mean_Es, Cvs, mean_Ns
@@ -679,7 +623,8 @@ end
                                      n_cull::Int=1, ω0::Float64=1.0,
                                      live_emax::Union{Nothing,Vector{Float64}}=nothing,
                                      live_numbers::Union{Nothing,Vector{Int}}=nothing,
-                                     kb::Float64=8.617333262e-5)
+                                     kb::Float64=8.617333262e-5,
+                                     compression::Symbol=:geometric)
 
 Assemble grand-canonical thermodynamics on a (μ, T) grid from a single
 ideal-gas-referenced nested sampling run (`ideal_gas_referenced_nested_sampling`
@@ -696,19 +641,21 @@ target chemical potential μ and temperature T is then
 ```
 
 where the sum runs over culled walkers (plus, when `live_emax`/`live_numbers`
-are given, the surviving live walkers, each with residual weight
-`(K/(K+n_cull))^{n_iters} / K` — no `ω0` factor, since `ω0` corrects the
-dead-sample shell weights only). There is no thermal-wavelength factor: a
+are given, the surviving live walkers, each with residual weight `X_n / K`,
+`X_n = e^{-n_iters n_cull/K}` under `compression=:geometric` or `(K/(K+n_cull))^{n_iters}`
+under `:mean`, with no `ω0` factor, since `ω0` corrects the dead-sample shell
+weights only). There is no thermal-wavelength factor: a
 lattice gas has no momentum degrees of freedom, so `z = exp(βμ)` directly.
 All sums are evaluated with the log-sum-exp trick, and Ξ is returned as
 `log Ξ` to avoid overflow at low temperature.
 
-For a fully normalized absolute Ξ, keep the default `ω0 = 1.0` and supply the
-live-walker tail. Because `df.iter` is one-based, the first discarded shell
-has weight `n_cull/(K+n_cull)` (the `r⁰` shell); the dead weights then sum to
-`1 − (K/(K+n_cull))^{n_iters}` and the tail supplies the remainder, so `Σω = 1`
-exactly. A non-unit `ω0` scales only the discarded-shell ladder, not the live
-tail, and is retained for explicit legacy/custom reductions.
+For a fully normalized absolute Ξ supply the live-walker tail: under the default
+`compression=:geometric` the dead weights with `ω0 = 1.0` sum to `1 − X_n` and the
+tail supplies the remainder, so `Σω = 1` exactly; under `compression=:mean` the
+same closure needs `ω0 = (n_walkers + n_cull)/n_walkers`, and the default `ω0 = 1.0`
+then underestimates Ξ by a factor `K/(K+n_cull)` (see the `ωᵢ` conventions).
+Omitting the tail neglects `X_n`. Ratio observables (`mean_N`, `var_N`, `mean_U`)
+are insensitive to `ω0`.
 
 The reweighting factor `(z/z0)^{N_j}` is pure importance sampling in μ: its
 reliability at each grid point is reported by the Kish effective sample size
@@ -740,6 +687,11 @@ residual tie-breaking noise, ~δ).
 - `n_walkers::Int`: Number of walkers K used in the NS run.
 - `n_cull::Int=1`: Number of walkers culled per iteration.
 - `ω0::Float64=1.0`: Initial phase-space volume factor.
+- `compression::Symbol=:geometric`: Convention of the iteration-based shells,
+  `:geometric` (the default, `ln X_i = -i n_cull/n_walkers`) or `:mean`
+  (`X_i = (K/(K+n_cull))^i`, the historical weights); see `ωᵢ`. Under `:geometric`
+  leave `ω0 = 1.0`: the shells and the live tail then close to one exactly, and the
+  `(K+1)/K` idiom belongs to `:mean` alone.
 - `live_emax::Union{Nothing,Vector{Float64}}=nothing`: Energies of the surviving live walkers.
 - `live_numbers::Union{Nothing,Vector{Int}}=nothing`: Particle counts of the surviving live walkers.
 - `observable_cols::AbstractVector{Symbol}=Symbol[]`: Names of extra `df`
@@ -790,7 +742,8 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
                                           live_numbers::Union{Nothing,Vector{Int}}=nothing,
                                           observable_cols::AbstractVector{Symbol}=Symbol[],
                                           live_observables::Union{Nothing,AbstractDict{Symbol}}=nothing,
-                                          kb::Float64=8.617333262e-5)
+                                          kb::Float64=8.617333262e-5,
+                                          compression::Symbol=:geometric)
     if z0 <= 0.0
         throw(ArgumentError("z0 must be positive"))
     end
@@ -862,20 +815,22 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
     # β- and μ-independent per-sample log prior-volume weights, built directly
     # in log space: the linear ωᵢ underflows to 0.0 once iter ≳ 745·K/n_cull,
     # which silently zeroes the deepest (lowest-energy) samples on large lattices
+    log_pref, log_r = _shell_law(n_walkers, n_cull, compression)
+    compression === :geometric && _warn_geometric_omega0(ω0, n_walkers, n_cull)
     log_w0 = n_dead > 0 ?
-        (log(ω0) + log(n_cull / (n_walkers + n_cull))) .+
-        (Vector{Float64}(df.iter) .- 1) .*
-        log(n_walkers / (n_walkers + n_cull)) : Float64[]
+        (log(ω0) + log_pref) .+
+        Vector{Float64}(df.iter) .* log_r : Float64[]
     Es = n_dead > 0 ? Vector{Float64}(df.emax) : Float64[]
     Ns = n_dead > 0 ? Vector{Float64}(df.num_particles) : Float64[]
 
     if live_emax !== nothing && !isempty(live_emax)
-        # Residual prior volume after the last recorded iteration, split
-        # uniformly over the K surviving walkers. No ω0 factor appears here:
-        # with the normalized one-based default ω0 = 1, the dead weights sum
-        # to 1 − X_n and this residual X_n closes Σw = 1 exactly.
+        # Residual prior volume X_n after the last recorded iteration (e^{-n n_cull/K}
+        # under :geometric, (K/(K+n_cull))^n under :mean), split uniformly over the K
+        # surviving walkers. No ω0 factor here: ω0 corrects the dead-sample shell
+        # weights, not the residual volume; the dead weights sum to 1 − X_n (under
+        # :mean with ω0 = (K+n_cull)/K) and the tail closes the identity Σw = 1 exactly
         n_iters = n_dead > 0 ? maximum(df.iter) : 0
-        log_tail = n_iters * log(n_walkers / (n_walkers + n_cull)) - log(n_walkers)
+        log_tail = n_iters * log_r - log(n_walkers)
         log_w0 = vcat(log_w0, fill(log_tail, length(live_emax)))
         Es = vcat(Es, live_emax)
         Ns = vcat(Ns, Float64.(live_numbers))
@@ -917,9 +872,6 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
     N_eff = Matrix{Float64}(undef, n_mu, n_T)
     var_U = Matrix{Float64}(undef, n_mu, n_T)
     cov_UN = Matrix{Float64}(undef, n_mu, n_T)
-    cv = Matrix{Float64}(undef, n_mu, n_T)
-    c_omega = Matrix{Float64}(undef, n_mu, n_T)
-    c_N = Matrix{Float64}(undef, n_mu, n_T)
     obs_out = Dict{Symbol,Matrix{Float64}}(
         col => Matrix{Float64}(undef, n_mu, n_T) for col in observable_cols)
     p_N = Array{Float64,3}(undef, n_mu, n_T, N_max_pn + 1)
@@ -940,9 +892,6 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
             mean_U[i, j] = u_c + E_shift
             var_U[i, j] = sum(ws .* Es_c .^ 2) / sum_w - u_c^2
             cov_UN[i, j] = sum(ws .* Es_c .* Ns) / sum_w - u_c * n_avg
-            cv[i, j], c_omega[i, j], c_N[i, j] = _gc_heat_capacities(
-                var_U[i, j], cov_UN[i, j], var_N[i, j], n_avg,
-                β, μs[i], kb)
             for col in observable_cols
                 obs_out[col][i, j] = sum(ws .* As[col]) / sum_w
             end
@@ -957,7 +906,7 @@ function gc_thermodynamic_stats_ideal_ref(df::DataFrame,
 
     return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U, N_eff=N_eff,
             var_U=var_U, cov_UN=cov_UN, p_N=p_N, N_support=N_support,
-            observables=obs_out, cv=cv, c_omega=c_omega, c_N=c_N)
+            observables=obs_out)
 end
 
 
@@ -1014,8 +963,9 @@ with `N > n_max` are rejected: they cannot have come from the claimed bounded ru
 Three conventions are fixed by measurement and documented here:
 - Shell weights follow the log-compression convention of `ωᵢ(log_compression; ω0=1.0)`,
   evaluated in log space (`log ω_j = log X_{j-1} + log(1 - t_j)`) so deep ladders cannot
-  underflow (the same rationale as the iteration-based assembly above). Keep
-  `ω0 = 1` for driver-produced compression ledgers.
+  underflow (the same rationale as the iteration-based assembly above). The
+  `ω0 = (K+1)/K` convention of the iteration-based route must not be applied to
+  compression ledgers: it inflates the total prior mass by exactly `1/K`.
 - The live-set tail carries the mass `ω0·exp(Σ log_compression)` split over
   `length(live_emax)`, never over the nominal walker count: a run that ends inside a
   plateau eviction block has fewer live walkers than it started with, and splitting over
@@ -1041,8 +991,8 @@ follow-up item and out of scope here.
 - `μ_grid::AbstractVector{<:typeof(1.0u"eV")}`: Chemical potential grid (Unitful, eV),
   matching the atomistic `gc_thermodynamic_stats_fixed_N` convention.
 - `T_grid::AbstractVector{<:Unitful.Temperature}`: Temperature grid (Unitful).
-- `ω0::Float64=1.0`: Total prior mass before the first cull. Leave at 1.0 for
-  ledgers produced by the driver.
+- `ω0::Float64=1.0`: Total prior mass before the first cull. Leave at 1.0 for ledgers
+  produced by the driver; do not pass the iteration-based route's `(K+1)/K`.
 - `live_emax::Union{Nothing,Vector{Float64}}=nothing`: Energies of the surviving live walkers.
 - `live_numbers::Union{Nothing,Vector{Int}}=nothing`: Particle counts of the surviving live walkers.
 - `observable_cols::AbstractVector{Symbol}=Symbol[]`: Names of extra per-dead-point `df`
@@ -1343,6 +1293,11 @@ ladder. Passing `T0` with `mode = :kish` throws an `ArgumentError`.
   anchored modes; `nothing` means per-target `T0 = T`.
 - `n_cull::Int=1`: Number of walkers culled per iteration.
 - `ω0::Float64=1.0`: Initial phase-space volume factor.
+- `compression::Symbol=:geometric`: Convention of the iteration-based shells,
+  `:geometric` (the default, `ln X_i = -i n_cull/n_walkers`) or `:mean`
+  (`X_i = (K/(K+n_cull))^i`, the historical weights); see `ωᵢ`. Under `:geometric`
+  leave `ω0 = 1.0`: the shells and the live tail then close to one exactly, and the
+  `(K+1)/K` idiom belongs to `:mean` alone.
 - `live_emax::Union{Nothing,Vector{Float64}}=nothing`: Energies of the
   surviving live walkers.
 - `live_numbers::Union{Nothing,Vector{Int}}=nothing`: Particle counts of the
@@ -1370,7 +1325,8 @@ function gc_effective_sample_size_ideal_ref(df::DataFrame,
                                             ω0::Float64=1.0,
                                             live_emax::Union{Nothing,Vector{Float64}}=nothing,
                                             live_numbers::Union{Nothing,Vector{Int}}=nothing,
-                                            kb::Float64=8.617333262e-5)
+                                            kb::Float64=8.617333262e-5,
+                                            compression::Symbol=:geometric)
     _check_ess_mode(mode, T0)
     if z0 <= 0.0
         throw(ArgumentError("z0 must be positive"))
@@ -1398,15 +1354,16 @@ function gc_effective_sample_size_ideal_ref(df::DataFrame,
 
     # Weight assembly mirrors gc_thermodynamic_stats_ideal_ref: iteration-based
     # shell weights in log space, live tail X_n/K per walker with no ω0 factor
+    log_pref, log_r = _shell_law(n_walkers, n_cull, compression)
+    compression === :geometric && _warn_geometric_omega0(ω0, n_walkers, n_cull)
     log_w0 = n_dead > 0 ?
-        (log(ω0) + log(n_cull / (n_walkers + n_cull))) .+
-        (Vector{Float64}(df.iter) .- 1) .*
-        log(n_walkers / (n_walkers + n_cull)) : Float64[]
+        (log(ω0) + log_pref) .+
+        Vector{Float64}(df.iter) .* log_r : Float64[]
     Es = n_dead > 0 ? Vector{Float64}(df.emax) : Float64[]
     Ns = n_dead > 0 ? Vector{Float64}(df.num_particles) : Float64[]
     if live_emax !== nothing && !isempty(live_emax)
         n_iters = n_dead > 0 ? maximum(df.iter) : 0
-        log_tail = n_iters * log(n_walkers / (n_walkers + n_cull)) - log(n_walkers)
+        log_tail = n_iters * log_r - log(n_walkers)
         log_w0 = vcat(log_w0, fill(log_tail, length(live_emax)))
         Es = vcat(Es, live_emax)
         Ns = vcat(Ns, Float64.(live_numbers))
@@ -1582,8 +1539,9 @@ energy at each temperature in `T_grid`, evaluated by log-sum-exp. The discarded
 weights `ωᵢ` are built directly in log space, so deep ladders (`iter` beyond
 ~`700 · n_walkers`, where the linear-space `ωᵢ` underflows Float64) keep their
 low-energy samples. When `live_energies` is supplied, the residual prior mass
-`(K/(K+n_cull))^{n_iters}` (with `n_iters = maximum(df.iter)`) is split evenly
-among the supplied energies — the live-set tail correction. An empty
+`ω0 · X_n` (`X_n = e^{-n_iters n_cull/K}` under `compression=:geometric`,
+`(K/(K+n_cull))^{n_iters}` under `:mean`, with `n_iters = maximum(df.iter)`) is split
+evenly among the supplied energies — the live-set tail correction. An empty
 ladder records no compression, so its tail carries the sector's entire prior
 mass, exactly 1 and independent of `ω0` (matching the internally-handled
 `N = 0` sector). `mean_E2` is the canonical second moment of the shifted
@@ -1603,6 +1561,7 @@ function _fixed_N_log_evidence(
     n_walkers::Int,
     n_cull::Int,
     ω0::Float64,
+    compression::Symbol,
     live_energies::Union{Nothing,AbstractVector{<:Real}},
     kb::Float64,
     observable_cols::AbstractVector{Symbol}=Symbol[],
@@ -1620,22 +1579,22 @@ function _fixed_N_log_evidence(
     # Log-space weights: the linear-space ωᵢ underflows Float64 for
     # iter ≳ 700·K, silently dropping the low-energy samples that dominate
     # at low T.
-    log_r = log(n_walkers / (n_walkers + n_cull))
-    log_ωi = (log(ω0) + log(n_cull / (n_walkers + n_cull))) .+
-             (df.iter .- 1) .* log_r
+    log_pref, log_r = _shell_law(n_walkers, n_cull, compression)
+    compression === :geometric && _warn_geometric_omega0(ω0, n_walkers, n_cull)
+    log_ωi = (log(ω0) + log_pref) .+ df.iter .* log_r
     if live_energies === nothing
         Es_all = Es
         log_ws = log_ωi
     else
         Es_live = collect(Float64, live_energies)
-        # The live set carries the residual prior mass r^n_iters, split
+        # The live set carries the residual prior mass ω0 · r^n_iters, split
         # evenly among the supplied energies. n_iters comes from the recorded
         # iter values (not the row count), so continuation ladders whose iter
         # does not start at 1 stay consistent with their ωᵢ. An empty ladder
         # records no compression: its tail is the sector's entire prior mass,
         # exactly 1, independent of ω0.
         n_iters = isempty(df.iter) ? 0 : maximum(df.iter)
-        log_tail_total = n_iters == 0 ? 0.0 : n_iters * log_r
+        log_tail_total = n_iters == 0 ? 0.0 : log(ω0) + n_iters * log_r
         log_tail = log_tail_total - log(length(Es_live))
         Es_all = vcat(Es, Es_live)
         log_ws = vcat(log_ωi, fill(log_tail, length(Es_live)))
@@ -1680,7 +1639,7 @@ end
 
 """
     gc_thermodynamic_stats_fixed_N(ns_outputs, N_values, V, atomic_mass, μ_grid, T_grid;
-                                   n_walkers=120, n_cull=1, ω0=1.0,
+                                   n_walkers=120, n_cull=1, ω0=1.0, compression=:geometric,
                                    live_emax=nothing,
                                    observable_cols=Symbol[], live_observables=nothing,
                                    empty_energy=0.0, kb=8.617333262e-5)
@@ -1730,10 +1689,11 @@ grand sum for numerical stability.
 ## Live-set tail correction
 
 After a finite number of NS iterations `n_iters` the recorded weights `ωᵢ` carry
-only `1 − (K/(K+n_cull))^{n_iters}` of the prior volume; the remainder
-sits in the `K` surviving live walkers. Supplying `live_emax` (one vector of live
-walker energies per `N`, normally the K live energies) adds the live-set tail to
-each per-N evidence: the residual mass `(K/(K+n_cull))^{n_iters}` is split
+only `1 − X_n` of the prior volume (times `ω0`), with `X_n = e^{-n_iters n_cull/K}`
+under `compression=:geometric` or `(K/(K+n_cull))^{n_iters}` under `:mean`; the
+remainder sits in the `K` surviving live walkers. Supplying `live_emax` (one vector
+of live walker energies per `N`, normally the K live energies) adds the live-set
+tail to each per-N evidence: the residual mass `ω0 · X_n` is split
 evenly among the supplied energies. A sector supplied as an empty DataFrame plus
 live energies carries mass exactly `1`, independent of `ω0` (see the lattice-gas
 method's "Special sectors"). When omitted, the live-set tail is neglected — for
@@ -1763,6 +1723,11 @@ does not cancel.
   Must be uniform across `ns_outputs`.
 - `n_cull::Int=1`: NS culls per iteration.
 - `ω0::Float64=1.0`: initial prior weight, passed to `ωᵢ`.
+- `compression::Symbol=:geometric`: Convention of the iteration-based shells,
+  `:geometric` (the default, `ln X_i = -i n_cull/n_walkers`) or `:mean`
+  (`X_i = (K/(K+n_cull))^i`, the historical weights); see `ωᵢ`. Under `:geometric`
+  leave `ω0 = 1.0`: the shells and the live tail then close to one exactly, and the
+  `(K+1)/K` idiom belongs to `:mean` alone.
 - `live_emax::Union{Nothing,AbstractVector{<:AbstractVector{<:Real}}}=nothing`:
   when supplied, one vector of `K = n_walkers` live walker energies (in eV) per
   `N`. The entry for `N=0` is ignored. See "Live-set tail correction" above.
@@ -1828,6 +1793,7 @@ function gc_thermodynamic_stats_fixed_N(
     n_walkers::Int=120,
     n_cull::Int=1,
     ω0::Float64=1.0,
+    compression::Symbol=:geometric,
     live_emax::Union{Nothing,AbstractVector{<:AbstractVector{<:Real}}}=nothing,
     observable_cols::AbstractVector{Symbol}=Symbol[],
     live_observables::Union{Nothing,AbstractVector{<:AbstractDict{Symbol}}}=nothing,
@@ -1952,7 +1918,7 @@ function gc_thermodynamic_stats_fixed_N(
         live_obs = isempty(observable_cols) ? nothing : live_observables[i]
         log_Z_NS[i, :], mean_E_N[i, :], sector_E2, sector_obs = _fixed_N_log_evidence(
             df, T_grid;
-            n_walkers=n_walkers, n_cull=n_cull, ω0=ω0,
+            n_walkers=n_walkers, n_cull=n_cull, ω0=ω0, compression=compression,
             live_energies=live, kb=kb,
             observable_cols=observable_cols, live_observables=live_obs,
             energy_shift=E_shift)
@@ -1971,9 +1937,6 @@ function gc_thermodynamic_stats_fixed_N(
     logXi = Matrix{Float64}(undef, n_mu, n_T)
     var_U = Matrix{Float64}(undef, n_mu, n_T)
     cov_UN = Matrix{Float64}(undef, n_mu, n_T)
-    cv = Matrix{Float64}(undef, n_mu, n_T)
-    c_omega = Matrix{Float64}(undef, n_mu, n_T)
-    c_N = Matrix{Float64}(undef, n_mu, n_T)
     log_Z_N = Matrix{Float64}(undef, n_N, n_T)
     obs_out = Dict{Symbol,Matrix{Float64}}(
         col => Matrix{Float64}(undef, n_mu, n_T) for col in observable_cols)
@@ -2012,9 +1975,6 @@ function gc_thermodynamic_stats_fixed_N(
             var_U[k, j] = sum(ws .* view(mean_E2_N, :, j)) / sum_w - u_c^2
             cov_UN[k, j] = sum(ws .* N_int .* (view(mean_E_N, :, j) .- E_shift)) / sum_w -
                            u_c * mean_N[k, j]
-            cv[k, j], c_omega[k, j], c_N[k, j] = _gc_heat_capacities(
-                var_U[k, j], cov_UN[k, j], var_N[k, j], mean_N[k, j],
-                β, μ_val, kb)
             for col in observable_cols
                 obs_out[col][k, j] = sum(ws .* view(obs_N[col], :, j)) / sum_w
             end
@@ -2025,12 +1985,12 @@ function gc_thermodynamic_stats_fixed_N(
     return (Xi=Xi, mean_N=mean_N, var_N=var_N, mean_U=mean_U,
             logXi=logXi, var_U=var_U, cov_UN=cov_UN,
             log_Z_N=log_Z_N, N_values=N_int, p_N=p_N, N_support=N_support,
-            observables=obs_out, cv=cv, c_omega=c_omega, c_N=c_N)
+            observables=obs_out)
 end
 
 """
     gc_thermodynamic_stats_fixed_N(ns_outputs, N_values, n_sites, μ_grid, T_grid;
-                                   n_walkers=120, n_cull=1, ω0=1.0,
+                                   n_walkers=120, n_cull=1, ω0=1.0, compression=:geometric,
                                    live_emax=nothing, kb=8.617333262e-5)
 
 Lattice-gas method: compute grand-canonical thermodynamic averages from a
@@ -2076,10 +2036,13 @@ criterion.)
 As for the atomistic method, the recorded weights `ωᵢ` carry only part of the
 prior volume after finite NS termination. Supplying `live_emax` (one vector of
 live-walker energies per `N`, normally the `n_walkers` live energies) splits
-the residual prior mass `(K/(K+n_cull))^{n_iters}` evenly among the supplied
-entries of each sector. For fully normalized absolute `Ξ`, keep `ω0 = 1.0`
-and supply `live_emax`; omitting the tail biases `logXi` low and leaves an
-`N`-dependent bias — small but
+the residual prior mass `ω0 · X_n` (`X_n = e^{-n_iters n_cull/K}` under the default
+`compression=:geometric`, `(K/(K+n_cull))^{n_iters}` under `:mean`) evenly among the
+supplied entries of each sector. For fully-normalized absolute `Ξ` supply
+`live_emax`; under `:geometric` the default `ω0 = 1.0` then closes every sector to
+mass one, under `:mean` pass `ω0 = (n_walkers + n_cull)/n_walkers` as well; with
+no tail, `logXi` is biased low,
+and the omitted tail additionally leaves an `N`-dependent bias — small but
 visible at low `T` or for shallow NS runs, and not exactly cancelling in the
 ratio observables `mean_N`, `var_N`, and `mean_U` when per-`N` ladders differ
 in length or convergence.
@@ -2099,6 +2062,11 @@ in length or convergence.
   Must be uniform across `ns_outputs`.
 - `n_cull::Int=1`: NS culls per iteration.
 - `ω0::Float64=1.0`: initial prior weight for the discarded-sample ladder.
+- `compression::Symbol=:geometric`: Convention of the iteration-based shells,
+  `:geometric` (the default, `ln X_i = -i n_cull/n_walkers`) or `:mean`
+  (`X_i = (K/(K+n_cull))^i`, the historical weights); see `ωᵢ`. Under `:geometric`
+  leave `ω0 = 1.0`: the shells and the live tail then close to one exactly, and the
+  `(K+1)/K` idiom belongs to `:mean` alone.
 - `live_emax::Union{Nothing,AbstractVector{<:AbstractVector{<:Real}}}=nothing`:
   when supplied, one vector of live-walker energies (in eV) per `N` —
   normally the `n_walkers` live energies; the sector's residual prior mass is
@@ -2151,6 +2119,7 @@ function gc_thermodynamic_stats_fixed_N(
     n_walkers::Int=120,
     n_cull::Int=1,
     ω0::Float64=1.0,
+    compression::Symbol=:geometric,
     live_emax::Union{Nothing,AbstractVector{<:AbstractVector{<:Real}}}=nothing,
     observable_cols::AbstractVector{Symbol}=Symbol[],
     live_observables::Union{Nothing,AbstractVector{<:AbstractDict{Symbol}}}=nothing,
@@ -2268,7 +2237,7 @@ function gc_thermodynamic_stats_fixed_N(
         live_obs = isempty(observable_cols) ? nothing : live_observables[i]
         log_Z_NS[i, :], mean_E_N[i, :], sector_E2, sector_obs = _fixed_N_log_evidence(
             df, T_grid;
-            n_walkers=n_walkers, n_cull=n_cull, ω0=ω0,
+            n_walkers=n_walkers, n_cull=n_cull, ω0=ω0, compression=compression,
             live_energies=live, kb=kb,
             observable_cols=observable_cols, live_observables=live_obs,
             energy_shift=E_shift)
@@ -2286,9 +2255,6 @@ function gc_thermodynamic_stats_fixed_N(
     mean_U = Matrix{Float64}(undef, n_mu, n_T)
     var_U = Matrix{Float64}(undef, n_mu, n_T)
     cov_UN = Matrix{Float64}(undef, n_mu, n_T)
-    cv = Matrix{Float64}(undef, n_mu, n_T)
-    c_omega = Matrix{Float64}(undef, n_mu, n_T)
-    c_N = Matrix{Float64}(undef, n_mu, n_T)
     obs_out = Dict{Symbol,Matrix{Float64}}(
         col => Matrix{Float64}(undef, n_mu, n_T) for col in observable_cols)
 
@@ -2319,9 +2285,6 @@ function gc_thermodynamic_stats_fixed_N(
             var_U[k, j] = sum(ws .* view(mean_E2_N, :, j)) / sum_w - u_c^2
             cov_UN[k, j] = sum(ws .* N_int .* (view(mean_E_N, :, j) .- E_shift)) / sum_w -
                            u_c * mean_N[k, j]
-            cv[k, j], c_omega[k, j], c_N[k, j] = _gc_heat_capacities(
-                var_U[k, j], cov_UN[k, j], var_N[k, j], mean_N[k, j],
-                β, μ_val, kb)
             for col in observable_cols
                 obs_out[col][k, j] = sum(ws .* view(obs_N[col], :, j)) / sum_w
             end
@@ -2332,7 +2295,7 @@ function gc_thermodynamic_stats_fixed_N(
     return (logXi=logXi, mean_N=mean_N, var_N=var_N, mean_U=mean_U,
             log_Z_N=log_Z_NS .+ log_binom, N_values=N_int,
             var_U=var_U, cov_UN=cov_UN, p_N=p_N, N_support=N_support,
-            observables=obs_out, cv=cv, c_omega=c_omega, c_N=c_N)
+            observables=obs_out)
 end
 
 

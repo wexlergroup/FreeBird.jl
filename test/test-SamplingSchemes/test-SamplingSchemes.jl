@@ -48,5 +48,8 @@ include("test-atomistic-gc-interacting-regressions.jl")
     include("test-ns-observables.jl")
     # test plateau-aware tie eviction in the serial atomistic NS steps
     include("test-ns-plateau-ties.jl")
+    # test the compression conventions of the per-cull charge and the iteration-based reductions,
+    # and the n_live ledger column
+    include("test-compression-convention.jl")
 
 end

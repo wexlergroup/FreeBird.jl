@@ -117,7 +117,7 @@ wl_params = WangLandauParameters(
 energies_wl, configs, wl_params, S, H = wang_landau(initial_lattice, h, wl_params)
 
 
-# ### Metropolis Monte Carlo
+# ### Metroplis Monte Carlo
 
 # Let's make a Metropolis Monte Carlo simulation on the same lattice system.
 mc_lattice = deepcopy(initial_lattice)
@@ -137,48 +137,6 @@ mc_params = MetropolisMCParameters(
 
 # Run the Monte Carlo simulation.
 mc_energies, mc_configs, mc_cvs, acceptance_rates = monte_carlo_sampling(mc_lattice, h, mc_params)
-
-# ### Grand-canonical Metropolis Monte Carlo
-
-# Fixed-site lattice μVT sampling uses an `AtomicLattice`, an energy model that
-# implements `interacting_energy(::AtomicLattice, ...)`, and the existing
-# `MCGrandCanonicalMoves` routine. An ICET cluster expansion can be sampled as
-# follows (the Python ICET module is required only when constructing the
-# Hamiltonian):
-
-#md # ```julia
-#md # gc_lattice = AtomicLattice{1,SquareLattice}(
-#md #     lattice_atom="Pd",
-#md #     type_of_sites=["hollow"],
-#md #     coverage=0.5,
-#md #     adsorbate_atoms=["O"],
-#md #     supercell_dimensions=(6, 6, 1),
-#md #     lattice_constant=3.947,
-#md #     periodicity=(true, true, false),
-#md #     num_nearest_neighbors=4,
-#md # )
-#md # gc_hamiltonian = ICETHamiltonian("cluster_expansion.ce", gc_lattice)
-#md # gc_moves = MCGrandCanonicalMoves(p_move=1 / 3, p_insert=1 / 3)
-#md # gc_parameters = MetropolisMCParameters(
-#md #     [300.0, 600.0, 900.0];
-#md #     equilibrium_steps=10_000,
-#md #     sampling_steps=100_000,
-#md #     chemical_potentials=[-0.2, -0.1, 0.0],
-#md #     random_seed=20260914,
-#md # )
-#md # gc_results, final_lattices = monte_carlo_sampling(
-#md #     gc_moves, gc_lattice, gc_hamiltonian, gc_parameters;
-#md #     sampling_interval=num_sites(gc_lattice),
-#md # )
-#md # ```
-
-# The `energy` column is the bare interaction energy E. Chemical potential
-# enters the acceptance rule through Δ(E−μN), while `c_omega` reports
-# Var(E−μN)/(k_B T²). Uniform insertions and deletions include their reverse-
-# proposal ratio. The lattice μVT driver currently rejects biased insertions,
-# cluster moves and incremental-energy mode rather than silently sampling with
-# an unsupported rule. `sampling_interval` controls how often configurations
-# are retained for statistics and always preserves the final state.
 
 # ### Nested Sampling
 

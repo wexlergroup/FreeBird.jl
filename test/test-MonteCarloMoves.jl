@@ -148,7 +148,7 @@
                     initial_energy = s_walker.energy
                     
                     # Perform MC walk
-                    accepted, rate, updated_walker = MC_random_walk!(n_steps, s_walker, ham, emax)
+                    accepted, rate, updated_walker = MC_random_walk!(n_steps, s_walker, ham, emax)            # !!!Error: type MLattice has no field occupations
                     
                     # Basic checks
                     @test typeof(accepted) == Bool
@@ -741,7 +741,7 @@
         end
 
         @testset "RNG-stream contract (forced branches)" begin
-            # Insertion, ratio >= 1: accept with NO Metropolis draw (4 draws total)
+            # Insertion, ratio >= 1: accepted, the uniform drawn and unread (5 draws total; per-trial Metropolis uniform: the uniform is drawn with the proposal, whatever the ceiling and the ratio)
             Random.seed!(778)
             probe = [rand() for _ in 1:8]
             @test probe[1] < 0.75    # branch precondition: channel draw lands in the insertion window
@@ -750,7 +750,7 @@
             _, _, _, stats = MC_grand_canonical_walk!(1, w, lj0, emax_inf; z0V=1.0e6, species=:Ar, p_move=0.0, p_insert=0.75)
             @test w.list_num_par == [1]
             @test (stats.insert_attempted, stats.insert_accepted) == (1, 1)
-            @test rand() == probe[5]
+            @test rand() == probe[6]
 
             # Insertion, ratio < 1: Metropolis uniform IS drawn (5 draws; p_delete = 0 forces ratio 0)
             Random.seed!(778)
@@ -760,7 +760,7 @@
             @test (stats.insert_attempted, stats.insert_accepted) == (1, 0)
             @test rand() == probe[6]
 
-            # Deletion, ratio >= 1: accept with NO Metropolis draw (2 draws)
+            # Deletion, ratio >= 1: accepted, the uniform drawn and unread (3 draws)
             Random.seed!(777)
             probe = [rand() for _ in 1:8]
             @test probe[1] >= 0.25   # branch precondition: channel draw lands in the deletion window
@@ -770,7 +770,7 @@
             _, _, _, stats = MC_grand_canonical_walk!(1, w, lj0, emax_inf; z0V=0.01, species=:Ar, p_move=0.0, p_insert=0.25)
             @test w.list_num_par == [0]
             @test (stats.delete_attempted, stats.delete_accepted) == (1, 1)
-            @test rand() == probe[3]
+            @test rand() == probe[4]
 
             # Deletion, ratio < 1: Metropolis uniform IS drawn (3 draws)
             Random.seed!(777)
@@ -781,8 +781,8 @@
             @test (stats.delete_attempted, stats.delete_accepted) == (1, 0)
             @test rand() == probe[4]
 
-            # Ceiling rejection draws NO Metropolis uniform even at ratio < 1
-            # (the ceiling is checked first): 4 draws total, walker reverted
+            # Ceiling rejection at ratio < 1: the uniform is drawn with the proposal
+            # and left unread: 5 draws total, walker reverted
             Random.seed!(778)
             probe778 = [rand() for _ in 1:8]
             Random.seed!(778)
@@ -790,7 +790,7 @@
             _, _, _, stats = MC_grand_canonical_walk!(1, w, lj0, 0.0u"eV"; z0V=0.3, species=:Ar, p_move=0.0, p_insert=0.75)
             @test w.list_num_par == [0]
             @test (stats.insert_attempted, stats.insert_accepted) == (1, 0)
-            @test rand() == probe778[5]
+            @test rand() == probe778[6]
 
             # Guard skips consume only the channel draw and are not counted as attempts
             Random.seed!(777)
@@ -859,11 +859,11 @@
             @test 0.012 < 0.5 * foil_shift
         end
 
-        @testset "fixed-seed digit pins (stream shape)" begin
+        @testset "fixed-seed digit pins (stream shape)" begin  # per-trial Metropolis uniform: re-recorded on the new stream (#287 on dev 1130c74e); fixture, seeds and tolerances unchanged
             Random.seed!(424242)
             w = mkwalker()
             MC_grand_canonical_walk!(5000, w, lj0, emax_inf; z0V=8.0, species=:Ar)
-            @test w.list_num_par[1] == 9
+            @test w.list_num_par[1] == 6
             @test w.energy == 0.0u"eV"
             lj = LJParameters(epsilon=0.01, sigma=2.5, cutoff=2.5)
             Random.seed!(424243)
@@ -873,7 +873,7 @@
             # rtol 1e-12: tolerate compiler-level rounding drift along the same
             # trajectory (observed stable across architectures at authoring); a
             # stream or trajectory change fails loudly
-            @test isapprox(ustrip(u"eV", w2.energy), -0.0014312826195886537; rtol=1e-12)
+            @test isapprox(ustrip(u"eV", w2.energy), -0.009979625387467158; rtol=1e-12)
         end
     end
 
@@ -1393,8 +1393,8 @@ end
         @test rand() == probe[3]
 
         # Zero reverse density at p_bias = 1: the vacated position's cell sits
-        # inside the survivor's exclusion sphere, so the deletion rejects with
-        # NO Metropolis draw (channel draw + index draw = 2)
+        # inside the survivor's exclusion sphere, so the deletion rejects; the
+        # uniform drawn with the proposal is unread (channel + index + uniform = 3)
         Random.seed!(882)
         probe2 = [rand() for _ in 1:8]
         Random.seed!(882)
@@ -1406,7 +1406,7 @@ end
             p_bias=1.0, bias_radius=3.0, bias_grid=5)
         @test w2.list_num_par == [2]
         @test (stats2.delete_attempted, stats2.delete_accepted) == (1, 0)
-        @test rand() == probe2[3]
+        @test rand() == probe2[4]
     end
 
     @testset "stream neutrality at the defaults" begin

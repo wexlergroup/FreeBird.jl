@@ -359,9 +359,9 @@ function MC_random_walk!(n_steps::Int,
 
     # Opt-in incremental energy path (single-component walkers only): anchor
     # the unperturbed energy once per walk and advance it by exact
-    # site_flip_delta sums, following MC_grand_canonical_walk!. The default
-    # path evaluates the complete energy for each proposal and does not
-    # evaluate this anchor.
+    # site_flip_delta sums, the pattern of MC_grand_canonical_walk!. The
+    # default path below is the shipped arithmetic in the shipped order with
+    # the shipped random draws; the anchor is not evaluated on it.
     use_deltas = incremental && C == 1 && h isa ClassicalHamiltonian &&
                  supports_site_deltas(h)
     zero_e = 0.0 * unit(lattice.energy)
@@ -872,7 +872,8 @@ Insert a particle at a random empty site. Returns `true` if successful,
 # Returns
 - `success::Bool`: Whether a particle was inserted.
 - `lattice::SLattice`: The mutated lattice.
-- `site::Int`: The inserted site index, or 0 when unsuccessful.
+- `site::Int`: The inserted site index (0 when unsuccessful). A trailing
+  addition: two-name destructures of the previous return keep working.
 """
 function lattice_insert_particle!(lattice::SLattice)
     n_sites = num_sites(lattice)
@@ -920,7 +921,8 @@ Delete a particle from a random occupied site. Returns `true` if successful,
 # Returns
 - `success::Bool`: Whether a particle was deleted.
 - `lattice::SLattice`: The mutated lattice.
-- `site::Int`: The vacated site index, or 0 when unsuccessful.
+- `site::Int`: The vacated site index (0 when unsuccessful). A trailing
+  addition: two-name destructures of the previous return keep working.
 """
 function lattice_delete_particle!(lattice::SLattice)
     n_occ = n_occupied(lattice)
@@ -1043,6 +1045,20 @@ runs with `mu = 0` so the Ω ceiling reduces to an energy ceiling.
 
 Cluster moves are symmetric (no Metropolis correction), accepted if Ω < Ω_max.
 
+Random-number stream contract (fixed by tests): one channel draw per step, and under
+`clusters_freq > 0` one cluster-or-swap sub-channel draw on every step that lands in the
+fixed-N channel; a swap draws two site indices (`:uniform_pair`) or one occupied and one
+empty site (`:occupied_empty`); a cluster move draws inside `geometric_cluster_swap!`; an
+insertion draws its site (after the sub-channel draw when `p_bias > 0`) and then its
+Metropolis uniform; a deletion draws its site and then its Metropolis uniform; every
+attempted step then draws the tie-breaking perturbation. The Metropolis uniform is drawn
+with the proposal, whatever the ceiling outcome and whatever the acceptance ratio, and is
+read only when the ceiling passes and the ratio is below one, so the number of draws a step
+consumes never depends on an energy. Guard skips consume only the channel draw (and the
+cluster-or-swap sub-channel draw where it applies) and are not counted as attempts; the
+biased channel's null proposal consumes the sub-channel draw as well and is counted as an
+attempt.
+
 # Arguments
 - `n_steps::Int`: Number of MCMC steps.
 - `lattice::LatticeWalker{1}`: The walker (single component).
@@ -1069,7 +1085,8 @@ Cluster moves are symmetric (no Metropolis correction), accepted if Ω < Ω_max.
   `z0`-weighted prior stays invariant. An empty biased set makes the biased
   sub-channel a null proposal (counted as attempted, nothing changes); a zero
   reverse density (`p_bias = 1` with the vacated site outside the biased set)
-  is an immediate reject. `0.0` reproduces the legacy sampler bit-for-bit.
+  is an immediate reject, its drawn uniform unread. `0.0` keeps the uniform
+  channel with no sub-channel draw.
 - `bias_predicate::Symbol=:contact`: Biased-set predicate, `:contact` or `:cavity`.
 - `bias_shells::Int=1`: Neighbor shells scanned by the predicate.
 - `incremental::Bool=false`: Opt-in incremental energy evaluation: non-cluster
@@ -1186,12 +1203,19 @@ function MC_grand_canonical_walk!(n_steps::Int,
     hop_from = 0
     hop_to = 0
     cluster_pairs = Tuple{Int,Int}[]
+    # The Metropolis uniform of an insertion or deletion proposal, drawn with the proposal
+    # (immediately after its site draw) whatever the ceiling outcome and the ratio, so that
+    # the number of draws a step consumes never depends on an energy; swaps and cluster
+    # moves never read it
+    u_mh = 0.0
 
     # Opt-in incremental energy path: anchor the unperturbed energy once per
     # walk (bounding floating-point drift to about n_steps ulps, reset by the
     # next walk's anchor) and advance it by exact O(z) site_flip_delta sums.
-    # Cluster proposals and Hamiltonians without supports_site_deltas use a
-    # full recomputation, which also re-anchors the accumulator exactly.
+    # Cluster proposals and Hamiltonians without supports_site_deltas fall
+    # back to the shipped full recompute, which also re-anchors the
+    # accumulator exactly. The default path computes the identical arithmetic
+    # in the identical order and draws the identical random stream.
     use_deltas = incremental && h isa ClassicalHamiltonian &&
                  supports_site_deltas(h)
     zero_e = 0.0 * unit(lattice.energy)
@@ -1303,8 +1327,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 end
                 set_occupied!(config, insert_site, true)
             else
-                # With no biased channel, lattice_insert_particle! performs
-                # the single uniform empty-site draw.
+                # p_bias == 0: no sub-channel draw; lattice_insert_particle!
+                # draws the site exactly once
                 success, _, insert_site = lattice_insert_particle!(config)
                 if !success
                     continue
@@ -1312,6 +1336,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 insert_uniform_attempted += 1
                 insert_from_biased = false
             end
+            u_mh = rand()               # the Metropolis uniform, drawn with the proposal
             if use_deltas
                 # Post-flip delta by exact sign symmetry: the back-flip delta
                 # is the exact floating-point negation of the applied one
@@ -1337,6 +1362,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     continue
                 end
             end
+            u_mh = rand()               # the Metropolis uniform, drawn with the proposal
             if use_deltas
                 # Post-flip delta by exact sign symmetry (see the insertion
                 # branch)
@@ -1382,7 +1408,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 # Legacy expression kept literally: bit-identical arithmetic
                 ratio = z0 * (p_delete / p_insert) * (n_sites - n) / (n + 1)
             end
-            if ratio < 1.0 && rand() >= ratio
+            if ratio < 1.0 && u_mh >= ratio
                 accept = false
             end
         elseif move_type == :delete
@@ -1396,19 +1422,19 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                     (1.0 - p_bias) / (n_sites - n + 1))
                 if q_rev == 0.0
                     # Only reachable at p_bias == 1 with the vacated site
-                    # outside S(x'): reject with no MH rand draw
+                    # outside S(x'): reject (the drawn uniform is unused)
                     accept = false
                 else
                     # n is the pre-delete particle count (docstring convention)
                     ratio = n * q_rev / (z0 * p_delete)
-                    if ratio < 1.0 && rand() >= ratio
+                    if ratio < 1.0 && u_mh >= ratio
                         accept = false
                     end
                 end
             else
                 # Legacy expression kept literally: bit-identical arithmetic
                 ratio = (p_insert / p_delete) * n / (z0 * (n_sites - n + 1))
-                if ratio < 1.0 && rand() >= ratio
+                if ratio < 1.0 && u_mh >= ratio
                     accept = false
                 end
             end
@@ -1841,13 +1867,19 @@ Requirements: a single unfrozen component, and an orthorhombic cell (consistent 
 
 Random-number stream contract (fixed by tests): one channel draw per step; a displacement
 draws one particle index and the three walk displacements; an insertion draws three position
-uniforms (x, y, z) plus the Metropolis uniform only when its ratio is below one; a deletion
-draws one particle index plus the conditional Metropolis uniform. Guard skips (a
-displacement or deletion proposed at N = 0, an insertion proposed above `n_max`) consume
-only the channel draw and are not counted as attempts. The ceiling is checked before the
-Metropolis ratio, so ceiling rejections draw no Metropolis uniform. Energies are updated
-incrementally through `single_site_energy` on the same audited path the displacement walks
-use, with insertions evaluated by insert-then-revert.
+uniforms (x, y, z) and then its Metropolis uniform (under `p_bias > 0`, the sub-channel draw
+first, and on the biased sub-channel a cell draw and three jitters in place of the three
+uniforms); a deletion draws one particle index and then its Metropolis uniform. The
+Metropolis uniform is drawn with the proposal, whatever the ceiling outcome and whatever the
+acceptance ratio, and is read only when the ceiling passes and the ratio is below one, so
+the number of draws a step consumes never depends on an energy: a walk whose trial
+proposals are drawn before their energies are evaluated consumes the same stream as this
+one. Guard skips (a displacement or deletion proposed at N = 0, an insertion proposed above
+`n_max`) consume only the channel draw and are not counted as attempts; the biased
+sub-channel's null proposal (no cavity cell to draw from) consumes the sub-channel draw as
+well and is counted as an attempt. Energies are updated incrementally through
+`single_site_energy` on the same audited path the displacement walks use, with insertions
+evaluated by insert-then-revert.
 
 # Arguments
 - `n_steps::Int`: The number of Monte Carlo steps to perform.
@@ -1978,6 +2010,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             else
                 pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
             end
+            u_mh = rand()               # the Metropolis uniform, drawn with the proposal
             insert_particle!(at, pos, species)
             e_site = single_site_energy(n + 1, config, pot, at.list_num_par)
             proposed_energy = at.energy + e_site
@@ -1990,7 +2023,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 else
                     ratio = gc_insert_acceptance_ratio(z0V, n, p_insert, p_delete)
                 end
-                if ratio < 1.0 && rand() >= ratio
+                if ratio < 1.0 && u_mh >= ratio
                     accept = false
                 end
             end
@@ -2008,6 +2041,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             (n == 0 || p_delete <= 0.0) && continue          # guard skip
             delete_attempted += 1
             i_at = rand(1:n)
+            u_mh = rand()               # the Metropolis uniform, drawn with the proposal
             e_site = single_site_energy(i_at, config, pot, at.list_num_par)
             proposed_energy = at.energy - e_site
             accept = true
@@ -2016,7 +2050,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             else
                 if p_bias > 0.0
                     # Reverse density on the post-deletion configuration; a zero
-                    # reverse density rejects without a Metropolis draw
+                    # reverse density rejects (the drawn uniform is unused)
                     cav_post = continuous_cavity_cells(config, box, bias_grid, bias_radius; skip=i_at)
                     q_rev = _composite_cavity_density(position(config, i_at), cav_post,
                                                       box, bias_grid, p_bias)
@@ -2024,13 +2058,13 @@ function MC_grand_canonical_walk!(n_steps::Int,
                         accept = false
                     else
                         ratio = gc_delete_acceptance_ratio(z0V, n, p_insert, p_delete) * q_rev
-                        if ratio < 1.0 && rand() >= ratio
+                        if ratio < 1.0 && u_mh >= ratio
                             accept = false
                         end
                     end
                 else
                     ratio = gc_delete_acceptance_ratio(z0V, n, p_insert, p_delete)
-                    if ratio < 1.0 && rand() >= ratio
+                    if ratio < 1.0 && u_mh >= ratio
                         accept = false
                     end
                 end
@@ -2162,6 +2196,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             (n + 1 > n_max || p_insert <= 0.0) && continue   # guard skip
             insert_attempted += 1
             pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
+            u_mh = rand()               # the Metropolis uniform, drawn with the proposal
             insert_particle!(at, pos, species)
             e_site = single_site_energy(n + 1, config, cps, at.list_num_par, surface.configuration)
             proposed_energy = at.energy + e_site
@@ -2170,7 +2205,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 accept = false
             else
                 ratio = gc_insert_acceptance_ratio(z0V, n, p_insert, p_delete)
-                if ratio < 1.0 && rand() >= ratio
+                if ratio < 1.0 && u_mh >= ratio
                     accept = false
                 end
             end
@@ -2187,6 +2222,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             (n == 0 || p_delete <= 0.0) && continue          # guard skip
             delete_attempted += 1
             i_at = rand(1:n)
+            u_mh = rand()               # the Metropolis uniform, drawn with the proposal
             e_site = single_site_energy(i_at, config, cps, at.list_num_par, surface.configuration)
             proposed_energy = at.energy - e_site
             accept = true
@@ -2194,7 +2230,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 accept = false
             else
                 ratio = gc_delete_acceptance_ratio(z0V, n, p_insert, p_delete)
-                if ratio < 1.0 && rand() >= ratio
+                if ratio < 1.0 && u_mh >= ratio
                     accept = false
                 end
             end
@@ -2235,7 +2271,10 @@ is replaced by the Boltzmann factor, and the dimensionless activity-volume
 kernel itself never sees μ or Λ).
 
 Draw discipline: one channel draw per step; the Metropolis uniform is drawn only when
-the combined acceptance factor is below one (for displacements, only when ΔU > 0).
+the combined acceptance factor is below one (for displacements, only when ΔU > 0). This
+kernel keeps that conditional draw, since it is a fixed-temperature comparator whose
+trials are never proposed ahead of their energies; the nested-sampling kernels above draw
+the insertion and deletion uniform with the proposal.
 An insertion landing exactly on a particle (a NaN pair energy) rejects without
 drawing; a +Inf overlap energy underflows the Boltzmann factor to a combined
 factor of exactly zero and rejects through the ordinary draw.

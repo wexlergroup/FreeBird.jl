@@ -35,6 +35,8 @@ include("test-lattice-site-deltas.jl")
 
 include("test-MonteCarloMoves.jl")
 
+include("test-gc-stream-independence.jl")
+
 include("test-SamplingSchemes/test-SamplingSchemes.jl")
 
 include("test-FreeBirdIO.jl")

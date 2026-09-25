@@ -113,10 +113,8 @@ dof = 18
 cvs = cv(energies, β, dof, 120);
 
 # Let's plot the heat capacity as a function of temperature
-#md # ```julia
-#md # using Plots
-#md # plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", label="LJ\$_6\$")
-#md # ```
+using Plots
+plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", label="LJ\$_6\$")
 
 # The plot should show the heat capacity as a function of temperature for the 6-particle Lennard-Jones system, with a main peak around 400 K, representing the phase transition, and some fluctuations at low temperatures, and tailing off to zero at high temperatures.
 
@@ -213,13 +211,11 @@ dof = 0
 cvs = [cv(β, ω_1, es, dof) for β in βs];
 
 # Let's plot the heat capacity as a function of temperature
-#md # ```julia
-#md # using Plots
-#md # plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", label="Square Lattice")
-#md # ```
+using Plots
+plot(Ts, cvs./kb, xlabel="Temperature (K)", ylabel="Heat Capacity (\$k_B\$)", label="Square Lattice")
 # You should expect to see a single peak in the heat capacity curve around 40 K, and tailing off to zero at high temperatures.
 
-# This completes the square-lattice exact-enumeration example.
+# That's it! You have successfully run an exact enumeration simulation using the FreeBird.jl package.
 
 # ## Atomic adsorption lattices
 

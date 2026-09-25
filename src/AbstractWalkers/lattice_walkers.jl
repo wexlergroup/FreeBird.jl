@@ -316,7 +316,7 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
 end
 
 """
-    lattice_positions(lattice_vectors, basis, supercell_dimensions)
+lattice_positions(lattice_vectors::Matrix{Float64}, basis::Vector{Tuple{Float64, Float64, Float64}}, supercell_dimensions::Tuple{Int64, Int64, Int64})
 
 Compute the positions of atoms in a 3D lattice.
 
@@ -329,9 +329,8 @@ Compute the positions of atoms in a 3D lattice.
 - `positions::Matrix{Float64}`: The positions of the atoms in the supercell.
 
 """
-
-function lattice_positions(lattice_vectors::Matrix{Float64},
-                           basis::Vector{Tuple{Float64, Float64, Float64}},
+function lattice_positions(lattice_vectors::Matrix{Float64}, 
+                           basis::Vector{Tuple{Float64, Float64, Float64}}, 
                            supercell_dimensions::Tuple{Int64, Int64, Int64},
                            )
 
@@ -358,10 +357,12 @@ function lattice_positions(lattice_vectors::Matrix{Float64},
         end
     end
 
+    
     return positions
 end
 
-get_positions(slab) = [pyconvert(Vector{Float64}, a.position) for a in slab]
+_atomic_positions(slab) =
+    [pyconvert(Vector{Float64}, atom.position) for atom in slab]
 
 # ASE's named elemental surface builders.  The second entry is the FreeBird
 # geometry of a translational adsorption-site orbit on that surface.  The
@@ -500,7 +501,7 @@ atoms as `ontop` sites only.
 function _ase_surface_sites(slab, surface::Symbol,
                             dimensions::Tuple{Int64,Int64,Int64},
                             type_of_sites::Vector{String})
-    positions = get_positions(slab)
+    positions = _atomic_positions(slab)
     cell = pyconvert(Matrix{Float64}, slab.get_cell())
 
     if surface == :fcc211
@@ -751,8 +752,12 @@ configuration-independent symmetric proposal.
 
 The `interlayer_spacing` keyword sets the out-of-plane (third-axis) lattice
 spacing. The default `nothing` means isotropic spacing: the third lattice
-vector is `[0, 0, lattice_constant]`. An explicit value `c` gives a tetragonal
-cell whose
+vector is `[0, 0, lattice_constant]`. Note this is a behavior change on one
+previously broken path: 3D cells built with `lattice_constant ≠ 1` used to
+mix scales (the out-of-plane spacing was fixed at 1.0, so a "nearest-neighbor"
+cutoff could select only interlayer bonds without warning); such cells now
+default to isotropic spacing. Pass `interlayer_spacing = 1.0` to reproduce
+the old geometry. An explicit value `c` gives a tetragonal cell whose
 square-lattice distance ladder is a, c, √2·a, √(a² + c²), 2a, …, so a
 suitable cutoff ladder separates in-plane from interlayer nearest neighbors
 into distinct shells: with a = 1.0, c = 1.25 and `cutoff_radii = [1.1, 1.35]`,
@@ -840,6 +845,7 @@ mutable struct MLattice{C,G} <: AbstractLattice
         neighbors = compute_neighbors(supercell_lattice_vectors, positions, periodicity, cutoff_radii;
                                       image_multiplicity=image_multiplicity)
 
+        
         return new{C,G}(lattice_vectors, positions, basis, supercell_dimensions, periodicity, cutoff_radii, components, neighbors, adsorptions)
     end
 
@@ -1457,7 +1463,7 @@ function split_into_subarrays(arr::AbstractVector, N::Int)
 end
 
 """
-    mlattice_setup(C::Int,
+    mlattice_setup(C::Int, 
                      basis::Vector{Tuple{Float64, Float64, Float64}},
                      supercell_dimensions::Tuple{Int64, Int64, Int64},
                      components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol},
@@ -1477,7 +1483,7 @@ Setup the components and adsorptions for a lattice.
 - `lattice_adsorptions::Vector{Bool}`: The adsorption sites on the lattice.
 
 """
-function mlattice_setup(C::Int,
+function mlattice_setup(C::Int, 
                         basis::Vector{Tuple{Float64,Float64,Float64}},
                         supercell_dimensions::Tuple{Int64,Int64,Int64},
                         components::Union{Vector{Vector{Int64}},Vector{Vector{Bool}},Symbol},
@@ -1500,6 +1506,7 @@ function mlattice_setup(C::Int,
     end
 
 
+    
     if components == :equal
         lattice_comp = Vector{Vector{Bool}}(undef, C)
         comps = split_into_subarrays(1:dim, C)
@@ -2951,7 +2958,7 @@ LatticeWalker(configuration::AbstractLattice; energy=0.0, iter=0)
 ```
 Create a new `LatticeWalker` with the given configuration and optional energy and iteration number.
 
-"""
+"""  
 mutable struct LatticeWalker{C} <: AbstractWalker
     configuration::AbstractLattice
     energy::typeof(0.0u"eV")

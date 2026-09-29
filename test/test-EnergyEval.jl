@@ -852,3 +852,128 @@
     end
 
 end
+
+# Fixtures for the external-field tests (#290). Structs must sit at file top level;
+# `NaNAboveField` is also used by `test-SamplingSchemes/test-atomistic-external-fields.jl`,
+# which runs after this file.
+
+# A pair potential that counts its evaluations and contributes nothing.
+mutable struct CountingPair <: FreeBird.AbstractPotentials.SingleComponentPotential{FreeBird.AbstractPotentials.Pairwise}
+    calls::Int
+end
+function FreeBird.AbstractPotentials.pair_energy(::typeof(1.0u"Å"), p::CountingPair)
+    p.calls += 1
+    return 0.0u"eV"
+end
+
+# A misbehaving user field: NaN beyond x0 along the first axis, zero elsewhere.
+struct NaNAboveField <: AbstractExternalField
+    x0::typeof(1.0u"Å")
+end
+FreeBird.AbstractPotentials.external_energy(f::NaNAboveField, pos, cell::AbstractSystem) =
+    pos[1] > f.x0 ? NaN * u"eV" : 0.0u"eV"
+FreeBird.AbstractPotentials.accessible(::NaNAboveField, pos, cell::AbstractSystem) = true
+FreeBird.AbstractPotentials.accessible_volume(::NaNAboveField, cell::AbstractSystem) =
+    FreeBird.AbstractPotentials.accessible_volume(ZeroField(), cell)
+
+@testset "External-field evaluators" begin
+    ef_box = [[12.0, 0.0, 0.0], [0.0, 12.0, 0.0], [0.0, 0.0, 10.0]]u"Å"
+    ef_pbc = (true, true, false)
+    ef_at = FastSystem(atomic_system([:Ar => [6.0, 6.0, 2.0]u"Å", :Ar => [7.0, 6.0, 3.0]u"Å",
+                                      :Ar => [6.0, 8.0, 5.0]u"Å", :Ar => [5.0, 5.0, 7.0]u"Å",
+                                      :Ar => [6.5, 6.5, 8.0]u"Å"], ef_box, ef_pbc))
+    lnp = [3, 2]
+    fr = [false, true]
+    lj = LJParameters(epsilon=0.01, sigma=2.5, cutoff=2.5)
+    planar = TabulatedPlanarField(3, [1.0, 9.0]u"Å", [0.0, 0.04]u"eV")        # U = 0.005 (z - 1) eV/Å
+    radial = TabulatedRadialField(3, [6.0, 6.0, 0.0]u"Å", [0.0, 2.0, 5.0]u"Å", [0.0, 0.01, 0.03]u"eV")
+    fields = (ZeroField(), planar, radial)
+    ext(f, i) = external_energy(f, position(ef_at, i), ef_at)
+
+    @testset "wrapper energies are the pair value plus the field term" begin
+        for f in fields
+            w = ExternalFieldPotential(lj, f)
+            for i in 1:5
+                @test single_site_energy(i, ef_at, w, lnp) == single_site_energy(i, ef_at, lj, lnp) + ext(f, i)
+            end
+            @test isapprox(interacting_energy(ef_at, w, lnp, fr),
+                           interacting_energy(ef_at, lj, lnp, fr) + sum(ext(f, i) for i in 1:3); atol=1e-15u"eV")
+            @test isapprox(frozen_energy(ef_at, w, lnp, fr),
+                           frozen_energy(ef_at, lj, lnp, fr) + sum(ext(f, i) for i in 4:5); atol=1e-15u"eV")
+            @test isapprox(interacting_energy(ef_at, w),
+                           interacting_energy(ef_at, lj) + sum(ext(f, i) for i in 1:5); atol=1e-15u"eV")
+            @test FreeBird.AbstractPotentials._max_interaction_range(w) ==
+                  FreeBird.AbstractPotentials._max_interaction_range(lj)
+            @test_throws MethodError pair_energy(3.0u"Å", w)
+        end
+        # the zero field reproduces the pair potential exactly
+        w0 = ExternalFieldPotential(lj, ZeroField())
+        @test interacting_energy(ef_at, w0, lnp, fr) == interacting_energy(ef_at, lj, lnp, fr)
+        @test frozen_energy(ef_at, w0, lnp, fr) == frozen_energy(ef_at, lj, lnp, fr)
+        @test all(single_site_energy(i, ef_at, w0, lnp) == single_site_energy(i, ef_at, lj, lnp) for i in 1:5)
+    end
+
+    @testset "fields: +Inf outside, never NaN; interpolation; accessibility" begin
+        for (f, outside) in ((planar, [6.0, 6.0, 0.5]), (planar, [6.0, 6.0, 9.5]), (radial, [6.0, 11.5, 5.0]))
+            pos = SVector{3}(outside)u"Å"
+            u = external_energy(f, pos, ef_at)
+            @test isinf(ustrip(u"eV", u)) && u > 0.0u"eV"
+            @test !accessible(f, pos, ef_at)
+        end
+        for i in 1:5, f in fields
+            @test accessible(f, position(ef_at, i), ef_at)
+            @test isfinite(ustrip(u"eV", ext(f, i)))
+        end
+        # piecewise-linear interpolation is exact on a linear table (up to rounding)
+        for zz in (1.0, 2.5, 5.0, 8.75, 9.0)
+            @test isapprox(external_energy(planar, SVector(0.0, 0.0, zz)u"Å", ef_at),
+                           0.005 * (zz - 1.0) * u"eV"; atol=1e-17u"eV")
+        end
+        @test external_energy(planar, SVector(0.0, 0.0, 1.0)u"Å", ef_at) == 0.0u"eV"
+        @test external_energy(planar, SVector(0.0, 0.0, 9.0)u"Å", ef_at) == 0.04u"eV"
+        @test isapprox(external_energy(radial, SVector(9.5, 6.0, 1.0)u"Å", ef_at),
+                       (0.01 + 0.02 * 1.5 / 3.0) * u"eV"; atol=1e-17u"eV")
+        @test external_energy(radial, SVector(6.0, 6.0, 4.0)u"Å", ef_at) == 0.0u"eV"
+        @test external_energy(ZeroField(), SVector(0.0, 0.0, 0.0)u"Å", ef_at) == 0.0u"eV"
+    end
+
+    @testset "accessible volumes against their closed forms" begin
+        @test accessible_volume(ZeroField(), ef_at) ≈ 1440.0u"Å^3"
+        @test accessible_volume(planar, ef_at) ≈ 144.0 * 8.0 * u"Å^3"
+        # a table reaching past the cell is clipped to it
+        @test accessible_volume(TabulatedPlanarField(3, [-2.0, 4.0]u"Å", [0.0, 0.0]u"eV"), ef_at) ≈ 144.0 * 4.0 * u"Å^3"
+        @test accessible_volume(TabulatedPlanarField(1, [3.0, 20.0]u"Å", [0.0, 0.0]u"eV"), ef_at) ≈ 9.0 * 120.0 * u"Å^3"
+        @test accessible_volume(radial, ef_at) ≈ π * 25.0 * 10.0 * u"Å^3"
+        # a disc that does not fit the cross-section is refused
+        @test_throws ArgumentError accessible_volume(TabulatedRadialField(3, [3.0, 6.0, 0.0]u"Å", [0.0, 5.0]u"Å", [0.0, 0.0]u"eV"), ef_at)
+    end
+
+    @testset "constructor validation" begin
+        @test_throws ArgumentError TabulatedPlanarField(4, [0.0, 1.0]u"Å", [0.0, 0.0]u"eV")
+        @test_throws ArgumentError TabulatedPlanarField(1, [1.0, 1.0]u"Å", [0.0, 0.0]u"eV")
+        @test_throws ArgumentError TabulatedPlanarField(1, [0.0]u"Å", [0.0]u"eV")
+        @test_throws ArgumentError TabulatedPlanarField(1, [0.0, 1.0]u"Å", [0.0, Inf]u"eV")
+        @test_throws ArgumentError TabulatedPlanarField(1, [0.0, 1.0, 2.0]u"Å", [0.0, 0.0]u"eV")
+        @test_throws ArgumentError TabulatedRadialField(3, [6.0, 6.0, 0.0]u"Å", [0.5, 2.0]u"Å", [0.0, 0.0]u"eV")
+        @test_throws ArgumentError TabulatedRadialField(3, [6.0, 6.0]u"Å", [0.0, 2.0]u"Å", [0.0, 0.0]u"eV")
+        @test_throws ArgumentError TabulatedRadialField(3, [6.0, 6.0, 0.0]u"Å", [0.0, 2.0]u"Å", [0.0, NaN]u"eV")
+        @test_throws ArgumentError ExternalFieldPotential(ExternalFieldPotential(lj, planar), radial)
+        # units convert on construction
+        f_nm = TabulatedPlanarField(3, [0.1, 0.9]u"nm", [0.0, 40.0]u"meV")
+        @test f_nm.z ≈ [1.0, 9.0]u"Å" && f_nm.U ≈ [0.0, 0.04]u"eV"
+    end
+
+    @testset "field-first short-circuit: +Inf before the pair sum" begin
+        cp = CountingPair(0)
+        w = ExternalFieldPotential(cp, planar)
+        out_at = FastSystem(atomic_system([:Ar => [6.0, 6.0, 2.0]u"Å", :Ar => [7.0, 6.0, 3.0]u"Å",
+                                           :Ar => [6.0, 8.0, 9.5]u"Å"], ef_box, ef_pbc))
+        @test single_site_energy(3, out_at, w, [3]) == Inf * u"eV"
+        @test cp.calls == 0
+        @test single_site_energy(1, out_at, w, [3]) == external_energy(planar, position(out_at, 1), out_at)
+        @test cp.calls == 2
+        # a NaN-returning field is returned as is (never masked into a finite value)
+        wn = ExternalFieldPotential(lj, NaNAboveField(6.5u"Å"))
+        @test isnan(ustrip(u"eV", single_site_energy(2, ef_at, wn, lnp)))
+    end
+end

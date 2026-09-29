@@ -38,6 +38,8 @@ include("test-atomistic-gc-interacting-regressions.jl")
     include("test-igref-ess.jl")
     # regression coverage for the continuous-space grand-canonical route
     include("test-atomistic-gc-regressions.jl")
+    # one-body external fields on the atomistic samplers
+    include("test-atomistic-external-fields.jl")
     # test atomistic GC-NS fixed-N post-processing (ideal gas reference)
     include("test-atomistic-gcns-fixed-n.jl")
     # test lattice GC-NS fixed-N post-processing

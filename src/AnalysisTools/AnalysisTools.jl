@@ -876,7 +876,9 @@ follow-up item and out of scope here.
 
 # Arguments
 - `df::DataFrame`: NS output with columns `[:iter, :emax, :num_particles, :log_compression]`.
-- `V::typeof(1.0u"Å^3")`: The cell volume.
+- `V::typeof(1.0u"Å^3")`: The reference measure's volume: the cell volume, or
+  `accessible_volume(field, cell)` for a live set under an `ExternalFieldPotential` (whose
+  reference measure is restricted to the field's accessible region).
 - `atomic_mass::typeof(1.0u"u")`: The particle mass entering Λ(T).
 - `reference_activity::typeof(1.0u"Å^-3")`: The run's reference activity z0 (must match!).
 - `μ_grid::AbstractVector{<:typeof(1.0u"eV")}`: Chemical potential grid (Unitful, eV),

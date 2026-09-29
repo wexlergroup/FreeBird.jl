@@ -2785,18 +2785,23 @@ const _LATTICE_MOVE_RATE_COLUMNS = (:swap_attempted, :swap_accepted,
     _warn_min_image_cutoff(pot, config)
 
 Warn once when a potential's finite interaction range exceeds half the smallest
-cell edge of `config`: minimum-image truncation is anisotropic in that regime.
-An infinite range never warns (an untruncated minimum-image Hamiltonian is a
-deliberate model choice), and potentials of undeterminable range are skipped.
+periodic cell edge of `config`: minimum-image truncation is anisotropic in that
+regime. Only periodic axes enter the minimum (a nonperiodic axis has no images), and
+a cell with no periodic axis never warns. An infinite range never warns (an
+untruncated minimum-image Hamiltonian is a deliberate model choice), and potentials
+of undeterminable range are skipped.
 """
 function _warn_min_image_cutoff(pot, config)
     rng = AbstractPotentials._max_interaction_range(pot)
     rng === missing && return nothing
     isfinite(ustrip(rng)) || return nothing
     cellv = cell_vectors(config)
-    L_min = min(ustrip(u"Å", cellv[1][1]), ustrip(u"Å", cellv[2][2]), ustrip(u"Å", cellv[3][3]))
+    pbc = periodicity(config)
+    edges = [ustrip(u"Å", cellv[i][i]) for i in 1:3 if pbc[i]]
+    isempty(edges) && return nothing
+    L_min = minimum(edges)
     if ustrip(u"Å", rng) > L_min / 2
-        @warn "The potential's interaction range ($(round(ustrip(u"Å", rng); sigdigits=4)) Å) exceeds half the smallest cell edge ($(round(L_min / 2; sigdigits=4)) Å): minimum-image truncation is anisotropic in this regime."
+        @warn "The potential's interaction range ($(round(ustrip(u"Å", rng); sigdigits=4)) Å) exceeds half the smallest periodic cell edge ($(round(L_min / 2; sigdigits=4)) Å): minimum-image truncation is anisotropic in this regime."
     end
     return nothing
 end
@@ -2913,6 +2918,103 @@ function _init_atomistic_igref_walkers!(liveset::AtomWalkers,
     return liveset
 end
 
+# The Galilean burst needs `interacting_gradient`, which the external-field wrapper does
+# not provide (and the burst already refuses nonperiodic cells): refuse the combination
+# before any walker is touched.
+_refuse_field_galilean(pot, mc_routine::MCAtomGrandCanonicalMoves) = nothing
+function _refuse_field_galilean(::ExternalFieldPotential, mc_routine::MCAtomGrandCanonicalMoves)
+    mc_routine.galilean_steps > 0 && throw(ArgumentError("the Galilean burst does not support ExternalFieldPotential; use galilean_steps = 0"))
+    return nothing
+end
+
+"""
+    _atomistic_igref_z0V(liveset::GenericAtomWalkers{<:ExternalFieldPotential},
+                         params::AtomisticIGRefGCNSParameters)
+
+External-field method: the base method's validations, the field's accessible volume
+checked against the cell (a radial disc must fit its cross-section), and the bounded
+construction's truncated-mass guard evaluated at z₀V_acc, the mean of the restricted
+reference law the initializer draws (the base guard at z₀V_cell would refuse workable
+bounded runs in a narrow region). Returns z₀V_cell, the product the kernel's insertion
+ratio uses: insertions are proposed uniformly in the cell.
+"""
+function _atomistic_igref_z0V(liveset::GenericAtomWalkers{<:ExternalFieldPotential},
+                              params::AtomisticIGRefGCNSParameters)
+    isempty(liveset.walkers) && throw(ArgumentError("the liveset carries no walkers"))
+    cfg = liveset.walkers[1].configuration
+    cellv = cell_vectors(cfg)
+    for i in 1:3, j in 1:3
+        if i != j && !iszero(ustrip(cellv[i][j]))
+            throw(ArgumentError("the atomistic ideal-gas-referenced construction assumes an orthorhombic cell (consistent with pbc_dist); found a nonzero off-diagonal cell component"))
+        end
+    end
+    for walker in liveset.walkers
+        walker isa AtomWalker{1} || throw(ArgumentError("every walker must be a single-component AtomWalker{1}"))
+        any(walker.frozen) && throw(ArgumentError("the atomistic ideal-gas-referenced construction requires unfrozen walkers"))
+        cell_vectors(walker.configuration) == cellv || throw(ArgumentError("all walkers must share one cell"))
+    end
+    V = cellv[1][1] * cellv[2][2] * cellv[3][3]
+    z0V = ustrip(Unitful.NoUnits, params.reference_activity * V)
+    ratio = ustrip(Unitful.NoUnits, accessible_volume(liveset.potential.field, cfg) / V)
+    ratio > 0.0 || throw(ArgumentError("the field's accessible region has zero volume in the cell"))
+    if params.n_max != typemax(Int64)
+        z0V_acc = z0V * ratio
+        trunc_mass = cdf(Poisson(z0V_acc), params.n_max)
+        if trunc_mass < 1e-8
+            throw(ArgumentError("the truncated reference mass P(Poisson(z0V_acc) <= n_max) = $trunc_mass is below 1e-8 at z0V_acc = $z0V_acc, n_max = $(params.n_max); lower reference_activity so the reference law overlaps the bounded support"))
+        end
+    end
+    return z0V
+end
+
+"""
+    _init_atomistic_igref_walkers!(liveset::GenericAtomWalkers{<:ExternalFieldPotential},
+                                   params::AtomisticIGRefGCNSParameters,
+                                   z0V::Float64)
+
+External-field method: the reference law restricted to the field's accessible region.
+Each walker's particle count is Poisson(z₀V_acc) (conditional on `0:n_max` by the same
+rejection as the base method) with V_acc = `accessible_volume(field, cell)`, and each
+position is uniform in the region by rejection from the cell (three uniforms per
+attempt, redrawn until `accessible`). The draw order is the base method's, so with a
+field whose region is the whole cell (V_acc = V_cell) the stream is identical to it.
+`z0V` is the cell product the kernel's insertion ratio uses; only the initializer
+works at z₀V_acc, and the reduction is called with `V = accessible_volume(field, cell)`.
+"""
+function _init_atomistic_igref_walkers!(liveset::GenericAtomWalkers{<:ExternalFieldPotential},
+                                        params::AtomisticIGRefGCNSParameters,
+                                        z0V::Float64)
+    pot = liveset.potential
+    field = pot.field
+    cfg = liveset.walkers[1].configuration
+    cellv = cell_vectors(cfg)
+    box = (cellv[1][1], cellv[2][2], cellv[3][3])
+    V_cell = box[1] * box[2] * box[3]
+    ratio = ustrip(Unitful.NoUnits, accessible_volume(field, cfg) / V_cell)
+    ratio > 0.0 || throw(ArgumentError("the field's accessible region has zero volume in the cell"))
+    z0V_acc = ratio == 1.0 ? z0V : z0V * ratio
+    for walker in liveset.walkers
+        while walker.list_num_par[1] > 0
+            remove_particle!(walker, walker.list_num_par[1])
+        end
+        n = rand(Poisson(z0V_acc))
+        while n > params.n_max
+            n = rand(Poisson(z0V_acc))
+        end
+        for _ in 1:n
+            pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
+            while !accessible(field, pos, cfg)
+                pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
+            end
+            insert_particle!(walker, pos, params.species)
+        end
+        AbstractLiveSets.assign_frozen_energy!(walker, pot)
+        assign_energy!(walker, pot)
+        walker.iter = 0
+    end
+    return liveset
+end
+
 """
     _init_atomistic_igref_walkers!(liveset::LJSurfaceWalkers,
                                    params::AtomisticIGRefGCNSParameters,
@@ -2987,6 +3089,7 @@ function nested_sampling_step!(liveset::AtomWalkers,
                                mc_routine::MCAtomGrandCanonicalMoves;
                                ns_iteration::Int=0,
                                z0V::Union{Nothing,Float64}=nothing)
+    _refuse_field_galilean(liveset.potential, mc_routine)
     z0V === nothing && (z0V = _atomistic_igref_z0V(liveset, params))
     mu = params.chemical_potential
     _sort_by_grand_potential!(liveset, mu)
@@ -3392,6 +3495,13 @@ rejected at step entry. The reference measure is unchanged: Poisson counts (trun
 under a finite `n_max`), positions uniform in the FULL cell, z0V folded from the full
 cell — the substrate excludes volume through the energy ceiling, not the measure.
 
+A live set under an `ExternalFieldPotential` (a `GenericAtomWalkers` whose potential is the
+wrapper) targets the reference measure restricted to the field's accessible region: counts
+Poisson(z0V_acc) with V_acc = `accessible_volume(field, cell)`, positions uniform in the
+region, while the kernel keeps its full-cell insertion ratio at z0V_cell (proposals outside
+the region carry `+Inf` and fail). Reduce such a ledger with `V = accessible_volume(field,
+cell)`, not the cell volume. The Galilean burst is refused with the wrapper.
+
 With `initialize=false` the driver trusts the supplied live set instead of drawing a
 fresh one: particle counts, positions, and the walkers' `iter` counters continue a
 previous run (the ledger's `iter` keying stays consistent when every walker carries
@@ -3431,6 +3541,7 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
                                               stop_on_stall::Bool=true,
                                               record_move_rates::Bool=false,
                                               initialize::Bool=true)
+    _refuse_field_galilean(liveset.potential, mc_routine)
     z0V = _atomistic_igref_z0V(liveset, params)
     _warn_min_image_cutoff(liveset.potential, liveset.walkers[1].configuration)
     if initialize

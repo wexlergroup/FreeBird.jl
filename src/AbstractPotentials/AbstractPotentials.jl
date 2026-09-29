@@ -24,6 +24,8 @@ export LJParameters, lj_energy
 export LennardJonesParameterSets
 export GuptaParameters
 export IdealGasParameters
+export AbstractExternalField, ZeroField, TabulatedPlanarField, TabulatedRadialField
+export ExternalFieldPotential, external_energy, accessible, accessible_volume
 export PyCalculator
 
 
@@ -105,6 +107,9 @@ include("lennardjones.jl")
 include("gupta.jl")
 
 include("ideal_gas.jl")
+
+# one-body external fields and the wrapper potential
+include("external_fields.jl")
 
 include("ase_calculators.jl")
 

@@ -31,6 +31,9 @@ include("atomistic_pairwise.jl")
 # definitions of single_site_energy for computing a site energy using a pairwise potential
 include("atomistic_single_site.jl")
 
+# energy evaluators for the external-field wrapper potential
+include("atomistic_external_fields.jl")
+
 # definitions of pairwise forces and gradients
 include("atomistic_forces.jl")
 

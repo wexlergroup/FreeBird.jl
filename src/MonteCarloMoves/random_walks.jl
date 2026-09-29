@@ -105,7 +105,7 @@ function MC_random_walk!(
         config.position[i_at] = pos
         postwalk_energy = interacting_energy(config, pot, at.list_num_par, at.frozen)
 
-        if postwalk_energy >= emax
+        if !(postwalk_energy < emax)
             # reject the move, revert to original position
             config.position[i_at] = orig_pos
         else
@@ -139,7 +139,7 @@ function MC_random_walk!(
         config.position[i_at] = pos
         postwalk_energy = interacting_energy(config, pot)
 
-        if postwalk_energy >= emax
+        if !(postwalk_energy < emax)
             # reject the move, revert to original position
             config.position[i_at] = orig_pos
         else
@@ -193,12 +193,58 @@ function MC_random_walk!(
         e_diff = postwalk_energy - prewalk_energy
         # energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
         energy = at.energy + e_diff
-        if energy >= emax
+        if !(energy < emax)
             # reject the move, revert to original position
             config.position[i_at] = orig_pos
         else
             at.energy = energy
             # accept the move
+            n_accept += 1
+            accept_this_walker = true
+        end
+    end
+    return accept_this_walker, n_accept/n_steps, at
+end
+
+"""
+    MC_random_walk!(n_steps::Int, at::AtomWalker, pot::ExternalFieldPotential, step_size::Float64, emax::typeof(0.0u"eV"))
+
+Canonical nested-sampling random walk under an `ExternalFieldPotential`: the incremental
+single-site walk of the Lennard-Jones method, with the energy difference of each move
+taken from the wrapper's `single_site_energy` (pair plus field). A move that leaves the
+accessible region carries `+Inf` and is rejected by the ceiling test.
+
+# Returns
+- `accept_this_walker::Bool`: Whether any move was accepted.
+- `accept_rate::Float64`: The acceptance rate of the random walk.
+- `at::AtomWalker`: The updated walker.
+"""
+function MC_random_walk!(
+                    n_steps::Int,
+                    at::AtomWalker{C},
+                    pot::ExternalFieldPotential,
+                    step_size::Float64,
+                    emax::typeof(0.0u"eV")
+                    ) where C
+    n_accept = 0
+    accept_this_walker = false
+    for i_mc_step in 1:n_steps
+        config = at.configuration
+        free_index = free_par_index(at)
+        i_at = rand(free_index)
+        prewalk_energy = single_site_energy(i_at, config, pot, at.list_num_par)
+        pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
+        orig_pos = deepcopy(pos)
+        pos = single_atom_random_walk!(pos, step_size)
+        pos = periodic_boundary_wrap!(pos, config)
+        config.position[i_at] = pos
+        postwalk_energy = single_site_energy(i_at, config, pot, at.list_num_par)
+        energy = at.energy + (postwalk_energy - prewalk_energy)
+        if !(energy < emax)
+            # reject the move, revert to original position
+            config.position[i_at] = orig_pos
+        else
+            at.energy = energy
             n_accept += 1
             accept_this_walker = true
         end
@@ -245,7 +291,7 @@ function MC_random_walk!(
         e_diff = postwalk_energy - prewalk_energy
         # energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
         energy = at.energy + e_diff
-        if energy >= emax
+        if !(energy < emax)
             # reject the move, revert to original position
             config.position[i_at] = orig_pos
         else
@@ -297,7 +343,7 @@ function MC_random_walk_2D!(
         pos = periodic_boundary_wrap!(pos, config)
         config.position[i_at] = pos
         energy = interacting_energy(config, pot, at.list_num_par, at.frozen) + at.energy_frozen_part
-        if energy >= emax
+        if !(energy < emax)
             # reject the move, revert to original position
             config.position[i_at] = orig_pos
         else
@@ -1535,7 +1581,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             config.position[i_at] = pos
             postwalk_energy = single_site_energy(i_at, config, pot, at.list_num_par)
             proposed_energy = at.energy + (postwalk_energy - prewalk_energy)
-            if proposed_energy - mu * n >= emax
+            if !(proposed_energy - mu * n < emax)
                 config.position[i_at] = orig_pos
             else
                 at.energy = proposed_energy
@@ -1573,7 +1619,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             e_site = single_site_energy(n + 1, config, pot, at.list_num_par)
             proposed_energy = at.energy + e_site
             accept = true
-            if proposed_energy - mu * (n + 1) >= emax
+            if !(proposed_energy - mu * (n + 1) < emax)
                 accept = false
             else
                 if p_bias > 0.0
@@ -1603,7 +1649,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             e_site = single_site_energy(i_at, config, pot, at.list_num_par)
             proposed_energy = at.energy - e_site
             accept = true
-            if proposed_energy - mu * (n - 1) >= emax
+            if !(proposed_energy - mu * (n - 1) < emax)
                 accept = false
             else
                 if p_bias > 0.0
@@ -1741,7 +1787,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             config.position[i_at] = pos
             postwalk_energy = single_site_energy(i_at, config, cps, at.list_num_par, surface.configuration)
             proposed_energy = at.energy + (postwalk_energy - prewalk_energy)
-            if proposed_energy - mu * n >= emax
+            if !(proposed_energy - mu * n < emax)
                 config.position[i_at] = orig_pos
             else
                 at.energy = proposed_energy
@@ -1759,7 +1805,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             e_site = single_site_energy(n + 1, config, cps, at.list_num_par, surface.configuration)
             proposed_energy = at.energy + e_site
             accept = true
-            if proposed_energy - mu * (n + 1) >= emax
+            if !(proposed_energy - mu * (n + 1) < emax)
                 accept = false
             else
                 ratio = gc_insert_acceptance_ratio(z0V, n, p_insert, p_delete)
@@ -1784,7 +1830,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             e_site = single_site_energy(i_at, config, cps, at.list_num_par, surface.configuration)
             proposed_energy = at.energy - e_site
             accept = true
-            if proposed_energy - mu * (n - 1) >= emax
+            if !(proposed_energy - mu * (n - 1) < emax)
                 accept = false
             else
                 ratio = gc_delete_acceptance_ratio(z0V, n, p_insert, p_delete)

@@ -41,7 +41,7 @@ function MC_mixed_moves!(
             e_diff = postwalk_energy - prewalk_energy
             # energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
             energy = at.energy + e_diff
-            if energy >= emax
+            if !(energy < emax)
                 # reject the move, revert to original position
                 config.position[i_at] = orig_pos
             else
@@ -60,7 +60,7 @@ function MC_mixed_moves!(
             ind2 = rand(comp2)
             two_atoms_swap!(at, ind1, ind2)
             energy = interacting_energy(config, pot, at.list_num_par, at.frozen) + at.energy_frozen_part
-            if energy >= emax
+            if !(energy < emax)
                 # reject the move, revert to original position
                 two_atoms_swap!(at, ind1, ind2) # swap again to go back
             else
@@ -98,7 +98,7 @@ function MC_mixed_moves!(
             config.position[i_at] = pos
             postwalk_energy = interacting_energy(config, pot)
 
-            if postwalk_energy >= emax
+            if !(postwalk_energy < emax)
                 # reject the move, revert to original position
                 config.position[i_at] = orig_pos
             else
@@ -117,7 +117,7 @@ function MC_mixed_moves!(
             ind2 = rand(comp2)
             two_atoms_swap!(at, ind1, ind2)
             energy = interacting_energy(config, pot, at.list_num_par, at.frozen) + at.energy_frozen_part
-            if energy >= emax
+            if !(energy < emax)
                 # reject the move, revert to original position
                 two_atoms_swap!(at, ind1, ind2) # swap again to go back
             else

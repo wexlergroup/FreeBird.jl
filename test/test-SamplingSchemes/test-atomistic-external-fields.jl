@@ -30,6 +30,18 @@
 #   of reach, ideal gas in the hard cylinder at z0 V_acc = 4; seeds {1, 2, 3, 29070}): max
 #   |<N> - 4| 0.0151, max total variation to Poisson(4) 0.0087; gates ship at 0.046 and
 #   0.027. A kernel ratio at z0 V_acc would give <N> = 2.18.
+# - Canonical fixed-N stitch at V = V_acc (ideal gas against the tabulated radial wall,
+#   K = 128, 1200 iterations of 40-move walks per sector, sectors drawn by
+#   generate_accessible_configs; activities with z I = 1.05, 1.5 and 1.95 at T = 300 and
+#   450 K, six grid points, against the truncated closed form Σ_{N ≤ Nmax} (z I)^N / N!):
+#   the N = 1 ladder (seeds {1, 2, 3, 29100}) max |dev| logXi 0.025, mean_N 0.0095; the
+#   N = 0 to 3 ladder (seeds {1, 2, 3, 29110}) logXi 0.011, mean_N 0.020; gates ship at
+#   0.076, 0.029, 0.035 and 0.061. Passing V_cell for V_acc would move the one-sector
+#   logXi by about 0.4 at z I = 1.5.
+# - Restricted canonical initializer (2000 one-atom draws in the hard cylinder; χ² over
+#   five equal-area radial shells and five equal slabs along the axis, 4 degrees of
+#   freedom; seeds {1, 2, 3, 29120}): max χ² 7.27 (shells) and 5.19 (slabs); the gate
+#   ships at 22 on both.
 # - Every other testset is an exact contract and needs no calibration. The calibration
 #   extracts the fixture block below verbatim and reruns it per seed.
 @testset "external-field potentials on the atomistic samplers" begin
@@ -614,5 +626,132 @@
         @test abs(sum((0:29) .* p) - z0V_acc) < 0.046
         @test 0.5 * sum(abs.(p .- pois)) < 0.027
         @test all(accessible(ef_hard, position(w.configuration, i), w.configuration) for i in 1:w.list_num_par[1])
+    end
+
+    # >>> canonical fixtures (the calibration script extracts this block verbatim)
+    # canonical nested sampling of N atoms in a field, from the restricted initializer
+    function ef_canonical(seed, pot, N; K=128, n_steps=1200, mc_steps=40, tag="c")
+        Random.seed!(seed)
+        configs = generate_accessible_configs(K, pot.field, ef_cyl_box, N;
+                                              periodicity=(false, false, true), particle_type=:Ar)
+        ls = GenericAtomWalkers([AtomWalker{1}(c) for c in configs], pot)
+        params = NestedSamplingParameters(mc_steps=mc_steps, step_size=0.8, initial_step_size=0.8,
+                                          allowed_fail_count=1000)
+        df, lso, _ = nested_sampling(ls, params, n_steps, MCRandomWalkClone(), ef_save(tag))
+        ef_clean(tag)
+        return df, [ustrip(u"eV", w.energy) for w in lso.walkers], lso
+    end
+    # the fixed-N stitch over sectors 0:Nmax at V = V_acc, against the truncated closed form
+    # Ξ = Σ_{N ≤ Nmax} (z I)^N / N! (independent atoms: Z_N^config = I^N)
+    function ef_stitch_devs(seed, Nmax; K=128)
+        pot = ExternalFieldPotential(IdealGasParameters(), ef_wall)
+        runs = [ef_canonical(seed + N, pot, N; K=K, tag="st$N") for N in 1:Nmax]
+        dfs = DataFrame[DataFrame(iter=Int[], emax=Float64[]), (r[1] for r in runs)...]
+        live = Vector{Float64}[Float64[], (r[2] for r in runs)...]
+        Vacc = accessible_volume(ef_wall, ef_cyl_at)
+        dev = Dict(:logXi => zeros(3, 2), :mean_N => zeros(3, 2))
+        for (j, T) in enumerate(ef_Ts)
+            I, _ = ef_radial_integrals(T)
+            zs = [s * 1.5 / I for s in ef_scales]            # z I = 1.05, 1.5, 1.95
+            mus = [ef_mu_for(z, T) for z in zs]
+            st = gc_thermodynamic_stats_fixed_N(dfs, collect(0:Nmax), Vacc, ef_mass, mus, [T]u"K";
+                                                n_walkers=K, live_emax=live)
+            for (i, z) in enumerate(zs)
+                terms = [(z * I)^N / factorial(N) for N in 0:Nmax]
+                dev[:logXi][i, j] = st.logXi[i, 1] - log(sum(terms))
+                dev[:mean_N][i, j] = st.mean_N[i, 1] - sum((0:Nmax) .* terms) / sum(terms)
+            end
+        end
+        return dev
+    end
+    # χ² of one-atom draws in five equal-area radial shells and five equal slabs along the axis
+    function ef_init_chi2(seed; n=2000)
+        Random.seed!(seed)
+        configs = generate_accessible_configs(n, ef_hard, ef_cyl_box, 1;
+                                              periodicity=(false, false, true), particle_type=:Ar)
+        ρ = [sqrt((ustrip(u"Å", position(c, 1)[1]) - 6.0)^2 + (ustrip(u"Å", position(c, 1)[2]) - 6.0)^2)
+             for c in configs]
+        zc = [ustrip(u"Å", position(c, 1)[3]) for c in configs]
+        shell = [min(5, 1 + floor(Int, 5 * (r / 5.0)^2)) for r in ρ]
+        slab = [min(5, 1 + floor(Int, zc_k / 2.0)) for zc_k in zc]
+        e = n / 5
+        chi2(b) = sum((count(==(k), b) - e)^2 / e for k in 1:5)
+        return chi2(shell), chi2(slab), maximum(ρ)
+    end
+    # <<< canonical fixtures
+
+    @testset "canonical path: the stitch at V_acc closes on the truncated closed form (seed 29100)" begin
+        # the N = 1 sector alone: Ξ = 1 + z Z_1 with Z_1 = L ∫ 2πr e^{-βU} dr
+        d1 = ef_stitch_devs(29100, 1)
+        @test maximum(abs, d1[:logXi]) < 0.076
+        @test maximum(abs, d1[:mean_N]) < 0.029
+        # sectors 0 to 3
+        d3 = ef_stitch_devs(29110, 3)
+        @test maximum(abs, d3[:logXi]) < 0.035
+        @test maximum(abs, d3[:mean_N]) < 0.061
+    end
+
+    @testset "restricted canonical initializer: law and draw order (seed 29120)" begin
+        c_shell, c_slab, ρmax = ef_init_chi2(29120)
+        @test ρmax <= 5.0
+        @test c_shell < 22.0
+        @test c_slab < 22.0
+        # the draw order: three uniforms per attempt, redrawn until accessible
+        Random.seed!(29121)
+        configs = generate_accessible_configs(3, ef_hard, ef_cyl_box, 4;
+                                              periodicity=(false, false, true), particle_type=:Ar)
+        Random.seed!(29121)
+        replay = SVector{3, typeof(1.0u"Å")}[]
+        for _ in 1:12
+            pos = [rand() * 12.0, rand() * 12.0, rand() * 10.0]u"Å"
+            while !accessible(ef_hard, pos, ef_cyl_at)
+                pos = [rand() * 12.0, rand() * 12.0, rand() * 10.0]u"Å"
+            end
+            push!(replay, SVector{3}(pos))
+        end
+        @test [position(c, i) for c in configs for i in 1:4] == replay
+        @test all(periodicity(c) == (false, false, true) for c in configs)
+        # a whole-cell field consumes exactly three draws per atom
+        Random.seed!(29122)
+        z_cfg = generate_accessible_configs(2, ZeroField(), ef_cyl_box, 3; periodicity=(false, false, true))
+        Random.seed!(29122)
+        @test [position(c, i) for c in z_cfg for i in 1:3] ==
+              [SVector{3}([rand() * 12.0, rand() * 12.0, rand() * 10.0]u"Å") for _ in 1:6]
+        @test_throws ArgumentError generate_accessible_configs(1, ef_hard, ef_cyl_box, 0)
+    end
+
+    @testset "constructor guard: no walker starts at ±Inf" begin
+        pot = ExternalFieldPotential(LJParameters(epsilon=0.01, sigma=2.5, cutoff=2.0), ef_hard)
+        outside = FastSystem(atomic_system([:Ar => [6.0, 6.0, 2.0]u"Å", :Ar => [11.5, 11.5, 5.0]u"Å"],
+                                           ef_cyl_box, (false, false, true)))
+        err = try
+            GenericAtomWalkers([AtomWalker{1}(outside)], pot); nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError && occursin("empty walkers", err.msg)
+        # a radial disc that overhangs the cell is refused at construction
+        overhang = ExternalFieldPotential(IdealGasParameters(),
+            TabulatedRadialField(3, [3.0, 6.0, 0.0]u"Å", [0.0, 5.0]u"Å", [0.0, 0.0]u"eV"))
+        @test_throws ArgumentError GenericAtomWalkers([AtomWalker{1}(deepcopy(outside))], overhang;
+                                                      assign_energy=false)
+        nanpot = ExternalFieldPotential(IdealGasParameters(), NaNAboveField(6.0u"Å"))
+        @test_throws ArgumentError GenericAtomWalkers([AtomWalker{1}(deepcopy(outside))], nanpot)
+        # without energy assignment the guard has nothing to read
+        @test GenericAtomWalkers([AtomWalker{1}(deepcopy(outside))], pot; assign_energy=false) isa GenericAtomWalkers
+        inside = generate_accessible_configs(2, ef_hard, ef_cyl_box, 2; periodicity=(false, false, true), particle_type=:Ar)
+        ls = GenericAtomWalkers([AtomWalker{1}(c) for c in inside], pot)
+        @test all(isfinite(ustrip(u"eV", w.energy)) for w in ls.walkers)
+    end
+
+    @testset "re-anchor: stored energies equal a from-scratch recompute (seed 29130)" begin
+        pot = ExternalFieldPotential(LJParameters(epsilon=0.01, sigma=2.5, cutoff=2.0), ef_hard)
+        df, live_e, lso = ef_canonical(29130, pot, 12; K=32, n_steps=300, mc_steps=40, tag="re")
+        @test nrow(df) > 0
+        @test all(isfinite, df.emax)
+        for w in lso.walkers
+            @test w.energy == interacting_energy(w.configuration, pot, w.list_num_par, w.frozen) + w.energy_frozen_part
+            @test all(accessible(ef_hard, position(w.configuration, i), w.configuration) for i in 1:12)
+        end
     end
 end

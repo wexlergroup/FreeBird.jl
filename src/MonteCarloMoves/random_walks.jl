@@ -212,7 +212,11 @@ end
 Canonical nested-sampling random walk under an `ExternalFieldPotential`: the incremental
 single-site walk of the Lennard-Jones method, with the energy difference of each move
 taken from the wrapper's `single_site_energy` (pair plus field). A move that leaves the
-accessible region carries `+Inf` and is rejected by the ceiling test.
+accessible region carries `+Inf` and is rejected by the ceiling test. After a walk that
+accepted at least one move, the energy is re-anchored from scratch (the full
+`interacting_energy` plus the frozen part) and the ceiling is re-checked on the
+re-anchored value, as the grand-canonical step does, so the rounding of the incremental
+differences never accumulates across clones and no walker returns at or above the ceiling.
 
 # Returns
 - `accept_this_walker::Bool`: Whether any move was accepted.
@@ -248,6 +252,11 @@ function MC_random_walk!(
             n_accept += 1
             accept_this_walker = true
         end
+    end
+    if accept_this_walker
+        at.energy = interacting_energy(at.configuration, pot, at.list_num_par, at.frozen) +
+                    at.energy_frozen_part
+        accept_this_walker = at.energy < emax
     end
     return accept_this_walker, n_accept/n_steps, at
 end

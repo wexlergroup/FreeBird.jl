@@ -303,7 +303,16 @@
             acc, rate, w = MC_random_walk!(400, w, pot, 0.6, w.energy + 0.02u"eV")
             return acc, rate, w.energy, position(w.configuration, :)
         end
-        @test canon(ExternalFieldPotential(lj, ZeroField())) == canon(lj)
+        # DISCLOSURE (the canonical-path Add commit): the wrapper's walk now re-anchors its
+        # energy from scratch after an accepted walk, so the energy matches the Lennard-Jones
+        # method's incremental one to rounding; the trajectory of this one walk (acceptance,
+        # rate, positions) stays identical digit for digit. A full canonical run under a
+        # ZeroField wrapper therefore follows the plain run only until a re-anchor's rounding
+        # reorders the live set: the canonical path has no digit-for-digit zero-field weld
+        # (the grand-canonical weld above is unaffected)
+        cw, cl = canon(ExternalFieldPotential(lj, ZeroField())), canon(lj)
+        @test cw[1] == cl[1] && cw[2] == cl[2] && cw[4] == cl[4]
+        @test isapprox(ustrip(u"eV", cw[3]), ustrip(u"eV", cl[3]); rtol=1e-12)
         # the grand-canonical initializer: a whole-cell field draws the base initializer's
         # stream (counts, positions, energies and the next draw), bounded and unbounded
         for (z0V, nmax) in ((6.0, typemax(Int64)), (12.0, 8))
@@ -319,7 +328,10 @@
         end
     end
 
-    @testset "canonical walk: incremental energies match a full recompute (seed 29020)" begin
+    @testset "canonical walk: the incremental walk's trajectory matches a full recompute (seed 29020)" begin
+        # after the re-anchor both walks end on a full recompute of the same configuration, so
+        # the energy assertion checks the re-anchor and the acceptance, rate and position
+        # equalities check the incremental arithmetic along the way
         lj = LJParameters(epsilon=0.01, sigma=2.5, cutoff=2.0)
         pot = ExternalFieldPotential(lj, ef_wall)
         function mk()

@@ -202,6 +202,31 @@ struct GenericAtomWalkers{P<:AbstractPotential} <: AtomWalkers
 end
 
 """
+    GenericAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::ExternalFieldPotential; assign_energy=true)
+
+External-field method: the base constructor, followed by two guards. The field's
+accessible volume is evaluated against the first walker's cell (a radial disc that does
+not fit the cross-section throws), and an `ArgumentError` is thrown when an assigned
+walker energy is `±Inf` or `NaN` (an atom outside the field's accessible region, or a
+field that returns `NaN`). Draw canonical live sets with `generate_accessible_configs`,
+which keeps every atom in the region; the grand-canonical driver starts from empty
+walkers and draws its own.
+"""
+function GenericAtomWalkers(walkers::Vector{AtomWalker{C}}, pot::ExternalFieldPotential;
+                            assign_energy=true) where C
+    isempty(walkers) || accessible_volume(pot.field, walkers[1].configuration)
+    ls = invoke(GenericAtomWalkers, Tuple{Vector{AtomWalker{C}}, AbstractPotential},
+                walkers, pot; assign_energy=assign_energy)
+    if assign_energy
+        for (k, walker) in enumerate(ls.walkers)
+            isfinite(Unitful.ustrip(walker.energy)) || throw(ArgumentError(
+                "walker $k has energy $(walker.energy) under the external field: an atom lies outside the accessible region; draw canonical configurations with generate_accessible_configs, or start the grand-canonical driver from empty walkers"))
+        end
+    end
+    return ls
+end
+
+"""
     struct LJSurfaceWalkers <: AtomWalkers
 
 The `LJSurfaceWalkers` struct represents a collection of atom walkers interacting through a Lennard-Jones potential, 

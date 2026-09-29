@@ -9,6 +9,7 @@ using AtomsIO, ExtXYZ, DataFrames, CSV
 using AtomsBase, Unitful
 using Arrow
 
+using ..AbstractPotentials
 using ..AbstractWalkers
 using ..AbstractLiveSets
 using ..EnergyEval
@@ -21,7 +22,7 @@ export append_system
 export DataSavingStrategy, SaveEveryN, SaveFreePartEveryN
 export write_df, write_df_every_n, write_walker_every_n, write_ls_every_n
 
-export generate_initial_configs
+export generate_initial_configs, generate_accessible_configs
 export convert_system_to_walker, convert_walker_to_system
 
 # include the save strategies
@@ -537,6 +538,49 @@ An array of initial configurations for each walker.
 """
 function generate_initial_configs(num_walkers::Int, volume_per_particle::Float64, num_particle::Int; particle_type::Symbol=:H)
     [generate_random_starting_config(volume_per_particle, num_particle; particle_type=particle_type) for _ in 1:num_walkers]
+end
+
+"""
+    generate_accessible_configs(num_walkers::Int, field::AbstractExternalField, box, num_particle::Int;
+                                periodicity::NTuple{3,Bool}=(true, true, true), particle_type::Symbol=:H)
+
+Draw `num_walkers` configurations of `num_particle` atoms with every position uniform in
+the accessible region of `field` inside the orthorhombic cell `box` (three cell vectors,
+lengths). Each atom is drawn by rejection from the cell: three uniforms per attempt,
+scaled by the cell lengths, redrawn until `accessible(field, pos, cell)`. With a field
+whose region is the whole cell every attempt succeeds, so each atom consumes exactly
+three draws. The configurations are i.i.d. draws from the uniform prior on the
+accessible region, the prior that canonical nested sampling under an
+`ExternalFieldPotential` requires; pass `V = accessible_volume(field, cell)` to
+`gc_thermodynamic_stats_fixed_N` when stitching such runs.
+
+# Returns
+- `Vector{FastSystem}`: the configurations.
+"""
+function generate_accessible_configs(num_walkers::Int, field::AbstractExternalField, box,
+                                     num_particle::Int;
+                                     periodicity::NTuple{3,Bool}=(true, true, true),
+                                     particle_type::Symbol=:H)
+    num_particle >= 1 || throw(ArgumentError("num_particle must be at least 1"))
+    cell = FastSystem(atomic_system([particle_type => [0.0, 0.0, 0.0]u"Å"], box, periodicity))
+    cellv = cell_vectors(cell)
+    L = (cellv[1][1], cellv[2][2], cellv[3][3])
+    ustrip(u"Å^3", accessible_volume(field, cell)) > 0.0 ||
+        throw(ArgumentError("the field's accessible region has zero volume in the cell"))
+    configs = FastSystem[]
+    for _ in 1:num_walkers
+        placed = Vector{typeof(1.0u"Å")}[]
+        for _ in 1:num_particle
+            pos = [rand() * L[1], rand() * L[2], rand() * L[3]]
+            while !accessible(field, pos, cell)
+                pos = [rand() * L[1], rand() * L[2], rand() * L[3]]
+            end
+            push!(placed, pos)
+        end
+        list_of_atoms = [particle_type => placed[i] for i in 1:num_particle]
+        push!(configs, FastSystem(atomic_system(list_of_atoms, box, periodicity)))
+    end
+    return configs
 end
 
 

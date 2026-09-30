@@ -901,7 +901,9 @@
 
         # Parameter-crafted stall: a near-zero reference fugacity
         # initializes every walker empty and a deletion-only move mix is
-        # permanently guard-skipped
+        # permanently guard-skipped, so no walk accepts a move; each step
+        # keeps its unmoved clone and records a row (three up to the stall
+        # stop, the whole budget of 40 by default)
         function dc_stall(; kwargs...)
             Random.seed!(99003)
             ws = [LatticeWalker(deepcopy(dc_lat()), energy=0.0u"eV", iter=0)
@@ -918,10 +920,10 @@
         end
         d_stop, ls_stop = @test_logs (:warn, r"IG-ref GC-NS: Failed") match_mode=:any dc_stall(
             stop_on_stall=true)
-        @test nrow(d_stop) == 0
+        @test nrow(d_stop) == 3
         @test length(ls_stop.walkers) == 8
         d_def, _ = dc_stall()
-        @test nrow(d_def) == 0
+        @test nrow(d_def) == 40
 
         # Tie-breaker scale warning: hand-computed bound on the 4x4
         # one-shell fixture is 0.04*16 + 0.01*64/2 = 0.96 in eV units; the

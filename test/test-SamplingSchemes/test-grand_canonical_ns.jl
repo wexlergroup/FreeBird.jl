@@ -725,9 +725,11 @@
         @test all(a[i] === b[i] for i in eachindex(a))
 
         # Parameter-crafted stall: empty initial occupancies with a
-        # deletion-only move mix are permanently guard-skipped, so every
-        # step fails. stop_on_stall = true returns the partial (empty)
-        # ledger and the intact live set after one warning.
+        # deletion-only move mix are permanently guard-skipped, so no walk
+        # accepts a move. Each step keeps its unmoved clone (the empty
+        # lattice with a redrawn tie-breaking offset) and records a row, so
+        # stop_on_stall = true returns the rows of the three steps up to the
+        # stall stop and the intact live set after one warning.
         stall_save = SaveEveryN("t_stall_gc.csv", "t_stall_gc.traj",
                                 "t_stall_gc.ls", 1000000, 1000000, 1000000)
         stall_cleanup() = rm.(["t_stall_gc.csv", "t_stall_gc.traj",
@@ -748,14 +750,14 @@
         end
         d_stop, ls_stop = @test_logs (:warn, r"GC-NS: Failed") match_mode=:any stall_run(
             stop_on_stall=true)
-        @test nrow(d_stop) == 0
+        @test nrow(d_stop) == 3
         @test length(ls_stop.walkers) == 8
-        # The default warn-and-continue burns the whole budget but returns
-        # the same (empty) ledger; explicit false matches the unmentioned
-        # default digit-for-digit
+        # The default warn-and-continue runs the whole budget, one row per
+        # step; explicit false matches the unmentioned default
+        # digit-for-digit
         d_def, _ = stall_run()
         d_off, _ = stall_run(stop_on_stall=false)
-        @test nrow(d_def) == 0
+        @test nrow(d_def) == 40
         @test d_def.iter == d_off.iter
 
         # The default A/B on a healthy (non-stalling) fixture: explicit

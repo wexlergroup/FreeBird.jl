@@ -1661,6 +1661,68 @@
             bytes = @allocated FreeBird.SamplingSchemes._clone_walker_shared_geometry(wk)
             @test bytes < 50_000
         end
+
+        @testset "fixed-N drivers keep the shared geometry" begin
+            # The lattice fixed-N steps (MCRandomWalkClone, MCRandomWalkMaxE
+            # and the lattice MCMixedMoves step) clone the walker they move
+            # with _clone_walker_shared_geometry, as the grand-canonical
+            # drivers do: after a run every live walker still shares the
+            # template's geometry and owns its occupancies. Stream neutrality
+            # against the former deepcopy clone is gated by the absolute pins
+            # of test-fixed-n-lattice-pins.jl.
+            fn_save = SaveEveryN("t_fn.csv", "t_fn.traj", "t_fn.ls",
+                                 1000000, 1000000, 1000000)
+            fn_routines = (MCRandomWalkClone(), MCRandomWalkMaxE(),
+                           MCMixedMoves(walks_freq=1, clusters_freq=0),
+                           MCMixedMoves(walks_freq=1, clusters_freq=1))
+            for (k, routine) in enumerate(fn_routines)
+                Random.seed!(98010 + k)
+                tmpl = sg_lat()
+                ws = replicate_walkers(tmpl, 10)
+                for w in ws
+                    w.configuration.components[1][randperm(16)[1:6]] .= true
+                end
+                ls = LatticeGasWalkers(ws, sg_ham; perturb_energy=1e-9)
+                p = LatticeNestedSamplingParameters(mc_steps=16,
+                    energy_perturbation=1e-9)
+                d, lsx, _ = nested_sampling(ls, p, Int64(40), routine, fn_save)
+                rm.(["t_fn.csv", "t_fn.traj", "t_fn.ls"], force=true)
+                @test nrow(d) > 0
+                @test all(w.configuration.neighbors === tmpl.neighbors
+                          for w in lsx.walkers)
+                @test all(w.configuration.positions === tmpl.positions
+                          for w in lsx.walkers)
+                @test length(unique(objectid(w.configuration.components[1])
+                                    for w in lsx.walkers)) == 10
+                @test all(count(w.configuration.components[1]) == 6
+                          for w in lsx.walkers)
+            end
+        end
+
+        @testset "fixed-N step allocation guard" begin
+            # One compile-warmed fixed-N step at M = 4096 with four walkers and
+            # four moves under a generous fixed byte ceiling (never time-based):
+            # measured about 25 kB with the shared-geometry clone and about
+            # 1.2 MB with the former deepcopy of the walker's geometry
+            big = MLattice{1,SquareLattice}(lattice_constant=1.0,
+                basis=[(0.0, 0.0, 0.0)], supercell_dimensions=(64, 64, 1),
+                periodicity=(true, true, false), cutoff_radii=[1.1],
+                components=[[false for _ in 1:4096]], adsorptions=:full)
+            for routine in (MCRandomWalkClone(),
+                            MCMixedMoves(walks_freq=1, clusters_freq=0))
+                Random.seed!(98020)
+                ws = replicate_walkers(big, 4)
+                for w in ws
+                    w.configuration.components[1][randperm(4096)[1:100]] .= true
+                end
+                ls = LatticeGasWalkers(ws, sg_ham; perturb_energy=1e-9)
+                p = LatticeNestedSamplingParameters(mc_steps=4,
+                    energy_perturbation=1e-9)
+                FreeBird.SamplingSchemes.nested_sampling_step!(ls, p, routine)
+                bytes = @allocated FreeBird.SamplingSchemes.nested_sampling_step!(ls, p, routine)
+                @test bytes < 200_000
+            end
+        end
     end
 
 end

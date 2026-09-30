@@ -457,7 +457,7 @@ function MC_random_walk!(n_steps::Int,
             proposed_energy = interacting_energy(config, h) + perturbation_energy
         end
 
-        @debug "proposed_energy = $proposed_energy, perturbed_energy = $(perturbation_energy), emax = $(emax)), accept = $(proposed_energy < emax)"
+        # No per-proposal @debug here: its log-level check ran on every proposal of the fixed-N walk
         if proposed_energy >= emax
             _lattice_walk_apply!(config, hop_from, hop_to)
             continue

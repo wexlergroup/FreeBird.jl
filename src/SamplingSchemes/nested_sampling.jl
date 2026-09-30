@@ -1183,8 +1183,8 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     iter::Union{Missing,Int} = missing
     emax::Union{Missing,Float64} = liveset.walkers[1].energy.val
 
-    # Clone a random non-worst walker
-    to_walk = deepcopy(rand(ats[2:end]))
+    # Clone a random non-worst walker (shared geometry, own occupancies)
+    to_walk = _clone_walker_shared_geometry(rand(ats[2:end]))
 
     # Compute move counts from frequencies
     total_freq = mc_routine.walks_freq + mc_routine.clusters_freq
@@ -1268,9 +1268,9 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     iter::Union{Missing,Int} = missing
     emax::Union{Missing,Float64} = liveset.walkers[1].energy.val
     if mc_routine isa MCRandomWalkMaxE
-        to_walk = deepcopy(ats[1])
+        to_walk = _clone_walker_shared_geometry(ats[1])
     elseif mc_routine isa MCRandomWalkClone
-        to_walk = deepcopy(rand(ats[2:end]))
+        to_walk = _clone_walker_shared_geometry(rand(ats[2:end]))
     else
         error("Unsupported MCRoutine type: $mc_routine")
     end

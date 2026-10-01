@@ -205,7 +205,8 @@ end
 """
     print_occupation(io::IO, lattice::AtomicLattice)
 
-Print an `AtomicLattice`'s occupancy as a row of 0/1 over `all_sites`.
+Print an `AtomicLattice`'s occupancy over `all_sites`, using `0` for an empty
+site and the component index `1:C` for an occupied site.
 """
 function print_occupation(io::IO, lattice::AtomicLattice)
     merged = zeros(Int, num_sites(lattice))

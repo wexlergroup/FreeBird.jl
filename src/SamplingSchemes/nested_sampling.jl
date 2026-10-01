@@ -431,15 +431,13 @@ for thermodynamic reweighting.
 
 # Fields
 - `mc_steps::Int64`: MCMC steps per replacement walker.
-- `chemical_potential`: Scalar chemical potential μ for a single component,
-  or one value per component (unitless, in the Hamiltonian's energy units).
+- `chemical_potential::Float64`: Chemical potential μ (unitless, in energy units of the Hamiltonian).
 - `energy_perturbation::Float64`: Perturbation to break energy degeneracies.
 - `random_seed::Int64`: Seed for the random number generator.
 - `fail_count::Int64`: Consecutive steps whose walk accepted no move (their
   unmoved clones are kept when an offset puts them below the ceiling).
 - `allowed_fail_count::Int64`: Maximum consecutive failures before warning.
-- `init_occupation_p::Float64`: Total per-site occupation probability for the
-  uniform initial prior (`0.5` for one component, `C/(C+1)` for C).
+- `init_occupation_p::Float64`: Per-site occupation probability for initial walkers.
 - `n_max::Int64`: Upper bound on particle count per walker.
 - `cluster_p::Float64`: Current cluster growth probability (mutable runtime state).
 - `cluster_accepted::Float64`: Accepted cluster moves in current adjustment window.
@@ -453,7 +451,7 @@ for thermodynamic reweighting.
 """
 mutable struct GrandCanonicalNestedSamplingParameters <: SamplingParameters
     mc_steps::Int64
-    chemical_potential::Union{Float64,Vector{Float64}}
+    chemical_potential::Float64
     energy_perturbation::Float64
     random_seed::Int64
     fail_count::Int64
@@ -473,7 +471,7 @@ end
     GrandCanonicalNestedSamplingParameters(;
         mc_steps=100, chemical_potential=0.0, energy_perturbation=1e-12,
         random_seed=1234, fail_count=0, allowed_fail_count=10,
-        init_occupation_p=nothing, n_max=typemax(Int64),
+        init_occupation_p=0.5, n_max=typemax(Int64),
         cluster_p=0.3, cluster_accepted=0.0, cluster_total=0.0,
         cluster_p_history=Float64[], cluster_accept_history=Float64[],
         cluster_adjust_iterations=Int[], move_stats=Dict{Symbol,Int}())
@@ -482,12 +480,6 @@ Convenience constructor for `GrandCanonicalNestedSamplingParameters`.
 
 The `n_max` parameter sets an upper bound on the number of particles per walker.
 Insertions are rejected when N ≥ n_max. Default is `typemax(Int64)` (no cap).
-
-`init_occupation_p=nothing` selects the uniform configuration prior: `0.5`
-for one component and `C/(C+1)` total occupancy for C mutually exclusive
-components. An explicit value is accepted for one-component configurations.
-Multi-component GCNS rejects a nonuniform explicit value because its
-standard shell weights otherwise describe the wrong prior measure.
 
 The `cluster_*` fields are mutable runtime state for adaptive cluster move tuning.
 They are initialized from the static configuration on `MCGrandCanonicalMoves` at
@@ -499,12 +491,12 @@ never window-reset, cleared once at the start of each run).
 """
 function GrandCanonicalNestedSamplingParameters(;
     mc_steps::Int64=100,
-    chemical_potential::Union{Real,AbstractVector{<:Real}}=0.0,
+    chemical_potential::Float64=0.0,
     energy_perturbation::Float64=1e-12,
     random_seed::Int64=1234,
     fail_count::Int64=0,
     allowed_fail_count::Int64=10,
-    init_occupation_p::Union{Nothing,Real}=nothing,
+    init_occupation_p::Float64=0.5,
     n_max::Int64=typemax(Int64),
     cluster_p::Float64=0.3,
     cluster_accepted::Float64=0.0,
@@ -514,36 +506,10 @@ function GrandCanonicalNestedSamplingParameters(;
     cluster_adjust_iterations::Vector{Int}=Int[],
     move_stats::Dict{Symbol,Int}=Dict{Symbol,Int}(),
 )
-    if chemical_potential isa Real
-        mu = Float64(chemical_potential)
-    else
-        mu_values = Float64.(collect(chemical_potential))
-        isempty(mu_values) && throw(ArgumentError(
-            "chemical_potential must contain at least one component"))
-        mu = length(mu_values) == 1 ? only(mu_values) : mu_values
-    end
-    if mu isa Float64
-        isfinite(mu) || throw(ArgumentError("chemical_potential must be finite"))
-    else
-        all(isfinite, mu) || throw(ArgumentError(
-            "all chemical_potential values must be finite"))
-    end
-    component_count = mu isa Float64 ? 1 : length(mu)
-    uniform_occupation_p = component_count / (component_count + 1)
-    init_p = init_occupation_p === nothing ? uniform_occupation_p :
-             Float64(init_occupation_p)
-    0.0 <= init_p <= 1.0 || throw(ArgumentError(
-        "init_occupation_p must lie in [0, 1], got $init_p"))
-    if component_count > 1 && init_p != uniform_occupation_p
-        throw(ArgumentError(
-            "multi-component GCNS requires the uniform configuration prior: " *
-            "init_occupation_p must be C/(C+1) = $uniform_occupation_p for " *
-            "C=$component_count (or omit it)"))
-    end
     GrandCanonicalNestedSamplingParameters(
-        mc_steps, mu, energy_perturbation,
+        mc_steps, chemical_potential, energy_perturbation,
         random_seed, fail_count, allowed_fail_count,
-        init_p, n_max,
+        init_occupation_p, n_max,
         cluster_p, cluster_accepted, cluster_total,
         cluster_p_history, cluster_accept_history, cluster_adjust_iterations,
         move_stats,
@@ -616,12 +582,10 @@ function _validate_observables(observables::AbstractVector{<:Pair{Symbol,<:Any}}
     allunique(names) || throw(ArgumentError(
         "observables: duplicate names in $(names)"))
     for name in names
-        if name in _RESERVED_LEDGER_COLUMNS ||
-           startswith(String(name), "num_particles_")
+        if name in _RESERVED_LEDGER_COLUMNS
             throw(ArgumentError(
                 "observables: name :$name collides with a reserved ledger " *
-                "column; reserved names are $(_RESERVED_LEDGER_COLUMNS) and " *
-                "the num_particles_<component> family"))
+                "column; reserved names are $(_RESERVED_LEDGER_COLUMNS)"))
         end
     end
     for (name, f) in observables
@@ -641,8 +605,7 @@ end
 Estimate the temperature for the nested sampling algorithm from dlog(ω)/dE.
 """
 function estimate_temperature(n_walkers::Int, n_cull::Int, ediff::Float64, iter::Int=1)
-    ω = (n_cull / (n_walkers + n_cull)) *
-        (n_walkers / (n_walkers + n_cull))^iter
+    ω = (n_cull / (n_walkers + n_cull)) * (n_walkers / (n_walkers + n_cull))^iter
     β = log(ω) / ediff
     kb = 8.617333262145e-5 # eV/K
     T = 1 / (kb * β) # in Kelvin
@@ -1651,100 +1614,8 @@ end
 Compute Ω = E − μN for a single-component lattice walker.
 """
 function _grand_potential(walker::LatticeWalker{1}, mu::Float64)
-    return walker.energy - _gc_chemical_term(walker.configuration, mu) *
-           unit(walker.energy)
-end
-
-_gc_component_counts(configuration::AbstractLattice) =
-    [n_occupied(configuration, c)
-     for c in 1:num_lattice_components(configuration)]
-
-_gc_total_occupied(configuration::AbstractLattice) =
-    sum(_gc_component_counts(configuration))
-
-_gc_chemical_term(configuration::AbstractLattice, mu::Real) =
-    mu * n_occupied(configuration)
-
-function _gc_chemical_term(configuration::AbstractLattice,
-                           mus::AbstractVector{<:Real})
-    C = num_lattice_components(configuration)
-    length(mus) == C || throw(DimensionMismatch(
-        "chemical_potential must contain one value per lattice component " *
-        "($C), got $(length(mus))"))
-    return sum(mus[c] * n_occupied(configuration, c) for c in 1:C)
-end
-
-"""Compute Ω = E − Σᶜ μᶜNᶜ for a multi-component lattice walker."""
-function _grand_potential(walker::LatticeWalker{C},
-                          mus::AbstractVector{<:Real}) where C
-    return walker.energy - _gc_chemical_term(walker.configuration, mus) *
-           unit(walker.energy)
-end
-
-"""
-Randomize a grand-canonical starting configuration. One-component
-configurations use `random_microstate!`. Multi-component configurations use one
-occupation draw per site and, when occupied, one uniformly selected species,
-thereby enforcing single-site exclusion for both MLattice and AtomicLattice.
-"""
-function _random_gc_microstate!(configuration::AbstractLattice, p::Float64)
-    C = num_lattice_components(configuration)
-    C == 1 && return random_microstate!(configuration; p=p)
-    0.0 <= p <= 1.0 || throw(ArgumentError("p must lie in [0, 1], got $p"))
-    for c in 1:C
-        for site in 1:num_sites(configuration)
-            set_occupied!(configuration, site, false, c)
-        end
-    end
-    for site in 1:num_sites(configuration)
-        rand() < p && set_occupied!(configuration, site, true, rand(1:C))
-    end
-    return configuration
-end
-
-"""
-Draw uniformly from all exclusion-based C-species configurations with total
-occupancy no greater than `n_max`. At fixed N there are `binomial(M,N) * C^N`
-states; the recurrence is assembled in log space before N, sites, and species
-are sampled. This is the correct truncated prior for multi-component GCNS.
-"""
-function _random_capped_gc_microstate!(configuration::AbstractLattice,
-                                       n_max::Int)
-    C = num_lattice_components(configuration)
-    C > 1 || throw(ArgumentError(
-        "_random_capped_gc_microstate! is for multi-component lattices"))
-    M = num_sites(configuration)
-    cap = clamp(n_max, 0, M)
-    log_masses = zeros(Float64, cap + 1)
-    if cap > 0
-        for n in 0:(cap - 1)
-            log_masses[n + 2] = log_masses[n + 1] + log(C) +
-                                log(M - n) - log(n + 1)
-        end
-    end
-    masses = exp.(log_masses .- maximum(log_masses))
-    threshold = rand() * sum(masses)
-    cumulative = 0.0
-    chosen_n = cap
-    for n in 0:cap
-        cumulative += masses[n + 1]
-        if threshold <= cumulative
-            chosen_n = n
-            break
-        end
-    end
-
-    for c in 1:C
-        for site in 1:M
-            set_occupied!(configuration, site, false, c)
-        end
-    end
-    if chosen_n > 0
-        for site in randperm(M)[1:chosen_n]
-            set_occupied!(configuration, site, true, rand(1:C))
-        end
-    end
-    return configuration
+    n = n_occupied(walker.configuration)
+    return walker.energy - mu * n * unit(walker.energy)
 end
 
 """
@@ -1769,19 +1640,17 @@ _shared_geometry_walker(w::LatticeWalker, cfg::AtomicLattice) = deepcopy(w)
 
 """
     _keep_unmoved_clone!(walker::LatticeWalker, h, ceiling::Float64,
-                         delta::Float64; mu=0.0) -> Bool
+                         delta::Float64; mu::Float64=0.0) -> Bool
 
 Keep a replacement whose decorrelation walk accepted no move. The clone still
 holds its parent's arrangement, which lies below the ceiling, so it is a
 sample of the prior restricted below the ceiling like any walked clone; only
 its tie-breaking offset is redrawn, from the offset's law given the
-arrangement: uniform on
-`[-delta/2, min(delta/2, ceiling - (U - Σᶜ mu[c]*N[c])))`, with `U` the
-unperturbed energy (the chemical term is zero for the energy-sorted samplers).
-For a single component, scalar `mu` gives the usual `mu*N`. As in the lattice
-walks, `ceiling`, `mu`, `U` and the stored energy are in the walker's energy
-unit, whatever the Hamiltonian's unit. The walker's energy becomes `U` plus
-the new offset.
+arrangement: uniform on `[-delta/2, min(delta/2, ceiling - (U - mu*N)))`, with
+`U` the unperturbed energy (`mu = 0` for the energy-sorted samplers). As in
+the lattice walks, `ceiling`, `mu`, `U` and the stored energy are in the
+walker's energy unit, whatever the Hamiltonian's unit. The walker's energy
+becomes `U` plus the new offset.
 
 Returns `false` and leaves the walker unchanged when no offset puts the
 arrangement strictly below the ceiling in floating point: with `delta = 0`,
@@ -1797,19 +1666,18 @@ masses. Draws one `rand()` when `delta > 0` and the offset range reaches
 below the ceiling, none otherwise.
 """
 function _keep_unmoved_clone!(walker::LatticeWalker, h, ceiling::Float64,
-                              delta::Float64;
-                              mu::Union{Real,AbstractVector{<:Real}}=0.0)
+                              delta::Float64; mu::Float64=0.0)
     eu = unit(walker.energy)
     raw = ustrip(eu, interacting_energy(walker.configuration, h))
-    chemical_term = _gc_chemical_term(walker.configuration, mu)
+    n = n_occupied(walker.configuration)
     e = raw
     if delta > 0.0
-        hi = min(delta / 2, ceiling - (raw - chemical_term))
+        hi = min(delta / 2, ceiling - (raw - mu * n))
         hi > -delta / 2 || return false
         e = raw + (-delta / 2 + rand() * (hi + delta / 2))
     end
     # the rounded key, as the walks compare it: a proposal at the ceiling is rejected
-    e - chemical_term < ceiling || return false
+    e - mu * n < ceiling || return false
     walker.energy = e * eu
     return true
 end
@@ -1880,51 +1748,25 @@ function _warn_perturbation_scale(liveset::LatticeGasWalkers, delta::Float64)
     return nothing
 end
 
-function _validate_gc_chemical_potential(liveset::LatticeGasWalkers,
-                                         chemical_potential)
-    isempty(liveset.walkers) && return nothing
-    C = num_lattice_components(liveset.walkers[1].configuration)
-    if chemical_potential isa Float64
-        C == 1 || throw(DimensionMismatch(
-            "a $C-component lattice requires a vector of $C chemical potentials"))
-    else
-        length(chemical_potential) == C || throw(DimensionMismatch(
-            "chemical_potential must contain one value per lattice component " *
-            "($C), got $(length(chemical_potential))"))
-    end
-    return nothing
-end
-
 """
     _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonicalNestedSamplingParameters)
 
 Initialize walkers with random microstates for grand-canonical NS.
-Single-component initialization uses independent Bernoulli occupation draws.
-Multi-component initialization draws the uniform exclusion-based prior exactly,
-including conditioning on total `N <= n_max` when a cap is present.
+Each site is occupied independently with probability `gc_params.init_occupation_p`.
 """
 function _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonicalNestedSamplingParameters)
     h = liveset.hamiltonian
     n_max = gc_params.n_max
-    _validate_gc_chemical_potential(liveset, gc_params.chemical_potential)
     for walker in liveset.walkers
-        configuration = walker.configuration
-        C = num_lattice_components(configuration)
-        if C == 1
-            _random_gc_microstate!(configuration, gc_params.init_occupation_p)
-            # Enforce the particle cap by clearing randomly selected occupied sites.
-            n_occ = n_occupied(configuration)
-            if n_occ > n_max
-                occupied = occupied_indices(configuration)
-                shuffle!(occupied)
-                for i in 1:(n_occ - n_max)
-                    set_occupied!(configuration, occupied[i], false)
-                end
+        random_microstate!(walker.configuration; p=gc_params.init_occupation_p)
+        # Enforce n_max: if too many particles, randomly delete until N ≤ n_max
+        n_occ = n_occupied(walker.configuration)
+        if n_occ > n_max
+            occupied = occupied_indices(walker.configuration)
+            shuffle!(occupied)
+            for i in 1:(n_occ - n_max)
+                set_occupied!(walker.configuration, occupied[i], false)
             end
-        else
-            n_max >= 0 || throw(ArgumentError(
-                "n_max must be nonnegative for multi-component GCNS"))
-            _random_capped_gc_microstate!(configuration, n_max)
         end
         assign_energy!(walker, h; perturb_energy=gc_params.energy_perturbation)
     end
@@ -1977,8 +1819,7 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     worst = ats[1]
     omega_worst = omega_keys[1]
     energy_worst = worst.energy
-    n_worst = mu isa Float64 ? n_occupied(worst.configuration) :
-              _gc_total_occupied(worst.configuration)
+    n_worst = n_occupied(worst.configuration)
 
     # Select parent: prefer walkers strictly below omega_worst
     omega_max_val = omega_worst.val  # unitless for the MC function
@@ -2071,10 +1912,8 @@ highest-Ω walker, record (Ω, E, N), replace with a decorrelated clone.
   default keeps the shipped schema.
 
 # Returns
-- `df::DataFrame`: Columns `[:iter, :omega, :energy, :num_particles]`.
-  Multi-component runs additionally record `:num_particles_1`,
-  `:num_particles_2`, ...; `:num_particles` remains their row-wise total.
-  Requested observables follow these built-in columns.
+- `df::DataFrame`: Columns `[:iter, :omega, :energy, :num_particles]`,
+  plus one column per requested observable.
 - `liveset::LatticeGasWalkers`: The final liveset (surviving walkers).
 - `gc_params::GrandCanonicalNestedSamplingParameters`: Updated parameters.
 """
@@ -2090,9 +1929,6 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
     # Initialize walkers with random microstates
     _init_gc_walkers!(liveset, gc_params)
     _warn_perturbation_scale(liveset, gc_params.energy_perturbation)
-    n_components = isempty(liveset.walkers) ? 1 :
-        num_lattice_components(liveset.walkers[1].configuration)
-    is_multicomponent = n_components > 1
 
     # Initialize cluster_p and reset counters from MCGrandCanonicalMoves if applicable
     if mc_routine.clusters_freq > 0
@@ -2107,13 +1943,7 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
     # cluster-move configuration above
     empty!(gc_params.move_stats)
 
-    df = DataFrame(iter=Int[], omega=Float64[], energy=Float64[],
-                   num_particles=Int[])
-    if is_multicomponent
-        for c in 1:n_components
-            df[!, Symbol("num_particles_$c")] = Int[]
-        end
-    end
+    df = DataFrame(iter=Int[], omega=Float64[], energy=Float64[], num_particles=Int[])
     if record_move_rates
         for name in _LATTICE_MOVE_RATE_COLUMNS
             df[!, name] = Int[]
@@ -2133,8 +1963,7 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
         print_info = i % save_strategy.n_info == 0
         write_walker_every_n(liveset.walkers[1], i, save_strategy)
 
-        component_counts = Int[]
-        if is_multicomponent || observables !== nothing || dead_point_callback !== nothing
+        if observables !== nothing || dead_point_callback !== nothing
             # Pre-sort with the step's own ordering (Ω = E − μN, descending,
             # cached keys through a stable sortperm, order-identical to the
             # by-comparator sort) and hold the walker the step will cull;
@@ -2143,8 +1972,6 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
                         for w in liveset.walkers]
             permute!(liveset.walkers, sortperm(pre_keys, rev=true))
             culled = liveset.walkers[1]
-            is_multicomponent &&
-                (component_counts = _gc_component_counts(culled.configuration))
         end
 
         iter, omega, energy, n_par, liveset, gc_params = nested_sampling_step!(
@@ -2179,13 +2006,10 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
             else
                 lat_rate_row = ()
             end
-            component_row = is_multicomponent ? Tuple(component_counts) : ()
             if observables === nothing
-                push!(df, (iter, omega.val, energy.val, n_par,
-                           component_row..., lat_rate_row...))
+                push!(df, (iter, omega.val, energy.val, n_par, lat_rate_row...))
             else
-                push!(df, (iter, omega.val, energy.val, n_par,
-                           component_row..., lat_rate_row...,
+                push!(df, (iter, omega.val, energy.val, n_par, lat_rate_row...,
                            (Float64(f(culled.configuration)) for (_, f) in observables)...))
             end
             dead_point_callback === nothing || dead_point_callback(iter, culled)

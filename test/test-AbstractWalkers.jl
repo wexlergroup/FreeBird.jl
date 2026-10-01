@@ -337,7 +337,31 @@
                 @test neighbors == [[[2]], [[1]]]
             end
 
-            @test !isdefined(AbstractWalkers, :compute_neighbors_banded)
+            @testset "skew-cell MLattice minimum image" begin
+                cell = [
+                    1.6791675721341695 1.0904770604851692 0.0
+                    0.0                0.021782811450899876 0.0
+                    0.0                0.0                  0.0
+                ]
+                fractional = [-0.20256242401168, 0.46079445241201067, 0.0]
+                displacement = cell * fractional
+                reciprocal = zeros(3, 3)
+                reciprocal[1:2, 1:2] = inv(cell[1:2, 1:2])
+                minimum_distance = AbstractWalkers._minimum_image_distance(
+                    cell, reciprocal, (true, true, false),
+                    (0.0, 0.0, 0.0), Tuple(displacement))
+                rounded_distance = norm(cell * (fractional .- round.(fractional)))
+                cutoff = 0.13
+                @test minimum_distance < cutoff < rounded_distance
+                lattice = @test_logs (:warn, r"wrap the periodic cell") match_mode=:any MLattice{1,GenericLattice}(
+                    cell,
+                    [(0.0, 0.0, 0.0), Tuple(displacement)],
+                    (1, 1, 1), (true, true, false), [cutoff],
+                    [fill(false, 2)], fill(true, 2))
+                @test lattice.neighbors[1][1] == [2]
+                @test lattice.neighbors[2][1] == [1]
+            end
+
         end
 
 
@@ -1786,6 +1810,11 @@
             num_nearest_neighbors=2, type_of_sites=["hollow"])
         @test occupied_site_count(specified) == [1, 3]
         @test coverage(specified) == 0.25
+        @test_throws ArgumentError AtomicLattice{2,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O", "H"], components=[typemax(Int), 1],
+            num_nearest_neighbors=0, type_of_sites=["hollow"])
         bit_mask = falses(16)
         bit_mask[[2, 7]] .= true
         from_bitvector = AtomicLattice{1,SquareLattice}(
@@ -1801,6 +1830,17 @@
             set_occupied!(exclusive, occupied_by_one, true, 2)
             @test !is_occupied(exclusive, occupied_by_one, 1)
             @test is_occupied(exclusive, occupied_by_one, 2)
+
+            null_swap = deepcopy(multispecies)
+            sync_ase_lattice!(null_swap)
+            site_states = [Tuple(component[site] for component in
+                                 null_swap.components)
+                           for site in 1:num_sites(null_swap)]
+            a = first(eachindex(site_states))
+            b = findnext(==(site_states[a]), site_states, a + 1)
+            @test b !== nothing
+            swap_sites!(null_swap, a, something(b))
+            @test !null_swap.ase_dirty
 
             randomized = deepcopy(multispecies)
             expected_counts = occupied_site_count(randomized)
@@ -1830,6 +1870,24 @@
             success, _, _ = lattice_delete_particle!(insertion, 2)
             @test success
             @test occupied_site_count(insertion) == before_insert
+
+            full = deepcopy(multispecies)
+            random_microstate!(full; p=1.0)
+            full_components = deepcopy(full.components)
+            success, returned, inserted_site = lattice_insert_particle!(full, 1)
+            @test !success
+            @test returned === full
+            @test inserted_site == 0
+            @test full.components == full_components
+
+            empty_component = deepcopy(multispecies)
+            fill!(empty_component.components[2], false)
+            empty_components = deepcopy(empty_component.components)
+            success, returned, deleted_site = lattice_delete_particle!(empty_component, 2)
+            @test !success
+            @test returned === empty_component
+            @test deleted_site == 0
+            @test empty_component.components == empty_components
 
             microstate = deepcopy(multispecies)
             random_microstate!(microstate; p=1.0)
@@ -2254,6 +2312,15 @@
             invalid_cache)
         @test_throws ArgumentError FreeBird.AbstractWalkers._motif_geometry(
             invalid_cache)
+
+        invalid_charges = deepcopy(periodic)
+        invalid_charges.ase_lattice.set_initial_charges(
+            ones(length(invalid_charges.ase_lattice)))
+        @test_throws ArgumentError sync_ase_lattice!(invalid_charges)
+
+        invalid_info = deepcopy(periodic)
+        invalid_info.ase_lattice.info["calculator_input"] = "mutated"
+        @test_throws ArgumentError sync_ase_lattice!(invalid_info)
 
         invalid_adsorption_cell = deepcopy(periodic)
         primitive_cell = FreeBird.AbstractWalkers.pyconvert(

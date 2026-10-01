@@ -117,6 +117,8 @@ function swap_sites!(lattice::AtomicLattice, a::Int, b::Int)
     checkbounds(lattice.components[1], a)
     checkbounds(lattice.components[1], b)
     a == b && return lattice
+    all(component[a] == component[b] for component in lattice.components) &&
+        return lattice
     for component in lattice.components
         component[a], component[b] = component[b], component[a]
     end

@@ -248,7 +248,6 @@ end
         @test frames[1].data[:atomic_lattice_schema] == 1
         @test frames[1].data[:ase_surface] == "fcc100"
         @test startswith(frames[1].data[:site_geometry_fingerprint], "fnv64=")
-        @test frames[1].data[:occupations] == "bits=1000010000100000"
         @test frames[1].data[:component_occupations] == "bits=1000010000100000"
 
         restored = read_single_walker(filename)
@@ -270,6 +269,22 @@ end
             "atomic_lattice_schema=1" => "atomic_lattice_schema=2"))
         @test_throws ArgumentError read_single_walker(bad_schema)
         rm(bad_schema, force=true)
+
+        for key in (:freebird_walker, :atomic_lattice_schema,
+                    :image_multiplicity, :energy_convention,
+                    :ase_surface, :site_geometry_fingerprint,
+                    :component_occupations, :energy, :iter)
+            incomplete = deepcopy(frames[1])
+            delete!(incomplete.data, key)
+            @test_throws ArgumentError convert_system_to_walker(incomplete, true)
+        end
+        wrong_convention = deepcopy(frames[1])
+        wrong_convention.data[:energy_convention] = "grand_H_v1"
+        @test_throws ArgumentError convert_system_to_walker(
+            wrong_convention, true)
+        wrong_marker = deepcopy(frames[1])
+        wrong_marker.data[:freebird_walker] = "AtomWalker"
+        @test_throws ArgumentError convert_system_to_walker(wrong_marker, true)
 
         bad_geometry = "atomic_lattice_bad_geometry.extxyz"
         fingerprint = frames[1].data[:site_geometry_fingerprint]

@@ -1145,10 +1145,13 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
                 "For a $C-adsorbate system, got $(length(components)) component counts"))
             all(>=(0), components) || throw(ArgumentError(
                 "component counts must be nonnegative, got $components"))
-            sum(components) <= length(all_sites) || throw(ArgumentError(
-                "component counts request $(sum(components)) occupied sites, " *
-                "but the adsorption lattice has only $(length(all_sites))"))
-            total_requested = sum(components)
+            total_requested = 0
+            for count in components
+                count <= length(all_sites) - total_requested || throw(ArgumentError(
+                    "component counts $components exceed the adsorption lattice " *
+                    "capacity of $(length(all_sites)) sites"))
+                total_requested += count
+            end
             shuffled = if total_requested == 0
                 Int[]
             elseif C == 1 && total_requested == length(all_sites)
@@ -1255,18 +1258,15 @@ end
 """In-process signature of the complete derived ASE frame."""
 function _atomic_ase_cache_fingerprint(slab)
     cell = pyconvert(Matrix{Float64}, slab.get_cell())
-    positions = pyconvert(Matrix{Float64}, slab.get_positions())
     pbc = pyconvert(Vector{Bool}, slab.get_pbc())
-    tags = pyconvert(Vector{Int}, slab.get_tags())
-    symbols = pyconvert(Vector{String}, slab.get_chemical_symbols())
-    adsorption_cell = try
-        pyconvert(Matrix{Float64}, slab.info["adsorbate_info"]["cell"])
-    catch
-        zeros(Float64, 0, 0)
-    end
-    return hash((size(cell), Tuple(cell), Tuple(pbc), Tuple(tags),
-                 Tuple(symbols), size(positions), Tuple(positions),
-                 size(adsorption_cell), Tuple(adsorption_cell)))
+    # `Atoms.arrays` contains positions, numbers, tags, masses, momenta,
+    # initial charges, magnetic moments, and user arrays. Calculators may also
+    # consume constraints or `Atoms.info`. Hash their serialized value so any
+    # direct mutation is rejected rather than silently affecting an energy or
+    # disappearing during FreeBird trajectory serialization.
+    state = pytuple((slab.arrays, slab.info, slab.constraints))
+    payload = pyconvert(Vector{UInt8}, _PY_PICKLE.dumps(state; protocol=5))
+    return hash((size(cell), Tuple(cell), Tuple(pbc), payload))
 end
 
 """Reject direct mutation of an AtomicLattice's derived Python frame."""

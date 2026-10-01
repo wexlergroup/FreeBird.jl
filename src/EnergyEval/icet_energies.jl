@@ -51,11 +51,67 @@ _icet_geometry_signature(lattice::AtomicLattice) = (
     all_sites=Tuple(lattice.all_sites),
 )
 
+function _resolve_icet_occupation_codes(
+        allowed_by_site::AbstractVector{<:AbstractVector{<:Integer}},
+        adsorbate_code::Integer,
+        empty_occupation::Union{Nothing,Integer},
+        occupied_occupation::Union{Nothing,Integer})
+    isempty(allowed_by_site) && throw(ArgumentError(
+        "the ICET model contains no occupation sites"))
+    allowed = unique([sort!(Int.(collect(codes))) for codes in allowed_by_site])
+    length(allowed) == 1 || throw(ArgumentError(
+        "ICETHamiltonian requires the same binary occupations on every site; " *
+        "got $(allowed_by_site)"))
+    codes = only(allowed)
+    length(codes) == 2 || throw(ArgumentError(
+        "ICETHamiltonian requires exactly two occupation codes per site; " *
+        "got $codes"))
+
+    empty_code = empty_occupation === nothing ? nothing : Int(empty_occupation)
+    occupied_code = occupied_occupation === nothing ? nothing : Int(occupied_occupation)
+
+    if occupied_code === nothing
+        if Int(adsorbate_code) in codes
+            occupied_code = Int(adsorbate_code)
+        elseif empty_code !== nothing
+            alternatives = filter(!=(empty_code), codes)
+            length(alternatives) == 1 || throw(ArgumentError(
+                "could not infer occupied_occupation from ICET occupation codes " *
+                "$codes and empty_occupation=$empty_code"))
+            occupied_code = only(alternatives)
+        elseif 0 in codes
+            # ASE/ICET use atomic number zero (`X`) for a vacancy. This also
+            # supports models that use a pseudo-species for the adsorbate.
+            occupied_code = only(filter(!=(0), codes))
+        else
+            throw(ArgumentError(
+                "the adsorbate atomic-number code $adsorbate_code is not present " *
+                "in ICET occupation codes $codes; pass occupied_occupation and " *
+                "empty_occupation explicitly"))
+        end
+    end
+
+    if empty_code === nothing
+        alternatives = filter(!=(occupied_code), codes)
+        length(alternatives) == 1 || throw(ArgumentError(
+            "could not infer empty_occupation from ICET occupation codes $codes " *
+            "and occupied_occupation=$occupied_code"))
+        empty_code = only(alternatives)
+    end
+
+    empty_code != occupied_code || throw(ArgumentError(
+        "empty_occupation and occupied_occupation must differ"))
+    sort([empty_code, occupied_code]) == codes || throw(ArgumentError(
+        "ICETHamiltonian occupation codes $(sort([empty_code, occupied_code])) " *
+        "do not match the model's allowed codes $codes"))
+    return empty_code, occupied_code
+end
+
 """
     ICETHamiltonian(ce_path::String, base_lattice::AtomicLattice;
                     empty_occupation=nothing,
                     occupied_occupation=nothing,
-                    energy_scale_to_eV=1.0)
+                    energy_scale_to_eV)
 
 Load a cluster expansion from `ce_path` and build a calculator for the supercell
 of `base_lattice`.
@@ -65,13 +121,14 @@ is using; the import happens here and nowhere else.
 
 `empty_occupation` and `occupied_occupation` are the atomic-number codes used
 by the binary ICET model. The occupied code defaults to the atomic number of
-the lattice's sole adsorbate species; the empty code is inferred from ICET's
-allowed occupations when that inference is unique. Pass either keyword
-explicitly for models using different pseudo-species codes.
+the lattice's sole adsorbate species. A binary model using ASE's vacancy code
+`X` (atomic number zero) and one pseudo-species is inferred automatically.
+Pass both keywords explicitly for other pseudo-species conventions.
 
 `energy_scale_to_eV` converts the modeled property returned by ICET to eV. Its
-default, `1.0`, assumes that the cluster expansion already returns eV; use
-`1e-3` for a model expressed in meV.
+value must be supplied because ICET cluster-expansion files do not define a
+standard energy unit. Use `1.0` for a model expressed in eV and `1e-3` for a
+model expressed in meV.
 
 The energy of the empty lattice is measured once and stored as `E_clean`, so
 `interacting_energy` returns adsorption energies referenced to the bare surface
@@ -80,7 +137,7 @@ rather than absolute cluster-expansion values.
 function ICETHamiltonian(ce_path::String, base_lattice::AtomicLattice;
                          empty_occupation::Union{Nothing,Integer}=nothing,
                          occupied_occupation::Union{Nothing,Integer}=nothing,
-                         energy_scale_to_eV::Real=1.0)
+                         energy_scale_to_eV::Union{Nothing,Real}=nothing)
     AbstractWalkers._validate_atomic_components(base_lattice)
     num_lattice_components(base_lattice) == 1 || throw(ArgumentError(
         "ICETHamiltonian represents a binary empty/occupied cluster " *
@@ -91,8 +148,13 @@ function ICETHamiltonian(ce_path::String, base_lattice::AtomicLattice;
     base_lattice.surface == :fcc100 || throw(ArgumentError(
         "ICETHamiltonian maps fcc(100) ICET models and " *
         "requires surface=:fcc100; got surface=$(base_lattice.surface)"))
-    isfinite(energy_scale_to_eV) && energy_scale_to_eV > 0 || throw(ArgumentError(
-        "energy_scale_to_eV must be finite and positive, got $energy_scale_to_eV"))
+    energy_scale_to_eV === nothing && throw(ArgumentError(
+        "energy_scale_to_eV must be supplied explicitly because ICET files do " *
+        "not define a standard energy unit; use 1.0 for eV or 1e-3 for meV"))
+    energy_scale = Float64(energy_scale_to_eV)
+    isfinite(energy_scale) && energy_scale > 0 || throw(ArgumentError(
+        "energy_scale_to_eV must remain finite and positive after conversion " *
+        "to Float64, got $energy_scale_to_eV"))
 
     icet = pyimport("icet")
     mcham = pyimport("mchammer.calculators")
@@ -102,6 +164,15 @@ function ICETHamiltonian(ce_path::String, base_lattice::AtomicLattice;
     ce_prim = ce.get_cluster_space_copy().primitive_structure
     nx, ny = base_lattice.supercell_dimensions[1], base_lattice.supercell_dimensions[2]
     model = ce_prim.repeat(pytuple((nx, ny, 1)))
+    source_pbc = Tuple(pyconvert(Vector{Bool}, model.get_pbc()))
+    source_pbc[1:2] == base_lattice.periodicity[1:2] || throw(ArgumentError(
+        "the repeated ICET model in-plane periodicity $(source_pbc[1:2]) does " *
+        "not match the AtomicLattice periodicity $(base_lattice.periodicity[1:2])"))
+    # ICET cluster spaces are three-dimensionally periodic, while an adsorption
+    # lattice has a nonperiodic surface-normal direction. The cluster basis and
+    # site mapping use only the in-plane cell, so adapt z before constructing
+    # the calculator and retain strict validation of x and y above.
+    model.set_pbc(pytuple(base_lattice.periodicity))
     _validate_icet_model_cell(
         base_lattice,
         pyconvert(Matrix{Float64}, model.get_cell()),
@@ -116,31 +187,16 @@ function ICETHamiltonian(ce_path::String, base_lattice::AtomicLattice;
     end
     calc = mcham.ClusterExpansionCalculator(model, ce)
 
-    occupied_code = occupied_occupation === nothing ? pyconvert(
-        Int, ase_data.atomic_numbers[only(base_lattice.adsorbate_atoms)]) :
-        Int(occupied_occupation)
     allowed_by_site = [sort!(pyconvert(Vector{Int},
         calc.sublattices.get_allowed_numbers_on_site(i))) for i in 0:(n_sites - 1)]
-    empty_code = if empty_occupation === nothing
-        alternatives = unique(vcat(
-            [filter(!=(occupied_code), allowed) for allowed in allowed_by_site]...))
-        length(alternatives) == 1 || throw(ArgumentError(
-            "could not infer one empty-site atomic-number code from ICET's " *
-            "allowed occupations $(allowed_by_site); pass empty_occupation explicitly"))
-        only(alternatives)
-    else
-        Int(empty_occupation)
-    end
-    empty_code != occupied_code || throw(ArgumentError(
-        "empty_occupation and occupied_occupation must differ"))
-    expected_codes = sort([empty_code, occupied_code])
-    all(==(expected_codes), allowed_by_site) || throw(ArgumentError(
-        "ICETHamiltonian requires every ICET site to allow exactly the empty/occupied " *
-        "atomic numbers $expected_codes; got $(allowed_by_site)"))
+    adsorbate_code = pyconvert(
+        Int, ase_data.atomic_numbers[only(base_lattice.adsorbate_atoms)])
+    empty_code, occupied_code = _resolve_icet_occupation_codes(
+        allowed_by_site, adsorbate_code, empty_occupation, occupied_occupation)
 
     occ_empty = pylist(fill(empty_code, n_sites))
     E_clean = pyconvert(Float64, calc.calculate_total(occupations=occ_empty)) *
-              Float64(energy_scale_to_eV)
+              energy_scale
 
     icet_pos = pyconvert(Matrix{Float64}, model.get_positions())[:, 1:2]
     icet_to_julia = build_icet_to_julia_map(base_lattice, icet_pos)
@@ -152,7 +208,7 @@ function ICETHamiltonian(ce_path::String, base_lattice::AtomicLattice;
     @debug "ICETHamiltonian built" n_sites E_clean
     return ICETHamiltonian(calc, n_sites, E_clean, julia_to_icet,
                            empty_code, occupied_code,
-                           Float64(energy_scale_to_eV),
+                           energy_scale,
                            only(base_lattice.adsorbate_atoms),
                            _icet_geometry_signature(base_lattice))
 end

@@ -16,9 +16,11 @@ using ..AbstractPotentials
 using ..AbstractHamiltonians
 
 const _PY_COPY = PythonCall.pynew()
+const _PY_PICKLE = PythonCall.pynew()
 
 function __init__()
     PythonCall.pycopy!(_PY_COPY, pyimport("copy"))
+    PythonCall.pycopy!(_PY_PICKLE, pyimport("pickle"))
 end
 
 export AbstractWalker

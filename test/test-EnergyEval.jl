@@ -981,6 +981,17 @@ class FreeBirdMetadataSensitiveCalculator:
                :empty_occupation, :occupied_occupation, :energy_scale_to_eV,
                :adsorbate_atom, :geometry_signature)
 
+        resolve_codes = FreeBird.EnergyEval._resolve_icet_occupation_codes
+        @test resolve_codes([[0, 8], [8, 0]], 8, nothing, nothing) == (0, 8)
+        @test resolve_codes([[0, 1], [1, 0]], 8, nothing, nothing) == (0, 1)
+        @test resolve_codes([[2, 3]], 8, 2, nothing) == (2, 3)
+        @test resolve_codes([[2, 3]], 8, nothing, 3) == (2, 3)
+        @test_throws ArgumentError resolve_codes([[2, 3]], 8, nothing, nothing)
+        @test_throws ArgumentError resolve_codes([[0, 1], [0, 8]], 8,
+                                                  nothing, nothing)
+        @test_throws ArgumentError resolve_codes([[0, 1, 8]], 8,
+                                                  nothing, nothing)
+
         lat = AtomicLattice{1,SquareLattice}(
             lattice_atom="Pd",
             supercell_dimensions=(4, 4, 1),
@@ -1109,9 +1120,33 @@ class FreeBirdMetadataSensitiveCalculator:
             @test_throws ArgumentError interacting_energy(different_substrate, h_eV)
         end
 
-        # Construction propagates import and missing-file failures.
-        @test_throws FreeBird.EnergyEval.PyException ICETHamiltonian(
+        @test_throws ArgumentError ICETHamiltonian(
             "no_such_cluster_expansion.ce", lat)
+        @test_throws ArgumentError ICETHamiltonian(
+            "no_such_cluster_expansion.ce", lat;
+            energy_scale_to_eV=big"1e10000")
+        @test_throws ArgumentError ICETHamiltonian(
+            "no_such_cluster_expansion.ce", lat;
+            energy_scale_to_eV=big"1e-10000")
+
+        # Construction propagates import and missing-file failures once its
+        # unit conversion has been supplied explicitly.
+        @test_throws FreeBird.EnergyEval.PyException ICETHamiltonian(
+            "no_such_cluster_expansion.ce", lat; energy_scale_to_eV=1.0)
+
+        # Optional integration gate for installations that provide ICET and a
+        # compatible 4×4 Pd(100) binary cluster expansion.
+        model_path = get(ENV, "FREEBIRD_ICET_TEST_MODEL", "")
+        if !isempty(model_path)
+            @test isfile(model_path)
+            h = ICETHamiltonian(model_path, lat; energy_scale_to_eV=1e-3)
+            empty = deepcopy(lat)
+            fill!(empty.components[1], false)
+            one_occupied = deepcopy(empty)
+            one_occupied.components[1][1] = true
+            @test interacting_energy(empty, h) ≈ 0.0u"eV" atol=1e-12u"eV"
+            @test isfinite(ustrip(u"eV", interacting_energy(one_occupied, h)))
+        end
     end
 end
 

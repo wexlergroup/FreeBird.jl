@@ -35,6 +35,8 @@ include("test-MonteCarloMoves.jl")
 
 include("test-gc-stream-independence.jl")
 
+include("test-lattice-site-draws.jl")
+
 include("test-SamplingSchemes/test-SamplingSchemes.jl")
 
 include("test-FreeBirdIO.jl")

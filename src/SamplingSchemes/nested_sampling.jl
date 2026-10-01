@@ -435,7 +435,8 @@ for thermodynamic reweighting.
   or one value per component (unitless, in the Hamiltonian's energy units).
 - `energy_perturbation::Float64`: Perturbation to break energy degeneracies.
 - `random_seed::Int64`: Seed for the random number generator.
-- `fail_count::Int64`: Consecutive failed replacements.
+- `fail_count::Int64`: Consecutive steps whose walk accepted no move (their
+  unmoved clones are kept when an offset puts them below the ceiling).
 - `allowed_fail_count::Int64`: Maximum consecutive failures before warning.
 - `init_occupation_p::Float64`: Total per-site occupation probability for the
   uniform initial prior (`0.5` for one component, `C/(C+1)` for C).
@@ -1198,6 +1199,7 @@ Perform a single step of the nested sampling algorithm using a mix of geometric 
 The total `mc_steps` from `ns_params` are split between cluster moves and local swaps according to `clusters_freq` and
 `walks_freq` in the `mc_routine`. Cluster moves use `geometric_cluster_swap!` with growth probability `ns_params.cluster_p`,
 which is adaptively tuned to maintain `mc_routine.target_cluster_accept`. Local swaps use the standard `lattice_random_walk!`.
+A clone whose walk accepted no move is kept with a redrawn tie-breaking offset (see `_keep_unmoved_clone!`).
 
 ## Arguments
 - `liveset::LatticeGasWalkers`: The liveset of lattice gas walkers.
@@ -1220,8 +1222,8 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     iter::Union{Missing,Int} = missing
     emax::Union{Missing,Float64} = liveset.walkers[1].energy.val
 
-    # Clone a random non-worst walker
-    to_walk = deepcopy(rand(ats[2:end]))
+    # Clone a random non-worst walker (shared geometry, own occupancies)
+    to_walk = _clone_walker_shared_geometry(rand(ats[2:end]))
 
     # Compute move counts from frequencies
     total_freq = mc_routine.walks_freq + mc_routine.clusters_freq
@@ -1248,11 +1250,16 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     end
 
     accept = cluster_accepted || local_accepted
+    # A walk that accepted no move keeps its unmoved clone with a redrawn
+    # tie-breaking offset (`_keep_unmoved_clone!`); `fail_count` still counts
+    # consecutive walks that accepted no move
+    moved = accept
+    accept = accept || _keep_unmoved_clone!(to_walk, h, emax, ns_params.energy_perturbation)
     if accept
         push!(ats, to_walk)
         popfirst!(ats)
         update_iter!(liveset)
-        ns_params.fail_count = 0
+        ns_params.fail_count = moved ? 0 : ns_params.fail_count + 1
         iter = liveset.walkers[1].iter
     else
         emax = missing
@@ -1285,6 +1292,8 @@ Perform a single step of the nested sampling algorithm.
 
 This function takes a `liveset` of lattice gas walkers, `ns_params` containing the parameters for nested sampling, and `mc_routine` representing the Monte Carlo
 routine for generating new samples. It performs a single step of the nested sampling algorithm by updating the liveset with a new walker.
+Under `MCRandomWalkClone`, a clone whose walk accepted no move is kept with a redrawn tie-breaking offset (see
+`_keep_unmoved_clone!`); under `MCRandomWalkMaxE`, which walks a copy of the culled walker, such a step records nothing.
 
 ## Arguments
 - `liveset::LatticeGasWalkers`: The liveset of lattice gas walkers.
@@ -1305,20 +1314,27 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     iter::Union{Missing,Int} = missing
     emax::Union{Missing,Float64} = liveset.walkers[1].energy.val
     if mc_routine isa MCRandomWalkMaxE
-        to_walk = deepcopy(ats[1])
+        to_walk = _clone_walker_shared_geometry(ats[1])
     elseif mc_routine isa MCRandomWalkClone
-        to_walk = deepcopy(rand(ats[2:end]))
+        to_walk = _clone_walker_shared_geometry(rand(ats[2:end]))
     else
         error("Unsupported MCRoutine type: $mc_routine")
     end
     accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, h, emax; energy_perturb=ns_params.energy_perturbation)
 
     # @info "iter: $(liveset.walkers[1].iter), acceptance rate: $rate, emax: $emax, is_accepted: $accept"
+    # A clone of a surviving walker whose walk accepted no move is kept with a
+    # redrawn tie-breaking offset (`_keep_unmoved_clone!`); MCRandomWalkMaxE
+    # walks a copy of the culled walker, which is not below the ceiling
+    moved = accept
+    if !accept && mc_routine isa MCRandomWalkClone
+        accept = _keep_unmoved_clone!(at, h, emax, ns_params.energy_perturbation)
+    end
     if accept
         push!(ats, at)
         popfirst!(ats)
         update_iter!(liveset)
-        ns_params.fail_count = 0
+        ns_params.fail_count = moved ? 0 : ns_params.fail_count + 1
         iter = liveset.walkers[1].iter
     else
         # @warn "Failed to accept MC move"
@@ -1635,8 +1651,8 @@ end
 Compute Ω = E − μN for a single-component lattice walker.
 """
 function _grand_potential(walker::LatticeWalker{1}, mu::Float64)
-    n = n_occupied(walker.configuration)
-    return walker.energy - mu * n * unit(walker.energy)
+    return walker.energy - _gc_chemical_term(walker.configuration, mu) *
+           unit(walker.energy)
 end
 
 _gc_component_counts(configuration::AbstractLattice) =
@@ -1646,14 +1662,22 @@ _gc_component_counts(configuration::AbstractLattice) =
 _gc_total_occupied(configuration::AbstractLattice) =
     sum(_gc_component_counts(configuration))
 
-"""Compute Ω = E − Σᶜ μᶜNᶜ for a multi-component lattice walker."""
-function _grand_potential(walker::LatticeWalker{C},
-                          mus::AbstractVector{<:Real}) where C
+_gc_chemical_term(configuration::AbstractLattice, mu::Real) =
+    mu * n_occupied(configuration)
+
+function _gc_chemical_term(configuration::AbstractLattice,
+                           mus::AbstractVector{<:Real})
+    C = num_lattice_components(configuration)
     length(mus) == C || throw(DimensionMismatch(
         "chemical_potential must contain one value per lattice component " *
         "($C), got $(length(mus))"))
-    counts = _gc_component_counts(walker.configuration)
-    return walker.energy - sum(mus[c] * counts[c] for c in 1:C) *
+    return sum(mus[c] * n_occupied(configuration, c) for c in 1:C)
+end
+
+"""Compute Ω = E − Σᶜ μᶜNᶜ for a multi-component lattice walker."""
+function _grand_potential(walker::LatticeWalker{C},
+                          mus::AbstractVector{<:Real}) where C
+    return walker.energy - _gc_chemical_term(walker.configuration, mus) *
            unit(walker.energy)
 end
 
@@ -1742,6 +1766,53 @@ function _shared_geometry_walker(w::LatticeWalker, cfg::MLattice{C,G}) where {C,
 end
 
 _shared_geometry_walker(w::LatticeWalker, cfg::AtomicLattice) = deepcopy(w)
+
+"""
+    _keep_unmoved_clone!(walker::LatticeWalker, h, ceiling::Float64,
+                         delta::Float64; mu=0.0) -> Bool
+
+Keep a replacement whose decorrelation walk accepted no move. The clone still
+holds its parent's arrangement, which lies below the ceiling, so it is a
+sample of the prior restricted below the ceiling like any walked clone; only
+its tie-breaking offset is redrawn, from the offset's law given the
+arrangement: uniform on
+`[-delta/2, min(delta/2, ceiling - (U - Σᶜ mu[c]*N[c])))`, with `U` the
+unperturbed energy (the chemical term is zero for the energy-sorted samplers).
+For a single component, scalar `mu` gives the usual `mu*N`. As in the lattice
+walks, `ceiling`, `mu`, `U` and the stored energy are in the walker's energy
+unit, whatever the Hamiltonian's unit. The walker's energy becomes `U` plus
+the new offset.
+
+Returns `false` and leaves the walker unchanged when no offset puts the
+arrangement strictly below the ceiling in floating point: with `delta = 0`,
+an arrangement tied with the ceiling; with `delta > 0`, a level whose offset
+range the ceiling has used up to floating-point resolution (after a long run
+of culls within one level). The step then records nothing, as before.
+
+Discarding an unmoved clone and retrying from another parent would select
+new walkers by their parents' ability to move: walkers whose walks often fail
+(an empty lattice under a small reference fugacity, compact arrangements
+under a low ceiling) would be copied too rarely, biasing the estimated prior
+masses. Draws one `rand()` when `delta > 0` and the offset range reaches
+below the ceiling, none otherwise.
+"""
+function _keep_unmoved_clone!(walker::LatticeWalker, h, ceiling::Float64,
+                              delta::Float64;
+                              mu::Union{Real,AbstractVector{<:Real}}=0.0)
+    eu = unit(walker.energy)
+    raw = ustrip(eu, interacting_energy(walker.configuration, h))
+    chemical_term = _gc_chemical_term(walker.configuration, mu)
+    e = raw
+    if delta > 0.0
+        hi = min(delta / 2, ceiling - (raw - chemical_term))
+        hi > -delta / 2 || return false
+        e = raw + (-delta / 2 + rand() * (hi + delta / 2))
+    end
+    # the rounded key, as the walks compare it: a proposal at the ceiling is rejected
+    e - chemical_term < ceiling || return false
+    walker.energy = e * eu
+    return true
+end
 
 """
     _perturbation_energy_bound(h, lattice) -> Union{Float64,Nothing}
@@ -1869,10 +1940,13 @@ end
 Perform one step of grand-canonical nested sampling.
 
 Sorts walkers by Ω = E − μN, removes the worst (highest Ω), clones a parent
-with Ω < Ω_worst, and decorrelates the clone via grand-canonical MCMC.
+with Ω < Ω_worst, and decorrelates the clone via grand-canonical MCMC. A clone
+whose walk accepted no move is kept with a redrawn tie-breaking offset (see
+`_keep_unmoved_clone!`).
 
 # Returns
-- `iter`: Iteration number (or `missing` if the step failed).
+- `iter`: Iteration number (or `missing` if no replacement lies strictly
+  below the ceiling; see `_keep_unmoved_clone!`).
 - `omega_max`: The Ω value of the removed walker (with units).
 - `energy`: The E value of the removed walker.
 - `num_particles`: The N value of the removed walker.
@@ -1931,11 +2005,17 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         incremental=mc_routine.incremental,
         swap_mode=mc_routine.swap_mode)
 
+    # A walk that accepted no move keeps its unmoved clone with a redrawn
+    # tie-breaking offset below the Ω ceiling (`_keep_unmoved_clone!`);
+    # `fail_count` still counts consecutive walks that accepted no move
+    moved = accept
+    accept = accept || _keep_unmoved_clone!(to_walk, h, omega_max_val,
+                                            gc_params.energy_perturbation; mu=mu)
     if accept
         push!(ats, to_walk)
         popfirst!(ats)
         update_iter!(liveset)
-        gc_params.fail_count = 0
+        gc_params.fail_count = moved ? 0 : gc_params.fail_count + 1
         iter = liveset.walkers[1].iter
     else
         omega_worst = missing
@@ -1978,13 +2058,17 @@ highest-Ω walker, record (Ω, E, N), replace with a decorrelated clone.
 
 - `stop_on_stall::Bool=false`: When true and `fail_count` reaches
   `allowed_fail_count`, warn once and return the partial ledger and the
-  intact live set (`fail_count` stays at threshold); the default keeps the
-  shipped warn-and-continue behavior byte-identically.
+  intact live set (`fail_count` stays at threshold); the ledger includes the
+  row of the step that reached the threshold when that step kept its unmoved
+  clone. The default keeps the shipped warn-and-continue behavior
+  byte-identically.
 - `record_move_rates::Bool=false`: When true the ledger gains the twelve
   per-iteration lattice acceptance columns (kernel key order,
   `_LATTICE_MOVE_RATE_COLUMNS`), snapshot-differenced from the run totals;
-  failed iterations fold into the next recorded row. The default keeps the
-  shipped schema.
+  a step that kept its unmoved clone records its rejected attempts in its
+  own row, and a step that records no row (no replacement strictly below the
+  ceiling; see `_keep_unmoved_clone!`) folds into the next recorded row. The
+  default keeps the shipped schema.
 
 # Returns
 - `df::DataFrame`: Columns `[:iter, :omega, :energy, :num_particles]`.
@@ -2068,16 +2152,11 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
 
         @debug "GC-NS step $i, iter: $iter, omega: $omega, energy: $energy, N: $n_par"
 
-        if gc_params.fail_count >= gc_params.allowed_fail_count
+        # The stall stop follows the ledger push below: a step whose walk
+        # accepted no move may still have culled (it kept its unmoved clone)
+        stalled = gc_params.fail_count >= gc_params.allowed_fail_count
+        if stalled
             @warn "GC-NS: Failed $(gc_params.allowed_fail_count) times in a row."
-            # Opt-in stall stop: return the partial ledger and the intact
-            # live set instead of burning the remaining iteration budget
-            # (the driver re-initializes its live set on entry, so a stalled
-            # run cannot be chunked around from outside). The break leaves
-            # fail_count at threshold so a caller can distinguish a stalled
-            # return (the atomistic convention).
-            stop_on_stall && break
-            gc_params.fail_count = 0
         end
 
         if !(iter isa typeof(missing))
@@ -2116,6 +2195,17 @@ function grand_canonical_nested_sampling(liveset::LatticeGasWalkers,
             @info "GC-NS iter: $(iter), Ω: $(omega), E: $(energy), N: $(n_par)"
         elseif print_info && iter isa typeof(missing)
             @info "GC-NS MC move failed, step: $(i)"
+        end
+
+        if stalled
+            # Opt-in stall stop: return the partial ledger and the intact
+            # live set instead of burning the remaining iteration budget
+            # (the driver re-initializes its live set on entry, so a stalled
+            # run cannot be chunked around from outside). The break leaves
+            # fail_count at threshold so a caller can distinguish a stalled
+            # return (the atomistic convention).
+            stop_on_stall && break
+            gc_params.fail_count = 0
         end
 
         write_df_every_n(df, i, save_strategy)
@@ -2174,7 +2264,8 @@ truncate the prior support and bias Ξ.
 - `random_seed::Int64`: Kept for parity with `GrandCanonicalNestedSamplingParameters`;
   **not currently consumed** by the NS loop — call `Random.seed!` before
   `ideal_gas_referenced_nested_sampling` for reproducible runs.
-- `fail_count::Int64`: Consecutive failed replacements.
+- `fail_count::Int64`: Consecutive steps whose walk accepted no move (their
+  unmoved clones are kept when an offset puts them below the ceiling).
 - `allowed_fail_count::Int64`: Maximum consecutive failures before warning.
 - `cluster_p::Float64`: Current cluster growth probability (mutable runtime state).
 - `cluster_accepted::Float64`: Accepted cluster moves in current adjustment window.
@@ -2289,10 +2380,12 @@ Perform one step of ideal-gas-referenced grand-canonical nested sampling.
 Sorts walkers by energy E (not Ω — the chemical potential plays no role in
 the sampler), removes the worst (highest E), clones a parent with E < E_worst,
 and decorrelates the clone via grand-canonical MCMC that preserves the
-`z0^N`-weighted prior below the energy ceiling.
+`z0^N`-weighted prior below the energy ceiling. A clone whose walk accepted no
+move is kept with a redrawn tie-breaking offset (see `_keep_unmoved_clone!`).
 
 # Returns
-- `iter`: Iteration number (or `missing` if the step failed).
+- `iter`: Iteration number (or `missing` if no replacement lies strictly
+  below the ceiling; see `_keep_unmoved_clone!`).
 - `emax`: The E value of the removed walker (with units).
 - `num_particles`: The N value of the removed walker.
 - `liveset`: The updated liveset.
@@ -2341,11 +2434,16 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         incremental=mc_routine.incremental,
         swap_mode=mc_routine.swap_mode)
 
+    # A walk that accepted no move keeps its unmoved clone with a redrawn
+    # tie-breaking offset below the energy ceiling (`_keep_unmoved_clone!`);
+    # `fail_count` still counts consecutive walks that accepted no move
+    moved = accept
+    accept = accept || _keep_unmoved_clone!(to_walk, h, emax_val, params.energy_perturbation)
     if accept
         push!(ats, to_walk)
         popfirst!(ats)
         update_iter!(liveset)
-        params.fail_count = 0
+        params.fail_count = moved ? 0 : params.fail_count + 1
         iter = liveset.walkers[1].iter
     else
         emax_worst = missing
@@ -2402,13 +2500,17 @@ extract them from the returned liveset.
 
 - `stop_on_stall::Bool=false`: When true and `fail_count` reaches
   `allowed_fail_count`, warn once and return the partial ledger and the
-  intact live set (`fail_count` stays at threshold); the default keeps the
-  shipped warn-and-continue behavior byte-identically.
+  intact live set (`fail_count` stays at threshold); the ledger includes the
+  row of the step that reached the threshold when that step kept its unmoved
+  clone. The default keeps the shipped warn-and-continue behavior
+  byte-identically.
 - `record_move_rates::Bool=false`: When true the ledger gains the twelve
   per-iteration lattice acceptance columns (kernel key order,
   `_LATTICE_MOVE_RATE_COLUMNS`), snapshot-differenced from the run totals;
-  failed iterations fold into the next recorded row. The default keeps the
-  shipped schema.
+  a step that kept its unmoved clone records its rejected attempts in its
+  own row, and a step that records no row (no replacement strictly below the
+  ceiling; see `_keep_unmoved_clone!`) folds into the next recorded row. The
+  default keeps the shipped schema.
 
 # Returns
 - `df::DataFrame`: Columns `[:iter, :emax, :num_particles]`,
@@ -2474,12 +2576,11 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
 
         @debug "IG-ref GC-NS step $i, iter: $iter, emax: $emax, N: $n_par"
 
-        if params.fail_count >= params.allowed_fail_count
+        # The stall stop follows the ledger push below (see
+        # grand_canonical_nested_sampling)
+        stalled = params.fail_count >= params.allowed_fail_count
+        if stalled
             @warn "IG-ref GC-NS: Failed $(params.allowed_fail_count) times in a row."
-            # Opt-in stall stop (see grand_canonical_nested_sampling); the
-            # break leaves fail_count at threshold
-            stop_on_stall && break
-            params.fail_count = 0
         end
 
         if !(iter isa typeof(missing))
@@ -2511,6 +2612,13 @@ function ideal_gas_referenced_nested_sampling(liveset::LatticeGasWalkers,
             @info "IG-ref GC-NS iter: $(iter), E: $(emax), N: $(n_par)"
         elseif print_info && iter isa typeof(missing)
             @info "IG-ref GC-NS MC move failed, step: $(i)"
+        end
+
+        if stalled
+            # Opt-in stall stop (see grand_canonical_nested_sampling); the
+            # break leaves fail_count at threshold
+            stop_on_stall && break
+            params.fail_count = 0
         end
 
         write_df_every_n(df, i, save_strategy)
@@ -2951,18 +3059,23 @@ const _LATTICE_MOVE_RATE_COLUMNS = (:swap_attempted, :swap_accepted,
     _warn_min_image_cutoff(pot, config)
 
 Warn once when a potential's finite interaction range exceeds half the smallest
-cell edge of `config`: minimum-image truncation is anisotropic in that regime.
-An infinite range never warns (an untruncated minimum-image Hamiltonian is a
-deliberate model choice), and potentials of undeterminable range are skipped.
+periodic cell edge of `config`: minimum-image truncation is anisotropic in that
+regime. Only periodic axes enter the minimum (a nonperiodic axis has no images), and
+a cell with no periodic axis never warns. An infinite range never warns (an
+untruncated minimum-image Hamiltonian is a deliberate model choice), and potentials
+of undeterminable range are skipped.
 """
 function _warn_min_image_cutoff(pot, config)
     rng = AbstractPotentials._max_interaction_range(pot)
     rng === missing && return nothing
     isfinite(ustrip(rng)) || return nothing
     cellv = cell_vectors(config)
-    L_min = min(ustrip(u"Å", cellv[1][1]), ustrip(u"Å", cellv[2][2]), ustrip(u"Å", cellv[3][3]))
+    pbc = periodicity(config)
+    edges = [ustrip(u"Å", cellv[i][i]) for i in 1:3 if pbc[i]]
+    isempty(edges) && return nothing
+    L_min = minimum(edges)
     if ustrip(u"Å", rng) > L_min / 2
-        @warn "The potential's interaction range ($(round(ustrip(u"Å", rng); sigdigits=4)) Å) exceeds half the smallest cell edge ($(round(L_min / 2; sigdigits=4)) Å): minimum-image truncation is anisotropic in this regime."
+        @warn "The potential's interaction range ($(round(ustrip(u"Å", rng); sigdigits=4)) Å) exceeds half the smallest periodic cell edge ($(round(L_min / 2; sigdigits=4)) Å): minimum-image truncation is anisotropic in this regime."
     end
     return nothing
 end
@@ -3079,6 +3192,103 @@ function _init_atomistic_igref_walkers!(liveset::AtomWalkers,
     return liveset
 end
 
+# The Galilean burst needs `interacting_gradient`, which the external-field wrapper does
+# not provide (and the burst already refuses nonperiodic cells): refuse the combination
+# before any walker is touched.
+_refuse_field_galilean(pot, mc_routine::MCAtomGrandCanonicalMoves) = nothing
+function _refuse_field_galilean(::ExternalFieldPotential, mc_routine::MCAtomGrandCanonicalMoves)
+    mc_routine.galilean_steps > 0 && throw(ArgumentError("the Galilean burst does not support ExternalFieldPotential; use galilean_steps = 0"))
+    return nothing
+end
+
+"""
+    _atomistic_igref_z0V(liveset::GenericAtomWalkers{<:ExternalFieldPotential},
+                         params::AtomisticIGRefGCNSParameters)
+
+External-field method: the base method's validations, the field's accessible volume
+checked against the cell (a radial disc must fit its cross-section), and the bounded
+construction's truncated-mass guard evaluated at z₀V_acc, the mean of the restricted
+reference law the initializer draws (the base guard at z₀V_cell would refuse workable
+bounded runs in a narrow region). Returns z₀V_cell, the product the kernel's insertion
+ratio uses: insertions are proposed uniformly in the cell.
+"""
+function _atomistic_igref_z0V(liveset::GenericAtomWalkers{<:ExternalFieldPotential},
+                              params::AtomisticIGRefGCNSParameters)
+    isempty(liveset.walkers) && throw(ArgumentError("the liveset carries no walkers"))
+    cfg = liveset.walkers[1].configuration
+    cellv = cell_vectors(cfg)
+    for i in 1:3, j in 1:3
+        if i != j && !iszero(ustrip(cellv[i][j]))
+            throw(ArgumentError("the atomistic ideal-gas-referenced construction assumes an orthorhombic cell (consistent with pbc_dist); found a nonzero off-diagonal cell component"))
+        end
+    end
+    for walker in liveset.walkers
+        walker isa AtomWalker{1} || throw(ArgumentError("every walker must be a single-component AtomWalker{1}"))
+        any(walker.frozen) && throw(ArgumentError("the atomistic ideal-gas-referenced construction requires unfrozen walkers"))
+        cell_vectors(walker.configuration) == cellv || throw(ArgumentError("all walkers must share one cell"))
+    end
+    V = cellv[1][1] * cellv[2][2] * cellv[3][3]
+    z0V = ustrip(Unitful.NoUnits, params.reference_activity * V)
+    ratio = ustrip(Unitful.NoUnits, accessible_volume(liveset.potential.field, cfg) / V)
+    ratio > 0.0 || throw(ArgumentError("the field's accessible region has zero volume in the cell"))
+    if params.n_max != typemax(Int64)
+        z0V_acc = z0V * ratio
+        trunc_mass = cdf(Poisson(z0V_acc), params.n_max)
+        if trunc_mass < 1e-8
+            throw(ArgumentError("the truncated reference mass P(Poisson(z0V_acc) <= n_max) = $trunc_mass is below 1e-8 at z0V_acc = $z0V_acc, n_max = $(params.n_max); lower reference_activity so the reference law overlaps the bounded support"))
+        end
+    end
+    return z0V
+end
+
+"""
+    _init_atomistic_igref_walkers!(liveset::GenericAtomWalkers{<:ExternalFieldPotential},
+                                   params::AtomisticIGRefGCNSParameters,
+                                   z0V::Float64)
+
+External-field method: the reference law restricted to the field's accessible region.
+Each walker's particle count is Poisson(z₀V_acc) (conditional on `0:n_max` by the same
+rejection as the base method) with V_acc = `accessible_volume(field, cell)`, and each
+position is uniform in the region by rejection from the cell (three uniforms per
+attempt, redrawn until `accessible`). The draw order is the base method's, so with a
+field whose region is the whole cell (V_acc = V_cell) the stream is identical to it.
+`z0V` is the cell product the kernel's insertion ratio uses; only the initializer
+works at z₀V_acc, and the reduction is called with `V = accessible_volume(field, cell)`.
+"""
+function _init_atomistic_igref_walkers!(liveset::GenericAtomWalkers{<:ExternalFieldPotential},
+                                        params::AtomisticIGRefGCNSParameters,
+                                        z0V::Float64)
+    pot = liveset.potential
+    field = pot.field
+    cfg = liveset.walkers[1].configuration
+    cellv = cell_vectors(cfg)
+    box = (cellv[1][1], cellv[2][2], cellv[3][3])
+    V_cell = box[1] * box[2] * box[3]
+    ratio = ustrip(Unitful.NoUnits, accessible_volume(field, cfg) / V_cell)
+    ratio > 0.0 || throw(ArgumentError("the field's accessible region has zero volume in the cell"))
+    z0V_acc = ratio == 1.0 ? z0V : z0V * ratio
+    for walker in liveset.walkers
+        while walker.list_num_par[1] > 0
+            remove_particle!(walker, walker.list_num_par[1])
+        end
+        n = rand(Poisson(z0V_acc))
+        while n > params.n_max
+            n = rand(Poisson(z0V_acc))
+        end
+        for _ in 1:n
+            pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
+            while !accessible(field, pos, cfg)
+                pos = SVector(rand() * box[1], rand() * box[2], rand() * box[3])
+            end
+            insert_particle!(walker, pos, params.species)
+        end
+        AbstractLiveSets.assign_frozen_energy!(walker, pot)
+        assign_energy!(walker, pot)
+        walker.iter = 0
+    end
+    return liveset
+end
+
 """
     _init_atomistic_igref_walkers!(liveset::LJSurfaceWalkers,
                                    params::AtomisticIGRefGCNSParameters,
@@ -3153,6 +3363,7 @@ function nested_sampling_step!(liveset::AtomWalkers,
                                mc_routine::MCAtomGrandCanonicalMoves;
                                ns_iteration::Int=0,
                                z0V::Union{Nothing,Float64}=nothing)
+    _refuse_field_galilean(liveset.potential, mc_routine)
     z0V === nothing && (z0V = _atomistic_igref_z0V(liveset, params))
     mu = params.chemical_potential
     _sort_by_grand_potential!(liveset, mu)
@@ -3558,6 +3769,13 @@ rejected at step entry. The reference measure is unchanged: Poisson counts (trun
 under a finite `n_max`), positions uniform in the FULL cell, z0V folded from the full
 cell — the substrate excludes volume through the energy ceiling, not the measure.
 
+A live set under an `ExternalFieldPotential` (a `GenericAtomWalkers` whose potential is the
+wrapper) targets the reference measure restricted to the field's accessible region: counts
+Poisson(z0V_acc) with V_acc = `accessible_volume(field, cell)`, positions uniform in the
+region, while the kernel keeps its full-cell insertion ratio at z0V_cell (proposals outside
+the region carry `+Inf` and fail). Reduce such a ledger with `V = accessible_volume(field,
+cell)`, not the cell volume. The Galilean burst is refused with the wrapper.
+
 With `initialize=false` the driver trusts the supplied live set instead of drawing a
 fresh one: particle counts, positions, and the walkers' `iter` counters continue a
 previous run (the ledger's `iter` keying stays consistent when every walker carries
@@ -3597,6 +3815,7 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
                                               stop_on_stall::Bool=true,
                                               record_move_rates::Bool=false,
                                               initialize::Bool=true)
+    _refuse_field_galilean(liveset.potential, mc_routine)
     z0V = _atomistic_igref_z0V(liveset, params)
     _warn_min_image_cutoff(liveset.potential, liveset.walkers[1].configuration)
     if initialize

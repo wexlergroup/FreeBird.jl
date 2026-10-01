@@ -14,6 +14,8 @@ include("test-atomistic-gc-interacting-regressions.jl")
     include("test-grand_canonical_ns.jl")
     # test ideal-gas-referenced grand-canonical nested sampling
     include("test-ideal-gas-ref-gcns.jl")
+    # the lattice nested-sampling steps keep a clone whose walk accepted no move
+    include("test-lattice-unmoved-clone.jl")
     # seeded trajectory pins for the lattice grand-canonical kernels/drivers
     include("test-lattice-gc-trajectory-pins.jl")
     # seeded trajectory pins for the fixed-N lattice walk kernel and drivers
@@ -38,6 +40,8 @@ include("test-atomistic-gc-interacting-regressions.jl")
     include("test-igref-ess.jl")
     # regression coverage for the continuous-space grand-canonical route
     include("test-atomistic-gc-regressions.jl")
+    # one-body external fields on the atomistic samplers
+    include("test-atomistic-external-fields.jl")
     # test atomistic GC-NS fixed-N post-processing (ideal gas reference)
     include("test-atomistic-gcns-fixed-n.jl")
     # test lattice GC-NS fixed-N post-processing

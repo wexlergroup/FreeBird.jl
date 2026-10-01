@@ -105,7 +105,7 @@ function MC_random_walk!(
         config.position[i_at] = pos
         postwalk_energy = interacting_energy(config, pot, at.list_num_par, at.frozen)
 
-        if postwalk_energy >= emax
+        if !(postwalk_energy < emax)
             # reject the move, revert to original position
             config.position[i_at] = orig_pos
         else
@@ -139,7 +139,7 @@ function MC_random_walk!(
         config.position[i_at] = pos
         postwalk_energy = interacting_energy(config, pot)
 
-        if postwalk_energy >= emax
+        if !(postwalk_energy < emax)
             # reject the move, revert to original position
             config.position[i_at] = orig_pos
         else
@@ -193,7 +193,7 @@ function MC_random_walk!(
         e_diff = postwalk_energy - prewalk_energy
         # energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
         energy = at.energy + e_diff
-        if energy >= emax
+        if !(energy < emax)
             # reject the move, revert to original position
             config.position[i_at] = orig_pos
         else
@@ -202,6 +202,61 @@ function MC_random_walk!(
             n_accept += 1
             accept_this_walker = true
         end
+    end
+    return accept_this_walker, n_accept/n_steps, at
+end
+
+"""
+    MC_random_walk!(n_steps::Int, at::AtomWalker, pot::ExternalFieldPotential, step_size::Float64, emax::typeof(0.0u"eV"))
+
+Canonical nested-sampling random walk under an `ExternalFieldPotential`: the incremental
+single-site walk of the Lennard-Jones method, with the energy difference of each move
+taken from the wrapper's `single_site_energy` (pair plus field). A move that leaves the
+accessible region carries `+Inf` and is rejected by the ceiling test. After a walk that
+accepted at least one move, the energy is re-anchored from scratch (the full
+`interacting_energy` plus the frozen part) and the ceiling is re-checked on the
+re-anchored value, as the grand-canonical step does, so the rounding of the incremental
+differences never accumulates across clones and no walker returns at or above the ceiling.
+
+# Returns
+- `accept_this_walker::Bool`: Whether any move was accepted.
+- `accept_rate::Float64`: The acceptance rate of the random walk.
+- `at::AtomWalker`: The updated walker.
+"""
+function MC_random_walk!(
+                    n_steps::Int,
+                    at::AtomWalker{C},
+                    pot::ExternalFieldPotential,
+                    step_size::Float64,
+                    emax::typeof(0.0u"eV")
+                    ) where C
+    n_accept = 0
+    accept_this_walker = false
+    for i_mc_step in 1:n_steps
+        config = at.configuration
+        free_index = free_par_index(at)
+        i_at = rand(free_index)
+        prewalk_energy = single_site_energy(i_at, config, pot, at.list_num_par)
+        pos::SVector{3, typeof(0.0u"Å")} = position(config, i_at)
+        orig_pos = deepcopy(pos)
+        pos = single_atom_random_walk!(pos, step_size)
+        pos = periodic_boundary_wrap!(pos, config)
+        config.position[i_at] = pos
+        postwalk_energy = single_site_energy(i_at, config, pot, at.list_num_par)
+        energy = at.energy + (postwalk_energy - prewalk_energy)
+        if !(energy < emax)
+            # reject the move, revert to original position
+            config.position[i_at] = orig_pos
+        else
+            at.energy = energy
+            n_accept += 1
+            accept_this_walker = true
+        end
+    end
+    if accept_this_walker
+        at.energy = interacting_energy(at.configuration, pot, at.list_num_par, at.frozen) +
+                    at.energy_frozen_part
+        accept_this_walker = at.energy < emax
     end
     return accept_this_walker, n_accept/n_steps, at
 end
@@ -245,7 +300,7 @@ function MC_random_walk!(
         e_diff = postwalk_energy - prewalk_energy
         # energy = interacting_energy(config, lj, at.list_num_par, at.frozen) + at.energy_frozen_part
         energy = at.energy + e_diff
-        if energy >= emax
+        if !(energy < emax)
             # reject the move, revert to original position
             config.position[i_at] = orig_pos
         else
@@ -297,7 +352,7 @@ function MC_random_walk_2D!(
         pos = periodic_boundary_wrap!(pos, config)
         config.position[i_at] = pos
         energy = interacting_energy(config, pot, at.list_num_par, at.frozen) + at.energy_frozen_part
-        if energy >= emax
+        if !(energy < emax)
             # reject the move, revert to original position
             config.position[i_at] = orig_pos
         else
@@ -405,7 +460,7 @@ function MC_random_walk!(n_steps::Int,
             proposed_energy = interacting_energy(config, h) + perturbation_energy
         end
 
-        @debug "proposed_energy = $proposed_energy, perturbed_energy = $(perturbation_energy), emax = $(emax)), accept = $(proposed_energy < emax)"
+        # No per-proposal @debug here: its log-level check ran on every proposal of the fixed-N walk
         if proposed_energy >= emax
             _lattice_walk_apply!(config, hop_from, hop_to)
             continue
@@ -861,6 +916,30 @@ function random_microstate!(lattice::AtomicLattice{C}; p::Float64=0.5) where C
 end
 
 """
+    _rand_site(occupancy::AbstractVector{Bool}, occupied::Bool, count::Integer)
+
+Return a uniformly random site index `i` with `occupancy[i] == occupied`, where `count`
+(at least 1) is the number of such sites. One `rand(1:count)` draw picks the rank `k`, and
+a scan returns the `k`-th matching site in index order: the same random draw and the same
+site as `rand(findall(occupancy .== occupied))`, whose `rand(::Vector)` indexes the vector
+with the same `rand(1:count)`, but without allocating the index vector. The caller passes
+the exact count, which it has already computed: a `count` below 1 throws an
+`ArgumentError` (an empty range), and a wrong positive count is not reliably detected (a
+larger one throws an `ArgumentError` only when the drawn rank runs past the last matching
+site, and a smaller one never reaches the last matching sites).
+"""
+function _rand_site(occupancy::AbstractVector{Bool}, occupied::Bool, count::Integer)
+    k = rand(1:count)
+    for i in eachindex(occupancy)
+        if occupancy[i] == occupied
+            k -= 1
+            k == 0 && return i
+        end
+    end
+    throw(ArgumentError("count = $count exceeds the number of sites with occupancy $occupied"))
+end
+
+"""
     lattice_insert_particle!(lattice::SLattice)
 
 Insert a particle at a random empty site. Returns `true` if successful,
@@ -881,9 +960,10 @@ function lattice_insert_particle!(lattice::SLattice)
     if n_occ >= n_sites
         return false, lattice, 0
     end
-    # Collect empty site indices
-    empty_sites = empty_indices(lattice)
-    site = rand(empty_sites)
+    # A uniform empty site: the draw and the site of
+    # rand(findall(.!lattice.components[1])), without allocating that vector.
+    site = _rand_site(lattice.components[1], false,
+                      length(lattice.components[1]) - n_occ)
     set_occupied!(lattice, site, true)
     return true, lattice, site
 end
@@ -929,8 +1009,9 @@ function lattice_delete_particle!(lattice::SLattice)
     if n_occ == 0
         return false, lattice, 0
     end
-    occupied_sites = occupied_indices(lattice)
-    site = rand(occupied_sites)
+    # A uniform occupied site: the draw and the site of
+    # rand(findall(lattice.components[1])), without allocating that vector.
+    site = _rand_site(lattice.components[1], true, n_occ)
     set_occupied!(lattice, site, false)
     return true, lattice, site
 end
@@ -1257,8 +1338,9 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     if n == 0 || n == n_sites
                         continue
                     end
-                    hop_from = rand(occupied_indices(config))
-                    hop_to = rand(empty_indices(config))
+                    hop_from = _rand_site(config.components[1], true, n)
+                    hop_to = _rand_site(config.components[1], false,
+                                        length(config.components[1]) - n)
                     if use_deltas
                         step_delta = site_flip_delta(config, h, hop_from)
                         set_occupied!(config, hop_from, false)
@@ -1317,12 +1399,12 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     insert_site = rand(biased_set)
                     insert_from_biased = true
                 else
-                    # Uniform sub-channel: the same single rand(::Vector) draw
-                    # as lattice_insert_particle!, inlined to capture the site
+                    # Uniform sub-channel: the same single site draw as
+                    # lattice_insert_particle!, inlined to capture the site
                     # for the composite density (keep in lockstep with it)
                     insert_uniform_attempted += 1
-                    empty_sites = empty_indices(config)
-                    insert_site = rand(empty_sites)
+                    insert_site = _rand_site(config.components[1], false,
+                                             length(config.components[1]) - n)
                     insert_from_biased = false
                 end
                 set_occupied!(config, insert_site, true)
@@ -1350,11 +1432,10 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 continue                # guard skip: not counted as an attempt
             end
             if p_bias > 0.0
-                # Inlined uniform deletion (the same single rand(::Vector)
-                # draw as lattice_delete_particle!) to capture the vacated
-                # site for the reverse composite density (keep in lockstep)
-                occupied_sites = occupied_indices(config)
-                deleted_site = rand(occupied_sites)
+                # Inlined uniform deletion (the same single site draw as
+                # lattice_delete_particle!) to capture the vacated site
+                # for the reverse composite density (keep in lockstep)
+                deleted_site = _rand_site(config.components[1], true, n)
                 set_occupied!(config, deleted_site, false)
             else
                 success, _, deleted_site = lattice_delete_particle!(config)
@@ -1977,7 +2058,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             config.position[i_at] = pos
             postwalk_energy = single_site_energy(i_at, config, pot, at.list_num_par)
             proposed_energy = at.energy + (postwalk_energy - prewalk_energy)
-            if proposed_energy - mu * n >= emax
+            if !(proposed_energy - mu * n < emax)
                 config.position[i_at] = orig_pos
             else
                 at.energy = proposed_energy
@@ -2015,7 +2096,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             e_site = single_site_energy(n + 1, config, pot, at.list_num_par)
             proposed_energy = at.energy + e_site
             accept = true
-            if proposed_energy - mu * (n + 1) >= emax
+            if !(proposed_energy - mu * (n + 1) < emax)
                 accept = false
             else
                 if p_bias > 0.0
@@ -2045,7 +2126,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             e_site = single_site_energy(i_at, config, pot, at.list_num_par)
             proposed_energy = at.energy - e_site
             accept = true
-            if proposed_energy - mu * (n - 1) >= emax
+            if !(proposed_energy - mu * (n - 1) < emax)
                 accept = false
             else
                 if p_bias > 0.0
@@ -2183,7 +2264,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             config.position[i_at] = pos
             postwalk_energy = single_site_energy(i_at, config, cps, at.list_num_par, surface.configuration)
             proposed_energy = at.energy + (postwalk_energy - prewalk_energy)
-            if proposed_energy - mu * n >= emax
+            if !(proposed_energy - mu * n < emax)
                 config.position[i_at] = orig_pos
             else
                 at.energy = proposed_energy
@@ -2201,7 +2282,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             e_site = single_site_energy(n + 1, config, cps, at.list_num_par, surface.configuration)
             proposed_energy = at.energy + e_site
             accept = true
-            if proposed_energy - mu * (n + 1) >= emax
+            if !(proposed_energy - mu * (n + 1) < emax)
                 accept = false
             else
                 ratio = gc_insert_acceptance_ratio(z0V, n, p_insert, p_delete)
@@ -2226,7 +2307,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
             e_site = single_site_energy(i_at, config, cps, at.list_num_par, surface.configuration)
             proposed_energy = at.energy - e_site
             accept = true
-            if proposed_energy - mu * (n - 1) >= emax
+            if !(proposed_energy - mu * (n - 1) < emax)
                 accept = false
             else
                 ratio = gc_delete_acceptance_ratio(z0V, n, p_insert, p_delete)

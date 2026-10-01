@@ -985,7 +985,9 @@ follow-up item and out of scope here.
 
 # Arguments
 - `df::DataFrame`: NS output with columns `[:iter, :emax, :num_particles, :log_compression]`.
-- `V::typeof(1.0u"Å^3")`: The cell volume.
+- `V::typeof(1.0u"Å^3")`: The reference measure's volume: the cell volume, or
+  `accessible_volume(field, cell)` for a live set under an `ExternalFieldPotential` (whose
+  reference measure is restricted to the field's accessible region).
 - `atomic_mass::typeof(1.0u"u")`: The particle mass entering Λ(T).
 - `reference_activity::typeof(1.0u"Å^-3")`: The run's reference activity z0 (must match!).
 - `μ_grid::AbstractVector{<:typeof(1.0u"eV")}`: Chemical potential grid (Unitful, eV),
@@ -1708,12 +1710,14 @@ does not cancel.
   any DataFrame (e.g., `DataFrame(iter=Int[], emax=Float64[])`).
 - `N_values::AbstractVector{<:Integer}`: particle counts corresponding to each
   DataFrame. Must include `0`; `length(N_values) == length(ns_outputs)`.
-- `V::typeof(1.0u"Å^3")`: the simulation-box volume, i.e. the NS prior volume
-  per particle (NS samples positions uniformly over the box). This is what
-  closes `Z_N^{config} = V^N · Z_{NS}^{(N)}`, so it must *not* be reduced to an
-  accessible or adsorption-region sub-volume. For surface systems the
-  substrate's volume exclusion is captured by the Boltzmann factor inside
-  `Z_{NS}^{(N)}`, not by shrinking `V`.
+- `V::typeof(1.0u"Å^3")`: the NS prior volume per particle, the volume of the
+  initializer's support. This is what closes `Z_N^{config} = V^N · Z_{NS}^{(N)}`.
+  For walkers drawn uniformly over the box (the shipped generators) it is the
+  box volume, and it must *not* be reduced to an accessible or adsorption-region
+  sub-volume: for surface systems the substrate's volume exclusion is captured
+  by the Boltzmann factor inside `Z_{NS}^{(N)}`, not by shrinking `V`. For
+  walkers drawn uniformly over an external field's accessible region
+  (`generate_accessible_configs`) it is `accessible_volume(field, cell)`.
 - `atomic_mass::typeof(1.0u"u")`: per-atom mass for `Λ(T)`.
 - `μ_grid::AbstractVector{<:typeof(1.0u"eV")}`: chemical potentials.
 - `T_grid::AbstractVector{<:Unitful.Temperature}`: temperatures.

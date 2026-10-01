@@ -10,7 +10,8 @@ continuous atomistic walkers through `MC_muVT_walk!`.
   temperature (`zV = e^(βμ) V / Λ(T)^3`, folded by the caller exactly as the
   kernel documents; the driver never sees μ or Λ). Must match `temperatures` in
   length: at fixed μ the activity is temperature-dependent, so each rung carries
-  its own value.
+  its own value. V is the cell volume, also under an `ExternalFieldPotential`: the
+  kernel inserts uniformly in the cell.
 - `equilibrium_steps::Int64`: Kernel steps of equilibration per temperature, run
   in ten equal adaptation blocks (documented contract: step-size adjustment acts
   between blocks on the displacement-only acceptance rate of the block).

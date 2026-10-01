@@ -125,6 +125,48 @@
         end
     end
 
+    @testset "atomistic kernel, external-field wrapper" begin
+        # a hard slab x in [0, 1] Å in a 12 Å cell: proposals outside it carry +Inf, and the
+        # draw count is the same whether a proposal lands inside or outside. The insertion's
+        # x coordinate is the stream's second draw; at both seeds it lands outside the slab,
+        # so the accepted-ceiling, high-activity insertion is rejected by the field
+        box = [[12.0, 0.0, 0.0], [0.0, 12.0, 0.0], [0.0, 0.0, 12.0]]u"Å"
+        seed_at = FastSystem(atomic_system([:Ar => [1.0, 1.0, 1.0]u"Å"], box, (true, true, true)))
+        mkempty() = FastSystem(cell_vectors(seed_at), periodicity(seed_at),
+                               empty(position(seed_at, :)), empty(species(seed_at, :)),
+                               empty(mass(seed_at, :)))
+        slab = TabulatedPlanarField(1, [0.0, 1.0]u"Å", [0.0, 0.0]u"eV")
+        pot = ExternalFieldPotential(LJParameters(epsilon=0.0, sigma=2.5, cutoff=2.5), slab)
+        function mkwalker(n)
+            w = AtomWalker{1}(mkempty())
+            for i in 1:n
+                insert_particle!(w, SVector(0.5, 2.0 * i, 5.0)u"Å", :Ar)
+            end
+            return w
+        end
+        for seed in seeds
+            @test probe(seed, 2)[2] * 12.0 > 1.0   # precondition: the insertion lands outside
+        end
+        for (label, mix, expected) in (("insertion", (0.0, 0.75), 5), ("deletion", (0.0, 0.25), 3),
+                                       ("displacement", (1.0, 0.0), 5))
+            for emax in ceilings, z0V in activities, seed in seeds
+                w = mkwalker(2)
+                k = consumed(seed, () -> MC_grand_canonical_walk!(1, w, pot, emax; z0V=z0V, species=:Ar,
+                                                                  p_move=mix[1], p_insert=mix[2]))
+                @test k == expected
+                # the outside insertion is rejected whatever the ceiling and the activity
+                @test w.list_num_par == [label == "insertion" ? 2 : n_after(label, emax > 0.0u"eV", z0V)]
+            end
+        end
+        # a walk of displacements across the slab's edge: the stream position is that of the
+        # plain potential under both ceilings
+        for seed in (4241, 4242), emax in ceilings
+            w = mkwalker(3)
+            @test consumed(seed, () -> MC_grand_canonical_walk!(11, w, pot, emax; z0V=3.0,
+                                                               species=:Ar, p_move=1.0, p_insert=0.0), 64) == 11 * 5
+        end
+    end
+
     @testset "atomistic kernel, surface-aware method" begin
         sbox = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 15.0]]u"Å"
         surf_sys = FastSystem(atomic_system([:H => [2.5, 2.5, 2.0]u"Å", :H => [7.5, 2.5, 2.0]u"Å",

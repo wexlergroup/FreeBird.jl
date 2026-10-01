@@ -236,6 +236,16 @@ For lattice systems, `walks_freq` and `clusters_freq` control the ratio of local
   swap-only incremental walk is
   `MCMixedMoves(walks_freq=1, clusters_freq=0, incremental=true)`.
   Atomistic systems ignore the field.
+- `perturbation_mode::Symbol`: How the lattice walks apply the tie-breaking
+  perturbation (`energy_perturbation`), passed to `MC_random_walk!` and
+  `MC_cluster_walk!`: `:per_proposal` (the default, the shipped stream) or
+  `:carried` (opt-in: each walker keeps its own perturbation through a
+  proposal and redraws it after every step from its law given its
+  arrangement, so moves inside a level of equal energy are not frozen as the
+  ceiling descends into it). Under `:carried` a move that leaves the
+  arrangement unchanged passes whenever the walker is below the ceiling, so
+  the cluster acceptance rate that tunes the cluster growth probability
+  counts such moves. Atomistic systems ignore the field.
 """
 mutable struct MCMixedMoves <: MCRoutine
     walks_freq::Int
@@ -247,6 +257,7 @@ mutable struct MCMixedMoves <: MCRoutine
     cluster_p_floor::Float64
     cluster_p_ceiling::Float64
     incremental::Bool
+    perturbation_mode::Symbol
 end
 
 # Eight-positional constructor (the field set before `incremental` was
@@ -259,6 +270,17 @@ function MCMixedMoves(walks_freq::Int, swaps_freq::Int, clusters_freq::Int,
                  initial_cluster_p, target_cluster_accept, cluster_adjust_interval,
                  cluster_p_floor, cluster_p_ceiling, false)
 end
+
+# Nine-positional constructor (the field set before `perturbation_mode` was
+# appended): keeps every shipped positional call working with the default.
+# Untyped, so that it forwards to the converting field constructor exactly as
+# the nine-field default constructor did (an Int where a Float64 field stands,
+# for example)
+MCMixedMoves(walks_freq, swaps_freq, clusters_freq, initial_cluster_p, target_cluster_accept,
+             cluster_adjust_interval, cluster_p_floor, cluster_p_ceiling, incremental) =
+    MCMixedMoves(walks_freq, swaps_freq, clusters_freq,
+                 initial_cluster_p, target_cluster_accept, cluster_adjust_interval,
+                 cluster_p_floor, cluster_p_ceiling, incremental, :per_proposal)
 
 # Backward-compatible constructor: MCMixedMoves(5, 1)
 function MCMixedMoves(walks_freq::Int, swaps_freq::Int)
@@ -276,10 +298,12 @@ function MCMixedMoves(;
     cluster_p_floor::Float64=0.01,
     cluster_p_ceiling::Float64=1.0,
     incremental::Bool=false,
+    perturbation_mode::Symbol=:per_proposal,
 )
+    MonteCarloMoves._check_perturbation_mode(perturbation_mode)
     MCMixedMoves(walks_freq, swaps_freq, clusters_freq,
                  initial_cluster_p, target_cluster_accept, cluster_adjust_interval,
-                 cluster_p_floor, cluster_p_ceiling, incremental)
+                 cluster_p_floor, cluster_p_ceiling, incremental, perturbation_mode)
 end
 
 """
@@ -349,6 +373,11 @@ particle insertion and deletion.
   correction, zero nulls by construction, guard-skipped on empty and full
   lattices). `:occupied_empty` changes the random stream and stays off by
   default.
+- `perturbation_mode::Symbol`: How the walk applies the tie-breaking
+  perturbation (`energy_perturbation`): `:per_proposal` (the default, the
+  shipped stream) or `:carried` (opt-in: each walker keeps its own
+  perturbation through a proposal and redraws it after every step from its
+  law given its arrangement; see `MC_grand_canonical_walk!`).
 
 When `clusters_freq == 0` (the default), the fixed-N branch uses only local swaps
 (`lattice_random_walk!`), preserving backward compatibility with existing scripts.
@@ -377,6 +406,7 @@ struct MCGrandCanonicalMoves <: MCRoutine
     bias_shells::Int
     incremental::Bool
     swap_mode::Symbol
+    perturbation_mode::Symbol
     function MCGrandCanonicalMoves(;
             p_move::Float64=0.5,
             p_insert::Float64=0.25,
@@ -391,13 +421,15 @@ struct MCGrandCanonicalMoves <: MCRoutine
             bias_predicate::Symbol=:contact,
             bias_shells::Int=1,
             incremental::Bool=false,
-            swap_mode::Symbol=:uniform_pair)
+            swap_mode::Symbol=:uniform_pair,
+            perturbation_mode::Symbol=:per_proposal)
         if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
             throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
         end
         if swap_mode !== :uniform_pair && swap_mode !== :occupied_empty
             throw(ArgumentError("unknown swap_mode :$swap_mode; expected :uniform_pair or :occupied_empty"))
         end
+        MonteCarloMoves._check_perturbation_mode(perturbation_mode)
         if !(0.0 <= p_bias <= 1.0)
             throw(ArgumentError("p_bias must satisfy 0 <= p_bias <= 1"))
         end
@@ -416,7 +448,7 @@ struct MCGrandCanonicalMoves <: MCRoutine
         new(p_move, p_insert, clusters_freq, swaps_freq,
             initial_cluster_p, target_cluster_accept, cluster_adjust_interval,
             cluster_p_floor, cluster_p_ceiling,
-            p_bias, bias_predicate, bias_shells, incremental, swap_mode)
+            p_bias, bias_predicate, bias_shells, incremental, swap_mode, perturbation_mode)
     end
 end
 
@@ -1199,7 +1231,8 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
     if n_cluster > 0
         cluster_accepted, cluster_rate, to_walk = MC_cluster_walk!(
             n_cluster, to_walk, h, emax, ns_params.cluster_p;
-            energy_perturb=ns_params.energy_perturbation)
+            energy_perturb=ns_params.energy_perturbation,
+            perturbation_mode=mc_routine.perturbation_mode)
     end
 
     # Apply local swap moves
@@ -1209,7 +1242,8 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         local_accepted, local_rate, to_walk = MC_random_walk!(
             n_local, to_walk, h, emax;
             energy_perturb=ns_params.energy_perturbation,
-            incremental=mc_routine.incremental)
+            incremental=mc_routine.incremental,
+            perturbation_mode=mc_routine.perturbation_mode)
     end
 
     accept = cluster_accepted || local_accepted
@@ -1842,7 +1876,8 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         bias_predicate=mc_routine.bias_predicate,
         bias_shells=mc_routine.bias_shells,
         incremental=mc_routine.incremental,
-        swap_mode=mc_routine.swap_mode)
+        swap_mode=mc_routine.swap_mode,
+        perturbation_mode=mc_routine.perturbation_mode)
 
     # A walk that accepted no move keeps its unmoved clone with a redrawn
     # tie-breaking offset below the Ω ceiling (`_keep_unmoved_clone!`);
@@ -2254,7 +2289,8 @@ function nested_sampling_step!(liveset::LatticeGasWalkers,
         bias_predicate=mc_routine.bias_predicate,
         bias_shells=mc_routine.bias_shells,
         incremental=mc_routine.incremental,
-        swap_mode=mc_routine.swap_mode)
+        swap_mode=mc_routine.swap_mode,
+        perturbation_mode=mc_routine.perturbation_mode)
 
     # A walk that accepted no move keeps its unmoved clone with a redrawn
     # tie-breaking offset below the energy ceiling (`_keep_unmoved_clone!`);

@@ -15,6 +15,41 @@
         @test length(ml.components[2]) == length(new_ml.components[2])
     end
 
+    @testset "AtomicLattice incremental fixed-N walks" begin
+        atomic = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", surface=:fcc100,
+            supercell_dimensions=(4, 4, 2), lattice_constant=3.947,
+            periodicity=(true, true, false), adsorbate_atoms=["O"],
+            components=[0], num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        for site in 1:6
+            set_occupied!(atomic, site, true)
+        end
+        sync_ase_lattice!(atomic)
+        pair = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+
+        walker = LatticeWalker(deepcopy(atomic),
+            energy=interacting_energy(atomic, pair), iter=0)
+        Random.seed!(2)
+        accepted, _, walker = MC_random_walk!(
+            1, walker, pair, 1.0e6; incremental=true)
+        @test accepted
+        @test walker.configuration.components !=
+              walker.configuration.synced_components
+        @test walker.configuration.ase_dirty
+
+        matrix_ham = MLatticeHamiltonian(1, [pair])
+        matrix_walker = LatticeWalker(deepcopy(atomic),
+            energy=interacting_energy(atomic, matrix_ham), iter=0)
+        Random.seed!(2)
+        matrix_result = @test_nowarn MC_random_walk!(
+            1, matrix_walker, matrix_ham, 1.0e6; incremental=true)
+        @test matrix_result[1]
+        @test isapprox(matrix_walker.energy,
+                       interacting_energy(matrix_walker.configuration,
+                                          matrix_ham))
+    end
+
     @testset "Swap occupied sites across components tests" begin
         ml = MLattice{2,SquareLattice}(components=[[1,3],[2,4]])
         new_ml = deepcopy(ml)

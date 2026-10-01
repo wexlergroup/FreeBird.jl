@@ -440,9 +440,9 @@ function MC_random_walk!(n_steps::Int,
             was_null = config.components[1][hop_from] == config.components[1][hop_to]
             if !was_null
                 step_delta = site_flip_delta(config, h, hop_from)
-                config.components[1][hop_from] = !config.components[1][hop_from]
+                set_occupied!(config, hop_from, !is_occupied(config, hop_from))
                 step_delta += site_flip_delta(config, h, hop_to)
-                config.components[1][hop_to] = !config.components[1][hop_to]
+                set_occupied!(config, hop_to, !is_occupied(config, hop_to))
             end
         else
             # In-place proposal: the hop-pair walk mutates the live configuration

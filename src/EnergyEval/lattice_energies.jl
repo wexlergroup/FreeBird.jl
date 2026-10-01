@@ -291,14 +291,20 @@ function site_flip_delta(lattice::AtomicLattice{1},
 end
 
 """
-    site_flip_delta(lattice::SLattice, h::MLatticeHamiltonian{C,N,U}, site::Int) where {C,N,U}
+    site_flip_delta(lattice, h::MLatticeHamiltonian, site::Int)
 
 Single-component delta under a multi-component Hamiltonian: delegates to
 `h.Hamiltonians[1, 1]`, matching the corresponding `interacting_energy`
-method for `SLattice`.
+methods for `SLattice` and `AtomicLattice{1}`.
 """
 function site_flip_delta(lattice::SLattice, h::MLatticeHamiltonian{C,N,U},
                          site::Int) where {C,N,U}
+    return site_flip_delta(lattice, h.Hamiltonians[1, 1], site)
+end
+
+function site_flip_delta(lattice::AtomicLattice{1},
+                         h::MLatticeHamiltonian{1,N,U},
+                         site::Int) where {N,U}
     return site_flip_delta(lattice, h.Hamiltonians[1, 1], site)
 end
 

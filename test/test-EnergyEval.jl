@@ -860,6 +860,7 @@
         atomic.components[1][[1, 2, 6, 11]] .= true
         atomic.ase_dirty = true
         pair = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+        single_component_matrix = MLatticeHamiltonian(1, [pair])
 
         expected = FreeBird.EnergyEval.lattice_interaction_energy(
             atomic.components[1], atomic.neighbors, pair) +
@@ -875,7 +876,9 @@
             [ClusterInteraction(0.012u"eV", [(1, 2, 6)])])
         @test interacting_energy(atomic, cluster_ham) == expected + 0.012u"eV"
 
-        for ham in (pair, field_ham, cluster_ham)
+        @test interacting_energy(atomic, single_component_matrix) == expected
+
+        for ham in (pair, single_component_matrix, field_ham, cluster_ham)
             for site in (1, 3, 6, 16)
                 e0 = interacting_energy(atomic, ham)
                 delta = site_flip_delta(atomic, ham, site)

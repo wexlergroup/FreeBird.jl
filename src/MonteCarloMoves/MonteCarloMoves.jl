@@ -8,6 +8,7 @@ module MonteCarloMoves
 using ExtXYZ
 using AtomsBase
 using Distributions
+using Random: randperm
 using Unitful
 using StaticArrays
 

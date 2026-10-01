@@ -1406,7 +1406,9 @@ function sync_ase_lattice!(lattice::AtomicLattice)
         lattice.adsorbate_height == lattice.synced_adsorbate_height &&
         return lattice
 
-    slab = lattice.ase_lattice
+    # Rebuild on an independent frame so a Python-side failure (for example,
+    # an invalid adsorbate symbol) cannot leave the live cache half-updated.
+    slab = lattice.ase_lattice.copy()
     tags = pyconvert(Vector{Int}, slab.get_tags())
     ads = findall(==(0), tags)
     if !isempty(ads)
@@ -1421,12 +1423,18 @@ function sync_ase_lattice!(lattice::AtomicLattice)
         end
     end
 
+    # Finish every operation that can allocate or cross the Python boundary
+    # before replacing the live cache.
+    synced_components = copy.(lattice.components)
+    synced_adsorbate_atoms = copy(lattice.adsorbate_atoms)
+    cache_fingerprint = _atomic_ase_cache_fingerprint(slab)
+
+    lattice.ase_lattice = slab
     lattice.ase_dirty = false
-    lattice.synced_components = copy.(lattice.components)
-    lattice.synced_adsorbate_atoms = copy(lattice.adsorbate_atoms)
+    lattice.synced_components = synced_components
+    lattice.synced_adsorbate_atoms = synced_adsorbate_atoms
     lattice.synced_adsorbate_height = lattice.adsorbate_height
-    lattice.ase_cache_fingerprint =
-        _atomic_ase_cache_fingerprint(lattice.ase_lattice)
+    lattice.ase_cache_fingerprint = cache_fingerprint
     return lattice
 end
 

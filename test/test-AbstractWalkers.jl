@@ -2066,6 +2066,42 @@
             @test isempty(only(one_site_mlip.neighbors))
             @test_nowarn geometric_cluster_swap!(one_site_mlip, 0.5)
 
+            # Some mixed site sets have only a subset of valid inversion
+            # centers. The cluster move must retry those pivots without
+            # failing, while site sets with no center report the limitation.
+            mixed_centers = AtomicLattice{1,TriangularLattice}(
+                lattice_atom="Pd", surface=:fcc111,
+                supercell_dimensions=(3, 4, 2), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.25, num_nearest_neighbors=1,
+                type_of_sites=["bridge", "fcc", "hcp", "ontop"])
+            count_before = n_occupied(mixed_centers)
+            Random.seed!(11)
+            first_pivot = rand(1:num_sites(mixed_centers))
+            @test isempty(
+                FreeBird.AbstractWalkers._ensure_atomic_reflection_row!(
+                    mixed_centers, first_pivot))
+            Random.seed!(11)
+            @test_nowarn geometric_cluster_swap!(mixed_centers, 0.35)
+            @test n_occupied(mixed_centers) == count_before
+            @test !isempty(mixed_centers.reflection_row)
+
+            no_center = AtomicLattice{1,TriangularLattice}(
+                lattice_atom="Fe", surface=:bcc111,
+                supercell_dimensions=(3, 4, 3), lattice_constant=2.87,
+                periodicity=(true, true, false), adsorbate_atoms=["H"],
+                coverage=0.25, num_nearest_neighbors=1,
+                type_of_sites=["hollow", "ontop"])
+            @test_throws ArgumentError geometric_cluster_swap!(no_center, 0.35)
+
+            finite_cluster = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(3, 4, 2), lattice_constant=3.947,
+                periodicity=(false, false, false), adsorbate_atoms=["H"],
+                coverage=0.25, num_nearest_neighbors=1,
+                type_of_sites=["hollow"])
+            @test_throws ArgumentError geometric_cluster_swap!(finite_cluster, 0.35)
+
             one_site_bulk = AtomicLattice{1,SquareLattice}(
                 lattice_atom="Pd", surface=:fcc100,
                 supercell_dimensions=(1, 1, 1), lattice_constant=3.947,
@@ -2227,6 +2263,29 @@
         invalid_adsorption_cell.ase_lattice.info["adsorbate_info"]["cell"] =
             primitive_cell
         @test_throws ArgumentError nn_distance(invalid_adsorption_cell)
+
+        # Synchronization is transactional: a Python-side rebuild failure
+        # leaves the valid cache untouched and a corrected state can sync.
+        failed_sync = deepcopy(multispecies)
+        cache_fingerprint = failed_sync.ase_cache_fingerprint
+        cache_symbols = FreeBird.AbstractWalkers.pyconvert(
+            Vector{String}, failed_sync.ase_lattice.get_chemical_symbols())
+        cache_positions = FreeBird.AbstractWalkers.pyconvert(
+            Matrix{Float64}, failed_sync.ase_lattice.get_positions())
+        failed_sync.adsorbate_atoms[2] = "NotAnElement"
+        @test_throws Exception sync_ase_lattice!(failed_sync)
+        @test failed_sync.ase_cache_fingerprint == cache_fingerprint
+        @test FreeBird.AbstractWalkers.pyconvert(
+            Vector{String}, failed_sync.ase_lattice.get_chemical_symbols()) ==
+            cache_symbols
+        @test FreeBird.AbstractWalkers.pyconvert(
+            Matrix{Float64}, failed_sync.ase_lattice.get_positions()) ==
+            cache_positions
+        failed_sync.adsorbate_atoms[2] = "N"
+        @test_nowarn sync_ase_lattice!(failed_sync)
+        corrected_symbols = FreeBird.AbstractWalkers.pyconvert(
+            Vector{String}, failed_sync.ase_lattice.get_chemical_symbols())
+        @test count(==("N"), corrected_symbols) == n_occupied(failed_sync, 2)
 
         multiple_orbits = AtomicLattice{1,SquareLattice}(
             lattice_atom="Pd", surface=:fcc100,

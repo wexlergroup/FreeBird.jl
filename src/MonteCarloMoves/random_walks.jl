@@ -843,6 +843,30 @@ function random_microstate!(lattice::SLattice; p::Float64=0.5)
 end
 
 """
+    _rand_site(occupancy::AbstractVector{Bool}, occupied::Bool, count::Integer)
+
+Return a uniformly random site index `i` with `occupancy[i] == occupied`, where `count`
+(at least 1) is the number of such sites. One `rand(1:count)` draw picks the rank `k`, and
+a scan returns the `k`-th matching site in index order: the same random draw and the same
+site as `rand(findall(occupancy .== occupied))`, whose `rand(::Vector)` indexes the vector
+with the same `rand(1:count)`, but without allocating the index vector. The caller passes
+the exact count, which it has already computed: a `count` below 1 throws an
+`ArgumentError` (an empty range), and a wrong positive count is not reliably detected (a
+larger one throws an `ArgumentError` only when the drawn rank runs past the last matching
+site, and a smaller one never reaches the last matching sites).
+"""
+function _rand_site(occupancy::AbstractVector{Bool}, occupied::Bool, count::Integer)
+    k = rand(1:count)
+    for i in eachindex(occupancy)
+        if occupancy[i] == occupied
+            k -= 1
+            k == 0 && return i
+        end
+    end
+    throw(ArgumentError("count = $count exceeds the number of sites with occupancy $occupied"))
+end
+
+"""
     lattice_insert_particle!(lattice::SLattice)
 
 Insert a particle at a random empty site. Returns `true` if successful,
@@ -863,9 +887,8 @@ function lattice_insert_particle!(lattice::SLattice)
     if n_occ >= n_sites
         return false, lattice, 0
     end
-    # Collect empty site indices
-    empty_sites = findall(.!lattice.components[1])
-    site = rand(empty_sites)
+    # A uniform empty site: the draw and the site of rand(findall(.!lattice.components[1]))
+    site = _rand_site(lattice.components[1], false, length(lattice.components[1]) - n_occ)
     lattice.components[1][site] = true
     return true, lattice, site
 end
@@ -890,8 +913,8 @@ function lattice_delete_particle!(lattice::SLattice)
     if n_occ == 0
         return false, lattice, 0
     end
-    occupied_sites = findall(lattice.components[1])
-    site = rand(occupied_sites)
+    # A uniform occupied site: the draw and the site of rand(findall(lattice.components[1]))
+    site = _rand_site(lattice.components[1], true, n_occ)
     lattice.components[1][site] = false
     return true, lattice, site
 end
@@ -1195,8 +1218,9 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     if n == 0 || n == n_sites
                         continue
                     end
-                    hop_from = rand(findall(config.components[1]))
-                    hop_to = rand(findall(.!config.components[1]))
+                    hop_from = _rand_site(config.components[1], true, n)
+                    hop_to = _rand_site(config.components[1], false,
+                                        length(config.components[1]) - n)
                     if use_deltas
                         step_delta = site_flip_delta(config, h, hop_from)
                         config.components[1][hop_from] = !config.components[1][hop_from]
@@ -1253,12 +1277,12 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     insert_site = rand(biased_set)
                     insert_from_biased = true
                 else
-                    # Uniform sub-channel: the same single rand(::Vector) draw
-                    # as lattice_insert_particle!, inlined to capture the site
+                    # Uniform sub-channel: the same single site draw as
+                    # lattice_insert_particle!, inlined to capture the site
                     # for the composite density (keep in lockstep with it)
                     insert_uniform_attempted += 1
-                    empty_sites = findall(.!config.components[1])
-                    insert_site = rand(empty_sites)
+                    insert_site = _rand_site(config.components[1], false,
+                                             length(config.components[1]) - n)
                     insert_from_biased = false
                 end
                 config.components[1][insert_site] = true
@@ -1286,11 +1310,10 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 continue                # guard skip: not counted as an attempt
             end
             if p_bias > 0.0
-                # Inlined uniform deletion (the same single rand(::Vector)
-                # draw as lattice_delete_particle!) to capture the vacated
-                # site for the reverse composite density (keep in lockstep)
-                occupied_sites = findall(config.components[1])
-                deleted_site = rand(occupied_sites)
+                # Inlined uniform deletion (the same single site draw as
+                # lattice_delete_particle!) to capture the vacated site
+                # for the reverse composite density (keep in lockstep)
+                deleted_site = _rand_site(config.components[1], true, n)
                 config.components[1][deleted_site] = false
             else
                 success, _, deleted_site = lattice_delete_particle!(config)

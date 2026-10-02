@@ -350,9 +350,10 @@
                 minimum_distance = AbstractWalkers._minimum_image_distance(
                     cell, reciprocal, (true, true, false),
                     (0.0, 0.0, 0.0), Tuple(displacement))
-                rounded_distance = norm(cell * (fractional .- round.(fractional)))
+                rounded_displacement = cell * (fractional .- round.(fractional))
+                rounded_distance_squared = sum(abs2, rounded_displacement)
                 cutoff = 0.13
-                @test minimum_distance < cutoff < rounded_distance
+                @test minimum_distance^2 < cutoff^2 < rounded_distance_squared
                 lattice = @test_logs (:warn, r"wrap the periodic cell") match_mode=:any MLattice{1,GenericLattice}(
                     cell,
                     [(0.0, 0.0, 0.0), Tuple(displacement)],

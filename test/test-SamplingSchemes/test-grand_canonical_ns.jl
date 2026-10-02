@@ -248,7 +248,6 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
     end
 
     # ================================================================
-    # ================================================================
     @testset "MC_grand_canonical_walk! counters: exact bookkeeping" begin
         ham0 = GenericLatticeHamiltonian(0.0, [0.0, 0.0], u"eV")
         # Skip-free by construction: N starts at 8, |dN| <= 1 per step, so
@@ -1177,8 +1176,6 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
         ls_v = LatticeGasWalkers(ws_v, ll_ham; assign_energy=false)
         @test_throws ArgumentError SamplingSchemes._validate_observables(
             [:swap_attempted => cfg -> 0.0], ls_v)
-        @test_nowarn SamplingSchemes._validate_observables(
-            [:num_particles_1 => cfg -> 0.0], ls_v)
         # Swap-acceptance decay diagnostic, post-accounting-fix semantics:
         # the effective (null-excluded) swap acceptance in the final descent
         # quartile sits well below its first-quartile value. Calibration

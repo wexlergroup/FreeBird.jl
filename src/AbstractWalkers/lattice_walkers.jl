@@ -2694,7 +2694,7 @@ function motif_distances(coords::AbstractVector{<:Tuple})
 end
 
 """
-    enumerate_motif_embeddings(lattice::MLattice, distances::AbstractVector{<:Real};
+    enumerate_motif_embeddings(lattice::AbstractLattice, distances::AbstractVector{<:Real};
                                tol::Float64=1e-6,
                                expected_count::Union{Int,Nothing}=nothing)
         -> Vector{NTuple{K,Int}}
@@ -2758,7 +2758,7 @@ function enumerate_motif_embeddings(lattice::AbstractLattice, distances::Abstrac
 end
 
 """
-    enumerate_motif_embeddings(lattice::MLattice, coords::AbstractVector{<:Tuple};
+    enumerate_motif_embeddings(lattice::AbstractLattice, coords::AbstractVector{<:Tuple};
                                tol=1e-6, expected_count=nothing)
 
 Template method: declare the motif by its site coordinates (as accepted by

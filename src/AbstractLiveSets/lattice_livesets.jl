@@ -129,6 +129,7 @@ lattice entry points of `wang_landau` and `nvt_monte_carlo`, which take a
 raw lattice and never build a liveset.
 """
 function _warn_uncoupled_shells(cfg::AbstractLattice, hamiltonian)
+    (cfg isa MLattice || cfg isa AtomicLattice) || return nothing
     n_coupled = _n_coupled_shells(hamiltonian)
     n_coupled === nothing && return nothing
     n_shells = length(cfg.cutoff_radii)

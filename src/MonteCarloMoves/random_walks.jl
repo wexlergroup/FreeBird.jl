@@ -366,7 +366,56 @@ function MC_random_walk_2D!(
 end
 
 """
-    MC_random_walk!(n_steps::Int, lattice::LatticeWalker, energy_model, emax::Float64; energy_perturb::Float64=0.0, incremental::Bool=false)
+    _check_perturbation_mode(mode::Symbol)
+
+Throw an `ArgumentError` unless `mode` is `:per_proposal` or `:carried`.
+"""
+function _check_perturbation_mode(mode::Symbol)
+    if mode !== :per_proposal && mode !== :carried
+        throw(ArgumentError("unknown perturbation_mode :$mode; expected :per_proposal or :carried"))
+    end
+    return nothing
+end
+
+"""
+    _refresh_carried_offset!(walker::LatticeWalker, raw, offset, u::Float64, ceiling, delta::Float64, mu::Float64, n::Int)
+
+Redraw a walker's carried tie-breaking offset from its law given the walker's
+arrangement and the ceiling: uniform on `[-d/2, min(d/2, ceiling - (raw -
+mu*n)))` with `d = abs(delta)` (the default mode's perturbation
+`delta*(u - 1/2)` spans the same range for either sign of `delta`), the law
+`_keep_unmoved_clone!` draws from, here from the uniform `u` the walk step has
+already drawn. `raw` is the walker's unperturbed energy (in the Hamiltonian's
+unit or the walker's), `ceiling` a quantity in the walker's energy unit, `mu`
+and `n` the chemical potential (in the walker's energy unit; zero for the
+energy-sorted walks) and particle count of the ordering key `E - mu*n`. As in
+`_keep_unmoved_clone!`, the arithmetic is done in the walker's energy unit,
+and the walker's energy becomes `raw` plus the new offset in that unit; the
+new offset is returned as a quantity in that unit. Returns `offset` and leaves
+the walker unchanged when `delta == 0`, or when the drawn value's key, rounded
+in the walker's unit, is not strictly below the ceiling: at the top of the
+range the key can round onto the ceiling, and after a long run of culls
+inside one level no value fits (the floating-point floor).
+"""
+function _refresh_carried_offset!(walker::LatticeWalker, raw, offset, u::Float64,
+                                  ceiling, delta::Float64, mu::Float64, n::Int)
+    d = abs(delta)
+    d > 0.0 || return offset
+    eu = unit(walker.energy)
+    raw_w = ustrip(eu, raw)
+    c = ustrip(eu, ceiling)
+    hi = min(d / 2, c - (raw_w - mu * n))
+    hi > -d / 2 || return offset
+    x = -d / 2 + u * (hi + d / 2)
+    e = raw_w + x
+    # the rounded key, as the walks compare it: a value at the ceiling is rejected
+    e - mu * n < c || return offset
+    walker.energy = e * eu
+    return x * eu
+end
+
+"""
+    MC_random_walk!(n_steps::Int, lattice::LatticeWalker, energy_model, emax::Float64; energy_perturb::Float64=0.0, incremental::Bool=false, perturbation_mode::Symbol=:per_proposal)
 
 Perform a Monte Carlo random walk on the lattice system.
 
@@ -391,6 +440,26 @@ Perform a Monte Carlo random walk on the lattice system.
   order, so same-seed trajectories are not digit-identical to the default
   and accept/reject decisions near the ceiling can differ; flipping the
   default is deliberately out of scope.
+- `perturbation_mode::Symbol=:per_proposal`: How the tie-breaking
+  perturbation enters the ceiling test. `:per_proposal` (the default, the
+  shipped arithmetic and random stream) adds a new perturbation to every
+  proposal, so inside a level of equal energy a proposal passes the ceiling
+  only if its new perturbation lands below the ceiling's, and moves that keep
+  the energy are accepted less and less often as the ceiling descends into
+  the level. `:carried` (opt-in) tests each proposal with the walker's own
+  perturbation, recovered from its stored energy at entry, and after every
+  attempted step redraws that perturbation from its law given the walker's
+  arrangement, uniform on `[-energy_perturb/2, min(energy_perturb/2,
+  emax - U))` with `U` the unperturbed energy, using the uniform the step
+  draws in either mode; moves that keep the energy then pass the ceiling
+  whatever its depth inside the level. Both are valid Markov chains on
+  (arrangement, perturbation) restricted below the ceiling. Under
+  `:carried` a proposal that leaves the arrangement unchanged (a swap of two
+  sites of equal occupancy) passes whenever the walker is below the ceiling
+  and counts as an accepted move, so the acceptance rate and the returned
+  flag count such proposals; a redrawn perturbation alone does not count.
+  The walk evaluates the unperturbed energy once at entry, and same-seed
+  trajectories differ from the default.
 
 # Returns
 - `accept_this_walker::Bool`: Whether the walker is accepted or not.
@@ -404,7 +473,10 @@ function MC_random_walk!(n_steps::Int,
                          emax::Float64;
                          energy_perturb::Float64=0.0,
                          incremental::Bool=false,
+                         perturbation_mode::Symbol=:per_proposal,
                          ) where C
+    _check_perturbation_mode(perturbation_mode)
+    carried = perturbation_mode === :carried
 
     _check_lattice_energy_model(lattice.configuration, h)
 
@@ -420,7 +492,10 @@ function MC_random_walk!(n_steps::Int,
     use_deltas = incremental && C == 1 && h isa ClassicalHamiltonian &&
                  supports_site_deltas(h)
     zero_e = 0.0 * unit(lattice.energy)
-    raw = use_deltas ? interacting_energy(lattice.configuration, h) : zero_e
+    # The carried mode also anchors the unperturbed energy, on either path, to
+    # recover the walker's own offset and to redraw it after every step
+    raw = (use_deltas || carried) ? interacting_energy(lattice.configuration, h) : zero_e
+    offset = carried ? uconvert(unit(lattice.energy), lattice.energy - raw) : zero_e
     step_delta = zero_e
     hop_from = 0
     hop_to = 0
@@ -451,9 +526,16 @@ function MC_random_walk!(n_steps::Int,
             hop_from, hop_to = _lattice_walk_draw!(config)
         end
 
-        perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
+        # The step's tie-breaking uniform, at the shipped position in the stream:
+        # the perturbation of this proposal by default, the redraw of the
+        # carried offset after the ceiling test under :carried
+        u_tie = rand()
+        perturbation_energy = carried ? offset : energy_perturb * (u_tie - 0.5) * unit(lattice.energy)
         if use_deltas
             proposed_raw = was_null ? raw : raw + step_delta
+            proposed_energy = proposed_raw + perturbation_energy
+        elseif carried
+            proposed_raw = interacting_energy(config, h)
             proposed_energy = proposed_raw + perturbation_energy
         else
             proposed_raw = zero_e
@@ -463,6 +545,8 @@ function MC_random_walk!(n_steps::Int,
         # No per-proposal @debug here: its log-level check ran on every proposal of the fixed-N walk
         if proposed_energy >= emax
             _lattice_walk_apply!(config, hop_from, hop_to)
+            carried && (offset = _refresh_carried_offset!(lattice, raw, offset, u_tie, emax,
+                                                          energy_perturb, 0.0, 0))
             continue
         else
             # On accept the anchor advances to the unperturbed proposal and
@@ -471,6 +555,8 @@ function MC_random_walk!(n_steps::Int,
             lattice.energy = proposed_energy
             n_accept += 1
             accept_this_walker = true
+            carried && (offset = _refresh_carried_offset!(lattice, raw, offset, u_tie, emax,
+                                                          energy_perturb, 0.0, 0))
         end
     end
     return accept_this_walker, n_accept/n_steps, lattice
@@ -811,7 +897,7 @@ end
 
 
 """
-    MC_cluster_walk!(n_steps::Int, lattice::LatticeWalker{C}, energy_model, emax::Float64, cluster_p::Float64; energy_perturb::Float64=0.0)
+    MC_cluster_walk!(n_steps::Int, lattice::LatticeWalker{C}, energy_model, emax::Float64, cluster_p::Float64; energy_perturb::Float64=0.0, perturbation_mode::Symbol=:per_proposal)
 
 Perform a sequence of geometric cluster moves on the lattice system, accepting each if `E < emax`.
 
@@ -822,6 +908,11 @@ Perform a sequence of geometric cluster moves on the lattice system, accepting e
 - `emax::Float64`: The maximum energy allowed for accepting a move (dimensionless).
 - `cluster_p::Float64`: The growth probability for BFS cluster construction.
 - `energy_perturb::Float64=0.0`: Energy perturbation to break degeneracies.
+- `perturbation_mode::Symbol=:per_proposal`: `:per_proposal` (the default,
+  the shipped stream) or `:carried` (opt-in): as in `MC_random_walk!`; under
+  `:carried` the cluster walk evaluates the unperturbed energy once at entry,
+  and a cluster move that leaves the arrangement unchanged passes whenever
+  the walker is below the ceiling and counts as accepted.
 
 # Returns
 - `accept_this_walker::Bool`: Whether at least one move was accepted.
@@ -833,11 +924,18 @@ function MC_cluster_walk!(n_steps::Int,
                           h::Union{ClassicalHamiltonian,PyMLPotential},
                           emax::Float64,
                           cluster_p::Float64;
-                          energy_perturb::Float64=0.0) where C
+                          energy_perturb::Float64=0.0,
+                          perturbation_mode::Symbol=:per_proposal) where C
+    _check_perturbation_mode(perturbation_mode)
+    carried = perturbation_mode === :carried
     _check_lattice_energy_model(lattice.configuration, h)
     n_accept = 0
     accept_this_walker = false
     emax_u = emax * unit(lattice.energy)
+    zero_e = 0.0 * unit(lattice.energy)
+    # Under :carried: the unperturbed energy and the walker's own offset
+    raw = carried ? interacting_energy(lattice.configuration, h) : zero_e
+    offset = carried ? uconvert(unit(lattice.energy), lattice.energy - raw) : zero_e
 
     cluster_pairs = Tuple{Int,Int}[]
     for _ in 1:n_steps
@@ -847,16 +945,25 @@ function MC_cluster_walk!(n_steps::Int,
         empty!(cluster_pairs)
         geometric_cluster_swap!(config, cluster_p; record=cluster_pairs)
 
-        perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
-        proposed_energy = interacting_energy(config, h) + perturbation_energy
+        u_tie = rand()
+        if carried
+            proposed_raw = interacting_energy(config, h)
+            proposed_energy = proposed_raw + offset
+        else
+            perturbation_energy = energy_perturb * (u_tie - 0.5) * unit(lattice.energy)
+            proposed_energy = interacting_energy(config, h) + perturbation_energy
+        end
 
         if proposed_energy < emax_u
             lattice.energy = proposed_energy
             n_accept += 1
             accept_this_walker = true
+            carried && (raw = proposed_raw)
         else
             _apply_cluster_pairs!(config, cluster_pairs)
         end
+        carried && (offset = _refresh_carried_offset!(lattice, raw, offset, u_tie, emax_u,
+                                                      energy_perturb, 0.0, 0))
     end
     return accept_this_walker, n_accept / max(n_steps, 1), lattice
 end
@@ -898,8 +1005,8 @@ variable-N configuration suitable for grand-canonical sampling.
 - `lattice::SLattice`: The mutated lattice with a random microstate.
 """
 function random_microstate!(lattice::SLattice; p::Float64=0.5)
-    for i in 1:num_sites(lattice)
-        set_occupied!(lattice, i, rand() < p)
+    for i in eachindex(lattice.components[1])
+        lattice.components[1][i] = rand() < p
     end
     return lattice
 end
@@ -956,15 +1063,13 @@ Insert a particle at a random empty site. Returns `true` if successful,
 """
 function lattice_insert_particle!(lattice::SLattice)
     n_sites = num_sites(lattice)
-    n_occ = n_occupied(lattice)
+    n_occ = sum(lattice.components[1])
     if n_occ >= n_sites
         return false, lattice, 0
     end
-    # A uniform empty site: the draw and the site of
-    # rand(findall(.!lattice.components[1])), without allocating that vector.
-    site = _rand_site(lattice.components[1], false,
-                      length(lattice.components[1]) - n_occ)
-    set_occupied!(lattice, site, true)
+    # A uniform empty site: the draw and the site of rand(findall(.!lattice.components[1]))
+    site = _rand_site(lattice.components[1], false, length(lattice.components[1]) - n_occ)
+    lattice.components[1][site] = true
     return true, lattice, site
 end
 
@@ -1004,14 +1109,13 @@ Delete a particle from a random occupied site. Returns `true` if successful,
   addition: two-name destructures of the previous return keep working.
 """
 function lattice_delete_particle!(lattice::SLattice)
-    n_occ = n_occupied(lattice)
+    n_occ = sum(lattice.components[1])
     if n_occ == 0
         return false, lattice, 0
     end
-    # A uniform occupied site: the draw and the site of
-    # rand(findall(lattice.components[1])), without allocating that vector.
+    # A uniform occupied site: the draw and the site of rand(findall(lattice.components[1]))
     site = _rand_site(lattice.components[1], true, n_occ)
-    set_occupied!(lattice, site, false)
+    lattice.components[1][site] = false
     return true, lattice, site
 end
 
@@ -1086,26 +1190,27 @@ end
 function lattice_biased_sites(lattice::SLattice;
                               predicate::Symbol=:contact, shells::Int=1)
     if predicate !== :contact && predicate !== :cavity
-        throw(ArgumentError(
-            "unknown predicate :$predicate; expected :contact or :cavity"))
+        throw(ArgumentError("unknown predicate :$predicate; expected :contact or :cavity"))
     end
-    shells >= 1 || throw(ArgumentError(
-        "shells must be >= 1, got $shells"))
+    if shells < 1
+        throw(ArgumentError("shells must be >= 1, got $shells"))
+    end
     neighbors = lattice.neighbors
     n_shells = isempty(neighbors) ? 0 : length(neighbors[1])
-    shells <= n_shells || throw(ArgumentError(
-        "the biased-site predicate spans $shells neighbor shells but the " *
-        "lattice provides only $n_shells (= length(cutoff_radii)); " *
-        "extend cutoff_radii so every counted shell exists"))
-
+    if shells > n_shells
+        throw(ArgumentError(
+            "the biased-site predicate spans $shells neighbor shells but the " *
+            "lattice provides only $n_shells (= length(cutoff_radii)); " *
+            "extend cutoff_radii so every counted shell exists"))
+    end
     occ = lattice.components[1]
     sites = Int[]
     for site in eachindex(occ)
         occ[site] && continue
         has_occupied_neighbor = false
         for shell in 1:shells
-            for neighbor in neighbors[site][shell]
-                if occ[neighbor]
+            for nb in neighbors[site][shell]
+                if occ[nb]
                     has_occupied_neighbor = true
                     break
                 end
@@ -1128,7 +1233,7 @@ end
                              clusters_freq::Int=0, swaps_freq::Int=1,
                              cluster_p::Float64=0.3, z0::Float64=1.0,
                              p_bias::Float64=0.0, bias_predicate::Symbol=:contact,
-                             bias_shells::Int=1)
+                             bias_shells::Int=1, perturbation_mode::Symbol=:per_proposal)
 
 Perform grand-canonical MCMC on a single-component lattice, mixing fixed-N
 moves (local swaps and/or geometric cluster moves) with single-site insertion
@@ -1159,7 +1264,9 @@ fixed-N channel; a swap draws two site indices (`:uniform_pair`) or one occupied
 empty site (`:occupied_empty`); a cluster move draws inside `geometric_cluster_swap!`; an
 insertion draws its site (after the sub-channel draw when `p_bias > 0`) and then its
 Metropolis uniform; a deletion draws its site and then its Metropolis uniform; every
-attempted step then draws the tie-breaking perturbation. The Metropolis uniform is drawn
+attempted step then draws the tie-breaking uniform (the perturbation of the proposal by
+default; under `perturbation_mode = :carried`, the redraw of the walker's own offset after
+the ceiling test and the Metropolis decision). The Metropolis uniform is drawn
 with the proposal, whatever the ceiling outcome and whatever the acceptance ratio, and is
 read only when the ceiling passes and the ratio is below one, so the number of draws a step
 consumes never depends on an energy. Guard skips consume only the channel draw (and the
@@ -1211,6 +1318,21 @@ attempt.
   uniform over occupied and `hop_to` uniform over empty sites, symmetric
   with no acceptance correction and zero nulls, guard-skipped on empty and
   full lattices.
+- `perturbation_mode::Symbol=:per_proposal`: `:per_proposal` (the default,
+  the shipped arithmetic and stream) adds a new tie-breaking perturbation to
+  every proposal. `:carried` (opt-in) tests each proposal's Ω with the
+  walker's own perturbation and, after every step that draws the
+  tie-breaking uniform (ceiling rejections included; guard skips and the
+  biased channel's null proposals, which draw none, excluded), redraws it
+  from its law given the walker's arrangement, uniform on
+  `[-energy_perturb/2, min(energy_perturb/2, omega_max - (U - mu*N)))` with
+  `U` the unperturbed energy, from the step's tie-breaking uniform; moves
+  that keep Ω then pass the ceiling whatever its depth inside the level, and
+  a proposal that leaves the arrangement unchanged (a swap of two sites of
+  equal occupancy, a cluster move that exchanges nothing) passes whenever
+  the walker is below the ceiling and counts as an accepted move. Same-seed
+  trajectories differ from the default; the number of draws a step consumes
+  does not.
 
 # Returns
 - `accept_this_walker::Bool`: Whether at least one move was accepted.
@@ -1242,7 +1364,10 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                   bias_predicate::Symbol=:contact,
                                   bias_shells::Int=1,
                                   incremental::Bool=false,
-                                  swap_mode::Symbol=:uniform_pair)
+                                  swap_mode::Symbol=:uniform_pair,
+                                  perturbation_mode::Symbol=:per_proposal)
+    _check_perturbation_mode(perturbation_mode)
+    carried = perturbation_mode === :carried
     _check_lattice_energy_model(lattice.configuration, h)
     if p_move < 0.0 || p_insert < 0.0 || p_move + p_insert > 1.0
         throw(ArgumentError("p_move and p_insert must satisfy 0 <= p_move + p_insert <= 1"))
@@ -1336,6 +1461,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
     # the carry is raw + 0, exact under the delta discipline.
     raw = interacting_energy(lattice.configuration, h)
     step_delta = zero_e
+    # Under :carried, the walker's own offset, recovered from its stored energy
+    offset = carried ? uconvert(unit(lattice.energy), lattice.energy - raw) : zero_e
 
     for _ in 1:n_steps
         r = rand()
@@ -1480,7 +1607,9 @@ function MC_grand_canonical_walk!(n_steps::Int,
             move_type = :delete
         end
 
-        perturbation_energy = energy_perturb * (rand() - 0.5) * unit(lattice.energy)
+        # The step's tie-breaking uniform, at the shipped position in the stream
+        u_tie = rand()
+        perturbation_energy = carried ? offset : energy_perturb * (u_tie - 0.5) * unit(lattice.energy)
         if was_null
             # A null swap left the configuration untouched: carry the
             # anchored unperturbed energy instead of re-evaluating it
@@ -1498,6 +1627,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
         if proposed_omega >= omega_max_u
             _gc_revert_move!(config, move_type, hop_from, hop_to,
                              cluster_pairs, insert_site, deleted_site)
+            carried && (offset = _refresh_carried_offset!(lattice, raw, offset, u_tie,
+                                                          omega_max_u, energy_perturb, mu, n))
             continue
         end
 
@@ -1573,6 +1704,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
             _gc_revert_move!(config, move_type, hop_from, hop_to,
                              cluster_pairs, insert_site, deleted_site)
         end
+        carried && (offset = _refresh_carried_offset!(lattice, raw, offset, u_tie, omega_max_u,
+                                                      energy_perturb, mu, accept ? n_new : n))
     end
 
     return accept_this_walker, n_accept / max(n_steps, 1), lattice,

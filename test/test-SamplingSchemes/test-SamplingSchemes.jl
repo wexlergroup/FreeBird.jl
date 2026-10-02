@@ -16,6 +16,7 @@ include("test-atomistic-gc-interacting-regressions.jl")
     include("test-ideal-gas-ref-gcns.jl")
     # the lattice nested-sampling steps keep a clone whose walk accepted no move
     include("test-lattice-unmoved-clone.jl")
+    include("test-lattice-carried-perturbation.jl")
     # seeded trajectory pins for the lattice grand-canonical kernels/drivers
     include("test-lattice-gc-trajectory-pins.jl")
     # seeded trajectory pins for the fixed-N lattice walk kernel and drivers

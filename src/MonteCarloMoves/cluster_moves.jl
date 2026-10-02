@@ -153,6 +153,12 @@ pairing each visited site with its image under the `reflect` closure (a
 self-inverse site-index map supplied by the geometry-specific caller).
 Returns a vector of (site, reflected_site) pairs.
 """
+@inline _cluster_first_shell(lattice::MLattice, site::Int) =
+    lattice.neighbors[site][1]
+
+@inline _cluster_first_shell(lattice::AtomicLattice, site::Int) =
+    isempty(lattice.neighbors[site]) ? Int[] : lattice.neighbors[site][1]
+
 function _build_geometric_cluster(lattice::AbstractLattice,
                                   seed::Int,
                                   reflect::F,
@@ -172,8 +178,7 @@ function _build_geometric_cluster(lattice::AbstractLattice,
         push!(cluster, (s, r))
 
         # Grow to first-shell neighbors with probability p
-        isempty(lattice.neighbors[s]) && continue
-        for n in lattice.neighbors[s][1]
+        for n in _cluster_first_shell(lattice, s)
             if n ∉ visited && rand() < p
                 push!(stack, n)
             end

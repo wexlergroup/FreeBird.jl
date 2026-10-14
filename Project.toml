@@ -1,7 +1,7 @@
 name = "FreeBird"
 uuid = "b4936512-85e8-430f-a91d-7f510ed448a2"
-authors = ["Ray Yang <mingrui.yang@outlook.com> and contributors"]
 version = "0.3.0"
+authors = ["Ray Yang <mingrui.yang@outlook.com> and contributors"]
 
 [deps]
 ASEconvert = "3da9722f-58c2-4165-81be-b4d7253e8fd2"
@@ -28,7 +28,7 @@ Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 UnitfulAtomic = "a7773ee8-282e-5fa2-be4e-bd808c38a91a"
 
 [compat]
-ASEconvert = "0.2.0"
+ASEconvert = "0.2.0, 0.3"
 Arrow = "2"
 AtomsBase = "0.5"
 AtomsCalculators = "0.2.3"

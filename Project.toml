@@ -1,7 +1,7 @@
 name = "FreeBird"
 uuid = "b4936512-85e8-430f-a91d-7f510ed448a2"
-authors = ["Ray Yang <mingrui.yang@outlook.com> and contributors"]
 version = "0.3.0"
+authors = ["Ray Yang <mingrui.yang@outlook.com> and contributors"]
 
 [deps]
 ASEconvert = "3da9722f-58c2-4165-81be-b4d7253e8fd2"
@@ -33,7 +33,7 @@ Arrow = "2"
 AtomsBase = "0.5"
 AtomsCalculators = "0.2.3"
 AtomsIO = "0.3"
-CSV = "0.10"
+CSV = "0.10, 1"
 Combinatorics = "1"
 DataFrames = "1"
 Distributed = "1"

@@ -417,14 +417,20 @@ FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
         @test all(w -> w isa LatticeWalker{1}, restored)
         @test all(w -> w.configuration isa AtomicLattice{1,SquareLattice}, restored)
 
-        cluster_before = copy(template.components)
-        cluster_counts = sum.(template.components)
+        cluster_lattice = deepcopy(template)
+        fill!(cluster_lattice.components[1], false)
+        cluster_lattice.components[1][1] = true
+        cluster_before = copy.(cluster_lattice.components)
+        cluster_counts = sum.(cluster_lattice.components)
         cluster_record = Tuple{Int,Int}[]
+        Random.seed!(8)
         FreeBird.MonteCarloMoves.geometric_cluster_swap!(
-            template, 0.3; record=cluster_record)
-        @test sum.(template.components) == cluster_counts
-        FreeBird.MonteCarloMoves._apply_cluster_pairs!(template, cluster_record)
-        @test template.components == cluster_before
+            cluster_lattice, 0.3; record=cluster_record)
+        @test !isempty(cluster_record)
+        @test cluster_lattice.components != cluster_before
+        @test sum.(cluster_lattice.components) == cluster_counts
+        FreeBird.MonteCarloMoves._apply_cluster_pairs!(cluster_lattice, cluster_record)
+        @test cluster_lattice.components == cluster_before
 
         rm("atomic_gcns.csv", force=true)
         rm("atomic_gcns.traj.extxyz", force=true)

@@ -14,6 +14,24 @@
     return true
 end
 
+"""Return a Cartesian-to-fractional map, including valid zero-height 2-D cells."""
+function _reciprocal_lattice_vectors(
+        cell::AbstractMatrix{Float64}, periodicity::Tuple{Bool,Bool,Bool})
+    singular_2d = !periodicity[3] && all(iszero, view(cell, :, 3))
+    singular_2d || return inv(cell), false
+
+    in_plane = Matrix(view(cell, :, 1:2))
+    gram = transpose(in_plane) * in_plane
+    scale = maximum(abs, gram)
+    tolerance = 32 * eps(Float64) * scale^2
+    abs(det(gram)) > tolerance || throw(ArgumentError(
+        "the two periodic lattice vectors must be linearly independent"))
+
+    reciprocal = zeros(3, 3)
+    reciprocal[1:2, :] = inv(gram) * transpose(in_plane)
+    return reciprocal, true
+end
+
 """
     _minimum_image_displacement(cell, reciprocal, periodicity, dr)
 
@@ -80,15 +98,34 @@ translation that can improve the wrapped candidate.
     return [best_x, best_y, best_z]
 end
 
-"""Minimum-image distance under the supplied cell and periodicity."""
+"""
+    _minimum_image_distance(supercell_lattice_vectors, reciprocal_lattice_vectors,
+                            periodicity, pos_i, pos_j)
 
+Minimum-image distance between two Cartesian positions under the given
+supercell and periodicity — the single distance kernel shared by
+`compute_neighbors` and `enumerate_motif_embeddings`, so pair shells and
+cluster embeddings follow the identical torus convention.
+"""
 @inline function _minimum_image_distance(supercell_lattice_vectors::AbstractMatrix{Float64},
                                          reciprocal_lattice_vectors::AbstractMatrix{Float64},
                                          periodicity::Tuple{Bool,Bool,Bool},
                                          pos_i, pos_j)
     dr = [pos_j[1] - pos_i[1], pos_j[2] - pos_i[2], pos_j[3] - pos_i[3]]
+    fractional_dr = reciprocal_lattice_vectors * dr
+    for k in 1:3
+        if periodicity[k]
+            fractional_dr[k] -= round(fractional_dr[k])
+        end
+    end
+    return norm(supercell_lattice_vectors * fractional_dr)
+end
+
+"""Exact minimum-image distance for an ASE adsorption lattice."""
+@inline function _atomic_minimum_image_distance(cell, reciprocal, periodicity, pos_i, pos_j)
+    dr = [pos_j[1] - pos_i[1], pos_j[2] - pos_i[2], pos_j[3] - pos_i[3]]
     return norm(_minimum_image_displacement(
-        supercell_lattice_vectors, reciprocal_lattice_vectors, periodicity, dr))
+        cell, reciprocal, periodicity, dr))
 end
 
 """
@@ -137,6 +174,16 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
                            cutoff_radii::Vector{Float64};
                            image_multiplicity::Bool=false,
                            )
+    return _compute_lattice_neighbors(supercell_lattice_vectors, positions,
+        periodicity, cutoff_radii, Val(false); image_multiplicity)
+end
+
+function _compute_lattice_neighbors(supercell_lattice_vectors::Matrix{Float64},
+                                    positions::Matrix{Float64},
+                                    periodicity::Tuple{Bool,Bool,Bool},
+                                    cutoff_radii::Vector{Float64},
+                                    ::Val{_atomic_geometry};
+                                    image_multiplicity::Bool=false) where {_atomic_geometry}
 
     if isempty(cutoff_radii) || any(r -> !(isfinite(r) && r > 0.0), cutoff_radii) ||
        !all(cutoff_radii[k] < cutoff_radii[k+1] for k in 1:length(cutoff_radii)-1)
@@ -148,28 +195,17 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
     neighbors = Vector{Vector{Vector{Int}}}(undef, size(positions, 1))
     num_atoms = size(positions, 1)
 
-    # Compute reciprocal lattice vectors for minimum image convention
     a1 = supercell_lattice_vectors[:, 1]
     a2 = supercell_lattice_vectors[:, 2]
     a3 = supercell_lattice_vectors[:, 3]
-    # A genuinely two-dimensional cell may carry a zero third lattice vector.
-    # In that case the full 3x3 cell is singular even though its in-plane
-    # lattice is valid. Build the reciprocal map from the 2x2 in-plane block;
-    # the non-periodic Cartesian z displacement is restored after the
-    # minimum-image round trip below.
-    singular_2d = !periodicity[3] && all(iszero, a3)
-    if singular_2d
-        reciprocal_lattice_vectors = zeros(3, 3)
-        reciprocal_lattice_vectors[1:2, 1:2] =
-            inv([a1[1:2] a2[1:2]])
-    else
-        reciprocal_lattice_vectors = inv([a1 a2 a3])
-    end
+    reciprocal_lattice_vectors, singular_2d = _atomic_geometry ?
+        _reciprocal_lattice_vectors(supercell_lattice_vectors, periodicity) :
+        (inv([a1 a2 a3]), false)
 
     layers_of_neighbors = length(cutoff_radii)
     r_max = last(cutoff_radii)
-    orthogonal_periodic_axes =
-        _orthogonal_periodic_axes(supercell_lattice_vectors, periodicity)
+    orthogonal_periodic_axes = !_atomic_geometry || (!singular_2d &&
+        _orthogonal_periodic_axes(supercell_lattice_vectors, periodicity))
 
     # First shell whose cutoff admits the distance (the nested `<=` ladder);
     # 0 when the distance is beyond the outermost cutoff.
@@ -189,6 +225,18 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
     # for strongly skewed cells.
     image_bounds = ntuple(k ->
         r_max * norm(view(reciprocal_lattice_vectors, k, :)), 3)
+    offsets = Tuple{Float64,Float64,Float64,Bool}[]
+    if !_atomic_geometry
+        offset_ranges = ntuple(k -> periodicity[k] ?
+            (-(floor(Int, image_bounds[k] + 0.5) + 1):
+               (floor(Int, image_bounds[k] + 0.5) + 1)) : (0:0), 3)
+        for n1 in offset_ranges[1], n2 in offset_ranges[2], n3 in offset_ranges[3]
+            push!(offsets, (n1 * a1[1] + n2 * a2[1] + n3 * a3[1],
+                           n1 * a1[2] + n2 * a2[2] + n3 * a3[2],
+                           n1 * a1[3] + n2 * a2[3] + n3 * a3[3],
+                           n1 == 0 && n2 == 0 && n3 == 0))
+        end
+    end
 
     # Discarded in-cutoff images per shell (default mode only)
     collapsed = zeros(Int, layers_of_neighbors)
@@ -205,23 +253,22 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
                   positions[j, 3] - positions[i, 3]]
             original_fractional_dr = reciprocal_lattice_vectors * dr
             if orthogonal_periodic_axes
-                fractional_dr = reciprocal_lattice_vectors * dr
+                fractional_dr = _atomic_geometry ? copy(original_fractional_dr) :
+                    original_fractional_dr
                 for k in 1:3
                     periodicity[k] &&
                         (fractional_dr[k] -= round(fractional_dr[k]))
                 end
                 dr_c = supercell_lattice_vectors * fractional_dr
-                singular_2d && (dr_c[3] = dr[3])
             else
                 dr_c = _minimum_image_displacement(
                     supercell_lattice_vectors, reciprocal_lattice_vectors,
                     periodicity, dr)
             end
 
-            if image_multiplicity
-                # Push j once per in-cutoff periodic image (self-images
-                # included); only the single zero-displacement self term is
-                # skipped — it is not a bond.
+            pair_offsets = offsets
+            displacement = dr_c
+            if _atomic_geometry
                 ranges = ntuple(3) do k
                     if periodicity[k]
                         slack = 32 * eps(Float64) * max(
@@ -235,12 +282,19 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
                         0:0
                     end
                 end
-                for n1 in ranges[1], n2 in ranges[2], n3 in ranges[3]
-                    (j == i && n1 == 0 && n2 == 0 && n3 == 0) && continue
-                    dx = dr[1] + a1[1] * n1 + a2[1] * n2 + a3[1] * n3
-                    dy = dr[2] + a1[2] * n1 + a2[2] * n2 + a3[2] * n3
-                    dz = dr[3] + a1[3] * n1 + a2[3] * n2 + a3[3] * n3
-                    d = sqrt(dx^2 + dy^2 + dz^2)
+                pair_offsets = ((n1 * a1[1] + n2 * a2[1] + n3 * a3[1],
+                                 n1 * a1[2] + n2 * a2[2] + n3 * a3[2],
+                                 n1 * a1[3] + n2 * a2[3] + n3 * a3[3],
+                                 n1 == 0 && n2 == 0 && n3 == 0)
+                                for n1 in ranges[1] for n2 in ranges[2] for n3 in ranges[3])
+                displacement = dr
+            end
+
+            if image_multiplicity
+                for (ox, oy, oz, central) in pair_offsets
+                    (j == i && central) && continue
+                    d = sqrt((displacement[1] + ox)^2 + (displacement[2] + oy)^2 +
+                             (displacement[3] + oz)^2)
                     k = shell_of(d)
                     k != 0 && push!(nth_neighbors[k], j)
                 end
@@ -254,32 +308,18 @@ function compute_neighbors(supercell_lattice_vectors::Matrix{Float64},
                     kept_shell = shell_of(norm(dr_c))
                     kept_shell != 0 && push!(nth_neighbors[kept_shell], j)
                 end
-                ranges = ntuple(3) do k
-                    if periodicity[k]
-                        slack = 32 * eps(Float64) * max(
-                            abs(original_fractional_dr[k]) + image_bounds[k], 1.0)
-                        lo = ceil(Int,
-                            -original_fractional_dr[k] - image_bounds[k] - slack)
-                        hi = floor(Int,
-                            -original_fractional_dr[k] + image_bounds[k] + slack)
-                        lo:hi
-                    else
-                        0:0
-                    end
-                end
-                for n1 in ranges[1], n2 in ranges[2], n3 in ranges[3]
-                    (j == i && n1 == 0 && n2 == 0 && n3 == 0) && continue
-                    dx = dr[1] + a1[1] * n1 + a2[1] * n2 + a3[1] * n3
-                    dy = dr[2] + a1[2] * n1 + a2[2] * n2 + a3[2] * n3
-                    dz = dr[3] + a1[3] * n1 + a2[3] * n2 + a3[3] * n3
-                    d = sqrt(dx^2 + dy^2 + dz^2)
+                for (ox, oy, oz, central) in pair_offsets
+                    (central && (!_atomic_geometry || j == i)) && continue
+                    d = sqrt((displacement[1] + ox)^2 + (displacement[2] + oy)^2 +
+                             (displacement[3] + oz)^2)
                     k = shell_of(d)
                     k != 0 && (collapsed[k] += 1)
                 end
                 # One in-cutoff image of a distinct site is retained by the
                 # minimum-image list rather than collapsed. Subtract it after
                 # counting all images; this also handles equal-distance ties.
-                j != i && kept_shell != 0 && (collapsed[kept_shell] -= 1)
+                _atomic_geometry && j != i && kept_shell != 0 &&
+                    (collapsed[kept_shell] -= 1)
             end
         end
 
@@ -406,6 +446,17 @@ function _build_atomic_surface(surface::Symbol, lattice_atom::String,
                    a=lattice_constant, c=lattice_constant_c)
 end
 
+"""Validate element symbols before an empty lattice can defer the failure."""
+function _validate_ase_symbols(symbols, argument::String)
+    atomic_numbers = pyimport("ase.data").atomic_numbers
+    invalid = [symbol for symbol in symbols if
+               !pyconvert(Bool, atomic_numbers.__contains__(symbol)) ||
+               pyconvert(Int, atomic_numbers[symbol]) == 0]
+    isempty(invalid) || throw(ArgumentError(
+        "$argument contains unsupported chemical symbol(s): $invalid"))
+    return nothing
+end
+
 """
 Return the symmetry-equivalent offsets of an ASE named adsorption site.
 
@@ -491,26 +542,28 @@ function _fold_surface_sites(sites::Vector{Tuple{Float64,Float64}},
 end
 
 """
-Build adsorption sites from the metadata supplied by ASE's surface builder.
+Build adsorption sites from the substrate geometry and ASE site metadata.
 
-Each selected name contributes its complete translational orbit.  Rotationally
-equivalent `bridge` orientations are expanded explicitly.  `fcc211` is the one
-ASE elemental builder without named sites, so FreeBird exposes its top-layer
-atoms as `ontop` sites only.
+`ontop` sites use the actual highest substrate atoms. Other selected names
+contribute the translational orbits supplied by ASE. Rotationally equivalent
+`bridge` orientations are expanded explicitly. `fcc211` exposes its highest
+step-edge atom orbit as `step_edge_ontop`. On corrugated `hcp10m10`, only the
+highest ridge is included in the single-height adsorption lattice.
 """
 function _ase_surface_sites(slab, surface::Symbol,
                             dimensions::Tuple{Int64,Int64,Int64},
                             type_of_sites::Vector{String})
     positions = _atomic_positions(slab)
     cell = pyconvert(Matrix{Float64}, slab.get_cell())
+    z_top = maximum(p[3] for p in positions)
+    top_sites = [(p[1], p[2]) for p in positions if isapprox(p[3], z_top; atol=1e-8)]
 
     if surface == :fcc211
-        type_of_sites == ["ontop"] || throw(ArgumentError(
+        type_of_sites == ["step_edge_ontop"] || throw(ArgumentError(
             "ASE's fcc211 builder provides no named adsorption sites; " *
-            "AtomicLattice supports type_of_sites=[\"ontop\"] for fcc211"))
-        z_top = maximum(p[3] for p in positions)
-        sites = [(p[1], p[2]) for p in positions if isapprox(p[3], z_top; atol=1e-8)]
-        return _fold_surface_sites(sites, cell)
+            "AtomicLattice supports the highest step-edge orbit as " *
+            "type_of_sites=[\"step_edge_ontop\"]"))
+        return _fold_surface_sites(top_sites, cell)
     end
 
     info = slab.info["adsorbate_info"]
@@ -525,6 +578,10 @@ function _ase_surface_sites(slab, surface::Symbol,
     nx, ny, _ = dimensions
     sites = Tuple{Float64,Float64}[]
     for site in type_of_sites
+        if site == "ontop"
+            append!(sites, top_sites)
+            continue
+        end
         raw = pyconvert(Vector{Float64}, named[site])
         representative = (raw[1], raw[2])
         for offset in _surface_site_offsets(surface, site, representative)
@@ -547,16 +604,7 @@ function _site_shell_cutoffs(positions::Matrix{Float64}, cell::Matrix{Float64},
                              image_multiplicity::Bool=false)
     n_shells == 0 && return Float64[]
     supercell = permutedims(cell) # ASE stores cell vectors as rows
-    # ASE surface builders leave the non-periodic third cell vector at zero
-    # unless the caller adds vacuum. Match `compute_neighbors`' 2-D reciprocal
-    # construction so a perfectly valid slab is not rejected as singular.
-    singular_2d = !periodicity[3] && all(iszero, view(supercell, :, 3))
-    if singular_2d
-        reciprocal = zeros(3, 3)
-        reciprocal[1:2, 1:2] = inv(supercell[1:2, 1:2])
-    else
-        reciprocal = inv(supercell)
-    end
+    reciprocal, _ = _reciprocal_lattice_vectors(supercell, periodicity)
     distances = Float64[]
     n_sites = size(positions, 1)
     if image_multiplicity
@@ -581,7 +629,7 @@ function _site_shell_cutoffs(positions::Matrix{Float64}, cell::Matrix{Float64},
             "noninteracting/MLIP lattice or image_multiplicity=true to include " *
             "periodic self images"))
         for i in 1:(n_sites - 1), j in (i + 1):n_sites
-            d = _minimum_image_distance(
+            d = _atomic_minimum_image_distance(
                 supercell, reciprocal, periodicity,
                 view(positions, i, :), view(positions, j, :))
             d > 1e-10 && push!(distances, d)
@@ -918,6 +966,8 @@ builders and determines whether `G` is `SquareLattice`, `TriangularLattice`, or
 - `cutoff_radii::Vector{Float64}`: Nested cutoffs for those shells.
 - `neighbors::Vector{Vector{Vector{Int}}}`: Neighbor lists indexed over `all_sites`.
 - `type_of_sites::Vector{String}`: The types of adsorption sites (e.g., "ontop", "bridge", "hollow").
+  For `fcc211`, use `"step_edge_ontop"`; lower terrace rows are not part of
+  this planar adsorption lattice.
 - `ase_lattice::Py`: The ASE atoms object. A **derived cache** of `components`, not a second source of truth — see `sync_ase_lattice!`.
 
 # Constructor
@@ -950,7 +1000,8 @@ Throws an `ArgumentError` for an unsupported component/geometry type or invalid
 constructor argument.
 
 # Arguments
-- `lattice_atom::String`: Chemical symbol for the substrate (e.g., "Pt", "Cu").
+- `lattice_atom::String`: Real chemical-element symbol for the substrate (e.g.,
+  "Pt", "Cu"). ASE's dummy symbol `"X"` is not supported.
 - `surface`: ASE elemental surface builder. Supported values are `fcc100`,
   `fcc110`, `fcc111`, `fcc211`, `bcc100`, `bcc110`, `bcc111`, `hcp0001`,
   `hcp10m10`, `diamond100`, and `diamond111`. Parentheses, underscores, and
@@ -963,7 +1014,8 @@ constructor argument.
   It is valid only for `hcp0001` and `hcp10m10`; `nothing` uses ASE's
   reference c/a ratio.
 - `periodicity::Tuple{Bool, Bool, Bool}`: Periodic boundary conditions for each dimension.
-- `adsorbate_atoms::Vector{String}`: Chemical symbols of adsorbates.
+- `adsorbate_atoms::Vector{String}`: Unique real chemical-element symbols of
+  adsorbates, one per component. ASE's dummy symbol `"X"` is not supported.
 - `coverage::Float64`: Requested total fractional surface coverage (default:
   `0.5`). The constructor rounds this to the nearest realizable number of
   occupied sites. For multiple species, those sites are distributed as evenly
@@ -974,6 +1026,9 @@ constructor argument.
 - `num_nearest_neighbors::Int64`: Number of neighbor shells to construct. Use
   zero when the selected energy model and moves do not use neighbor lists.
 - `type_of_sites::Vector{String}`: Adsorption-site families to include.
+  `ontop` sites lie above the highest substrate atoms. For corrugated
+  `hcp10m10`, this selects the highest ridge, with `nx*ny/2` sites; lower
+  rows are not included in this single-height adsorption lattice.
 - `adsorbate_height::Float64`: Height in Ångströms used when adding every
   adsorbate to the ASE surface. This single construction height is shared by
   all adsorbate species; it is not relaxed automatically.
@@ -1031,7 +1086,10 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
         image_multiplicity::Bool = false
     ) where {C,G}
 
-        C > 0 || throw(ArgumentError("AtomicLattice requires at least one component"))
+        C isa Integer && !(C isa Bool) && C > 0 || throw(ArgumentError(
+            "AtomicLattice component count must be a positive integer, got $C"))
+        G isa Type && G <: LatticeGeometry || throw(ArgumentError(
+            "AtomicLattice geometry must be a LatticeGeometry type, got $G"))
         surface = _atomic_surface(surface)
         expected_geometry_name = _ATOMIC_SURFACE_GEOMETRIES[surface]
         expected_geometry = getfield(@__MODULE__, expected_geometry_name)
@@ -1082,6 +1140,11 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
         end
         all(!isempty, adsorbate_atoms) || throw(ArgumentError(
             "adsorbate atom symbols must be non-empty"))
+        length(unique(adsorbate_atoms)) == length(adsorbate_atoms) ||
+            throw(ArgumentError(
+                "adsorbate atom symbols must be unique, got $adsorbate_atoms"))
+        _validate_ase_symbols((lattice_atom,), "lattice_atom")
+        _validate_ase_symbols(adsorbate_atoms, "adsorbate_atoms")
         isempty(type_of_sites) && throw(ArgumentError(
             "type_of_sites must select at least one adsorption-site family"))
         length(unique(type_of_sites)) == length(type_of_sites) || throw(ArgumentError(
@@ -1131,8 +1194,9 @@ mutable struct AtomicLattice{C,G} <: AbstractLattice
         neighbors = if isempty(cutoff_radii)
             [Vector{Int}[] for _ in 1:length(all_sites)]
         else
-            compute_neighbors(permutedims(cell), lattice_positions,
-                              periodicity, cutoff_radii; image_multiplicity)
+            _compute_lattice_neighbors(permutedims(cell), lattice_positions,
+                                       periodicity, cutoff_radii, Val(true);
+                                       image_multiplicity)
         end
         component_masks = [falses(length(all_sites)) for _ in 1:C]
         if components === nothing
@@ -1298,9 +1362,9 @@ function _ensure_atomic_reflection_row!(lattice::AtomicLattice, pivot::Int)
 end
 
 """
-    deepcopy(lattice::AtomicLattice)
+    Base.deepcopy_internal(lattice::AtomicLattice, stackdict::IdDict)
 
-Copy an `AtomicLattice`, including an independent Python copy of its cached ASE
+Implement `deepcopy(lattice)` with an independent Python copy of its cached ASE
 frame. PythonCall's `Py` wrapper is otherwise copied without cloning the Python
 object it refers to, which lets synchronization or an MLIP evaluation through
 one Julia copy mutate another copy's cache.
@@ -1341,6 +1405,9 @@ function _validate_atomic_components(lattice::AtomicLattice{C}) where C
         "$(length(lattice.adsorbate_atoms))"))
     all(!isempty, lattice.adsorbate_atoms) || throw(ArgumentError(
         "AtomicLattice adsorbate symbols must be non-empty"))
+    length(unique(lattice.adsorbate_atoms)) == C || throw(ArgumentError(
+        "AtomicLattice adsorbate symbols must be unique, got " *
+        "$(lattice.adsorbate_atoms)"))
     isfinite(lattice.adsorbate_height) || throw(ArgumentError(
         "AtomicLattice adsorbate_height must be finite"))
     return _validate_atomic_components(lattice.components, num_sites(lattice))
@@ -1357,15 +1424,21 @@ coverage(lattice::AtomicLattice) =
 """
     nn_distance(lattice::AtomicLattice)
 
-Shortest primitive in-plane translation of the selected ASE surface.
-The site-finding geometry uses this surface-dependent distance.
+Shortest primitive in-plane translation of the selected substrate's highest
+atom orbit.
 """
 function nn_distance(lattice::AtomicLattice)
     _validate_atomic_components(lattice)
     _validate_atomic_ase_cache(lattice)
-    if lattice.surface == :fcc211
+    if lattice.surface in (:fcc211, :hcp10m10)
         cell = pyconvert(Matrix{Float64}, lattice.ase_lattice.get_cell())
         nx, ny, _ = lattice.supercell_dimensions
+        if lattice.surface == :hcp10m10
+            # Alternating rows have different heights; the highest ridge
+            # repeats once for every two rows along cell vector 2.
+            return min(norm(view(cell, 1, 1:2)) / nx,
+                       norm(view(cell, 2, 1:2)) / (ny ÷ 2))
+        end
         # ASE's fcc211 builder groups the first size dimension in triples:
         # a size of `nx` contains `nx / 3` primitive repeats along cell vector 1.
         return min(norm(view(cell, 1, 1:2)) / (nx ÷ 3),
@@ -1394,15 +1467,19 @@ readers call `_validate_atomic_ase_cache` so direct Python-side mutation is
 rejected without rebuilding adsorbates unnecessarily.
 
 Adsorbates are identified by ASE tag 0, which is what `ase.build.add_adsorbate`
-assigns; the substrate keeps the layer tags its ASE surface builder gave it.
+assigns. Substrate layer tags are retained where supplied by ASE; zero substrate
+tags are replaced by positive tags to distinguish substrate atoms from adsorbates.
 Deletion goes in reverse index order because removing an atom renumbers
 everything after it.
 """
 function sync_ase_lattice!(lattice::AtomicLattice)
     _validate_atomic_components(lattice)
     _validate_atomic_ase_cache(lattice)
+    symbols_changed = lattice.adsorbate_atoms != lattice.synced_adsorbate_atoms
+    symbols_changed && _validate_ase_symbols(
+        lattice.adsorbate_atoms, "adsorbate_atoms")
     !lattice.ase_dirty && lattice.components == lattice.synced_components &&
-        lattice.adsorbate_atoms == lattice.synced_adsorbate_atoms &&
+        !symbols_changed &&
         lattice.adsorbate_height == lattice.synced_adsorbate_height &&
         return lattice
 
@@ -2694,7 +2771,8 @@ function motif_distances(coords::AbstractVector{<:Tuple})
 end
 
 """
-    enumerate_motif_embeddings(lattice::AbstractLattice, distances::AbstractVector{<:Real};
+    enumerate_motif_embeddings(lattice::Union{MLattice,AtomicLattice},
+                               distances::AbstractVector{<:Real};
                                tol::Float64=1e-6,
                                expected_count::Union{Int,Nothing}=nothing)
         -> Vector{NTuple{K,Int}}
@@ -2736,7 +2814,8 @@ site permutation, which excludes homometric aliases while preserving the
 torus counting convention. For `K ≤ 3` the multiset determines the figure
 and the two methods agree.
 """
-function enumerate_motif_embeddings(lattice::AbstractLattice, distances::AbstractVector{<:Real};
+function enumerate_motif_embeddings(lattice::Union{MLattice,AtomicLattice},
+                                    distances::AbstractVector{<:Real};
                                     tol::Float64=1e-6,
                                     expected_count::Union{Int,Nothing}=nothing)
     npairs = length(distances)
@@ -2758,7 +2837,8 @@ function enumerate_motif_embeddings(lattice::AbstractLattice, distances::Abstrac
 end
 
 """
-    enumerate_motif_embeddings(lattice::AbstractLattice, coords::AbstractVector{<:Tuple};
+    enumerate_motif_embeddings(lattice::Union{MLattice,AtomicLattice},
+                               coords::AbstractVector{<:Tuple};
                                tol=1e-6, expected_count=nothing)
 
 Template method: declare the motif by its site coordinates (as accepted by
@@ -2767,7 +2847,8 @@ minimum-image distance matrix matches the template's under some site
 permutation. This is the recommended method for `K ≥ 4`, where a distance
 multiset alone does not determine the figure (homometric figures).
 """
-function enumerate_motif_embeddings(lattice::AbstractLattice, coords::AbstractVector{<:Tuple};
+function enumerate_motif_embeddings(lattice::Union{MLattice,AtomicLattice},
+                                    coords::AbstractVector{<:Tuple};
                                     tol::Float64=1e-6,
                                     expected_count::Union{Int,Nothing}=nothing)
     K = length(coords)
@@ -2825,13 +2906,7 @@ function _motif_geometry(lattice::AtomicLattice)
     _validate_atomic_ase_cache(lattice)
     cell = pyconvert(Matrix{Float64}, lattice.ase_lattice.get_cell())
     scv = permutedims(cell)
-    singular_2d = !lattice.periodicity[3] && all(iszero, view(scv, :, 3))
-    if singular_2d
-        rec = zeros(3, 3)
-        rec[1:2, 1:2] = inv(scv[1:2, 1:2])
-    else
-        rec = inv(scv)
-    end
+    rec, _ = _reciprocal_lattice_vectors(scv, lattice.periodicity)
     return scv, rec, lattice.lattice_positions, lattice.periodicity
 end
 
@@ -2872,7 +2947,9 @@ function _enumerate_motif_core(lattice::AbstractLattice, distances::Vector{Float
         any(u -> abs(u - d) <= tol, uniq) || push!(uniq, d)
     end
 
-    dist(i, j) = _minimum_image_distance(scv, rec, per,
+    distance_kernel = lattice isa AtomicLattice ?
+        _atomic_minimum_image_distance : _minimum_image_distance
+    dist(i, j) = distance_kernel(scv, rec, per,
                                          view(pos, i, :), view(pos, j, :))
 
     # Per-site candidates at any signature distance, restricted to j > i:

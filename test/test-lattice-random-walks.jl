@@ -1,4 +1,63 @@
+# A mask-only extension exercises the lattice sampling adapter.
+struct MaskOnlyLattice <: AbstractLattice
+    components::Vector{Vector{Bool}}
+end
+FreeBird.AbstractWalkers.num_lattice_components(::MaskOnlyLattice) = 1
+FreeBird.AbstractWalkers.num_sites(lattice::MaskOnlyLattice) = length(lattice.components[1])
+FreeBird.EnergyEval.interacting_energy(lattice::MaskOnlyLattice,
+                                       h::GenericLatticeHamiltonian) =
+    sum(lattice.components[1]) * h.on_site_interaction
+function FreeBird.MonteCarloMoves.random_microstate!(lattice::MaskOnlyLattice;
+                                                    p::Float64=0.5)
+    lattice.components[1] .= rand(num_sites(lattice)) .< p
+    return lattice
+end
+function FreeBird.MonteCarloMoves.lattice_insert_particle!(lattice::MaskOnlyLattice)
+    site = findfirst(!, lattice.components[1])
+    site === nothing && return false, lattice, 0
+    lattice.components[1][site] = true
+    return true, lattice, site
+end
+function FreeBird.MonteCarloMoves.lattice_delete_particle!(lattice::MaskOnlyLattice)
+    site = findfirst(identity, lattice.components[1])
+    site === nothing && return false, lattice, 0
+    lattice.components[1][site] = false
+    return true, lattice, site
+end
+
 @testset "Monte Carlo Moves tests" begin
+    @testset "AtomicLattice adapter preserves custom lattice mutations" begin
+        for route in (:insert, :delete), mode in (:per_proposal, :carried)
+            inserting = route === :insert
+            lattice = MaskOnlyLattice([[!inserting, false]])
+            h = GenericLatticeHamiltonian(inserting ? 1.0 : -1.0,
+                                           Float64[], u"eV")
+            walker = LatticeWalker(lattice)
+            assign_energy!(walker, h)
+            before = copy.(lattice.components)
+            energy_before = walker.energy
+            ceiling = inserting ? 0.5 : -0.5
+            accepted, rate, walker, _, _, stats = MC_grand_canonical_walk!(
+                1, walker, h, ceiling, 0.0;
+                p_move=0.0, p_insert=inserting ? 1.0 : 0.0,
+                perturbation_mode=mode)
+            @test !accepted
+            @test rate == 0.0
+            @test lattice.components == before
+            @test walker.energy == energy_before
+            @test inserting ? stats.insert_uniform_attempted == 1 :
+                              stats.delete_attempted == 1
+        end
+
+        h = GenericLatticeHamiltonian(-0.04, Float64[], u"eV")
+        liveset = LatticeGasWalkers([LatticeWalker(MaskOnlyLattice([falses(4)]))], h)
+        parameters = GrandCanonicalNestedSamplingParameters(
+            init_occupation_p=1.0, n_max=0, energy_perturbation=0.0)
+        FreeBird.SamplingSchemes._init_gc_walkers!(liveset, parameters)
+        @test liveset.walkers[1].configuration.components == [falses(4)]
+        @test liveset.walkers[1].energy == 0.0u"eV"
+    end
+
     @testset "lattice random walk tests" begin
 
         sl = SLattice{SquareLattice}(components=[[1,2,3,4]])
@@ -13,6 +72,58 @@
         @test occupied_site_count(ml) == occupied_site_count(new_ml)
         @test length(ml.components[1]) == length(new_ml.components[1])
         @test length(ml.components[2]) == length(new_ml.components[2])
+    end
+
+    @testset "AtomicLattice proposals roll back calculator failures" begin
+        namespace = FreeBird.EnergyEval.pydict()
+        FreeBird.EnergyEval.pyimport("builtins").exec("""
+def adsorption_signature(atoms):
+    selected = atoms.get_tags() == 0
+    return sorted((int(number), tuple(position)) for number, position in
+                  zip(atoms.numbers[selected], atoms.positions[selected]))
+class FreeBirdProposalFaultCalculator:
+    def __init__(self, atoms, outcome):
+        self.original = adsorption_signature(atoms)
+        self.outcome = outcome
+    def get_potential_energy(self, atoms):
+        if adsorption_signature(atoms) != self.original:
+            if self.outcome == 'raise': raise RuntimeError('injected proposal failure')
+            return float('nan')
+        return 0.0
+""", namespace)
+        for components in 1:2, route in (:swap, :cluster, :insert, :delete),
+            mode in (:per_proposal, :carried), outcome in ("raise", "nan")
+            components > 1 && route in (:insert, :delete) && continue
+            masks = [collect(1:9) .== component for component in 1:components]
+            lattice = AtomicLattice{components,SquareLattice}(
+                lattice_atom="Pd", supercell_dimensions=(3, 3, 1),
+                lattice_constant=3.947, periodicity=(true, true, false),
+                adsorbate_atoms=["O", "H"][1:components], components=masks,
+                num_nearest_neighbors=1, type_of_sites=["ontop"])
+            calculator = PyMLPotential(FreeBird.AbstractPotentials.ASEcalculator(
+                namespace["FreeBirdProposalFaultCalculator"](lattice.ase_lattice, outcome)))
+            walker = LatticeWalker(lattice; energy=0.0u"eV", iter=7)
+            Random.seed!(1)
+            expected_error = outcome == "raise" ? FreeBird.EnergyEval.PyException : DomainError
+            if route == :swap
+                @test_throws expected_error MC_random_walk!(20, walker, calculator, 10.0;
+                    perturbation_mode=mode)
+            elseif route == :cluster
+                @test_throws expected_error FreeBird.MonteCarloMoves.MC_cluster_walk!(
+                    20, walker, calculator, 10.0, 1.0; perturbation_mode=mode)
+            else
+                @test_throws expected_error MC_grand_canonical_walk!(
+                    20, walker, calculator, 10.0, 0.0;
+                    p_move=0.0, p_insert=route == :insert ? 1.0 : 0.0,
+                    perturbation_mode=mode)
+            end
+            @test lattice.components == masks
+            @test walker.energy == 0.0u"eV"
+            @test walker.iter == 7
+            @test interacting_energy(lattice, calculator) == 0.0u"eV"
+            @test lattice.synced_components == masks
+            @test !lattice.ase_dirty
+        end
     end
 
     @testset "AtomicLattice incremental fixed-N walks" begin
@@ -1103,6 +1214,20 @@
                 fill(false, 3))
             @test_throws ArgumentError geometric_cluster_swap!(gen, 0.3;
                 record=Tuple{Int,Int}[])
+        end
+
+        @testset "cluster growth probability validation" begin
+            atomic = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", supercell_dimensions=(3, 3, 1),
+                lattice_constant=3.947, periodicity=(true, true, false),
+                adsorbate_atoms=["O"], components=[1],
+                num_nearest_neighbors=1, type_of_sites=["ontop"])
+            for p in (-Inf, -0.1, 1.1, Inf, NaN)
+                @test_throws ArgumentError geometric_cluster_swap!(atomic, p)
+            end
+            for p in (0.0, 1.0)
+                @test_nowarn geometric_cluster_swap!(atomic, p)
+            end
         end
     end
 end

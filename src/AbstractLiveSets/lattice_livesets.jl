@@ -41,12 +41,6 @@ function assign_energy!(walker::LatticeWalker{C}, potential::PyMLPotential;
         "PyMLPotential lattice energies require an AtomicLattice configuration; " *
         "got $(typeof(walker.configuration))"))
     raw = interacting_energy(walker.configuration, potential)
-    if !(raw isa Unitful.Energy)
-        throw(ArgumentError(
-            "interacting_energy must return an energy-dimensioned " *
-            "Unitful.Quantity (eV-convertible) for walker energies; got " *
-            "$(typeof(raw)) from $(nameof(typeof(potential)))."))
-    end
     walker.energy = raw + perturb_energy * (rand() - 0.5) * unit(walker.energy)
     return walker
 end
@@ -222,11 +216,13 @@ function print_lattice_walker_in_walkers(io::IO, walker::LatticeWalker{C}) where
             println(io, "        component $i:")
             println(io, "          ", component)
         end
-    else
+    elseif walker.configuration isa AtomicLattice
         # Render occupation data through the shared lattice interface.
         print(io, "      ")
         AbstractWalkers.print_occupation(io, walker.configuration)
         println(io)
+    else
+        AbstractWalkers.print_lattice(io, walker.configuration, walker.configuration.occupations)
     end
 end
 

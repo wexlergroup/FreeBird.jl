@@ -87,6 +87,36 @@
             configs[i].ase_lattice, configs[j].ase_lattice)
             for i in eachindex(configs) for j in (i + 1):length(configs))
 
+        classical = GenericLatticeHamiltonian(
+            -0.04, [-0.01, -0.0025], u"eV")
+        @test_throws ArgumentError nvt_monte_carlo(
+            MCNewSample(), lattice, classical, -1.0, Int64(2), Int64(42))
+        @test_throws ArgumentError nvt_monte_carlo(
+            MCNewSample(), lattice, classical, 300.0, Int64(-1), Int64(42))
+        @test_throws ArgumentError nvt_monte_carlo(
+            MCNewSample(), lattice, classical, 300.0, Int64(2), Int64(42);
+            kb=0.0)
+        for model in (classical, calc)
+            @test_throws ArgumentError nvt_monte_carlo(
+                MCNewSample(), lattice, model, nextfloat(0.0), Int64(2), Int64(42))
+            @test_throws ArgumentError nvt_monte_carlo(
+                MCNewSample(), lattice, model, 300.0, Int64(2), Int64(42);
+                kb=floatmax(Float64))
+            invalid_thermal = MetropolisMCParameters(
+                [300.0, nextfloat(0.0)]; equilibrium_steps=0, sampling_steps=2)
+            @test_throws ArgumentError monte_carlo_sampling(
+                MCNewSample(), lattice, model, invalid_thermal)
+        end
+        flat_model = GenericLatticeHamiltonian(0.0, zeros(2), u"eV")
+        for temperature in (1e-200, 1e200)
+            parameters = MetropolisMCParameters(
+                [temperature]; equilibrium_steps=0, sampling_steps=2)
+            _, _, cvs, rates = monte_carlo_sampling(
+                MCNewSample(), lattice, flat_model, parameters)
+            @test cvs == [0.0]
+            @test rates == [1.0]
+        end
+
         zero_eq = MetropolisMCParameters(
             [300.0]; equilibrium_steps=0, sampling_steps=3,
             random_seed=42)
@@ -353,6 +383,29 @@ end
         @test atomic_cv[1] == var(atomic_pr_e) / (8.617333262e-5 * 300.0^2)
         @test atomic_rates[1] == atomic_pr_acc / 16
         @test atomic_configs[1].components == atomic_pr_configs[end].components
+
+        # Atomic lattices use the same zero-equilibration and custom-kb
+        # contract with classical and Python-backed energy models.
+        classical_zero_eq = MetropolisMCParameters([300.0];
+            equilibrium_steps=0, sampling_steps=16, random_seed=seed)
+        classical_e, classical_configs, classical_cv, classical_rates =
+            monte_carlo_sampling(
+                MCNewSample(), atomic, ham, classical_zero_eq; kb=1.0)
+        classical_pr_e, classical_pr_configs, classical_pr_acc =
+            nvt_monte_carlo(
+                MCNewSample(), atomic, ham, 300.0, Int64(16),
+                Int64(seed + 1); kb=1.0)
+        @test classical_e[1] == mean(classical_pr_e)
+        @test classical_cv[1] == var(classical_pr_e) / 300.0^2
+        @test classical_rates[1] == classical_pr_acc / 16
+        @test classical_configs[1].components ==
+              classical_pr_configs[end].components
+        one_sample = MetropolisMCParameters([300.0];
+            equilibrium_steps=0, sampling_steps=1, random_seed=seed)
+        @test_throws ArgumentError monte_carlo_sampling(
+            MCNewSample(), atomic, ham, one_sample)
+        @test_throws ArgumentError monte_carlo_sampling(
+            MCNewSample(), atomic, calc, one_sample)
 
         # Atomistic driver: same-seed reproducibility end to end
         p1 = MetropolisMCParameters([500.0];

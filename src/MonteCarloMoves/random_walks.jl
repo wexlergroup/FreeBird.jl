@@ -515,9 +515,9 @@ function MC_random_walk!(n_steps::Int,
             was_null = config.components[1][hop_from] == config.components[1][hop_to]
             if !was_null
                 step_delta = site_flip_delta(config, h, hop_from)
-                set_occupied!(config, hop_from, !is_occupied(config, hop_from))
+                AbstractWalkers._set_lattice_occupied!(config, hop_from, !config.components[1][hop_from])
                 step_delta += site_flip_delta(config, h, hop_to)
-                set_occupied!(config, hop_to, !is_occupied(config, hop_to))
+                AbstractWalkers._set_lattice_occupied!(config, hop_to, !config.components[1][hop_to])
             end
         else
             # In-place proposal: the hop-pair walk mutates the live configuration
@@ -535,11 +535,13 @@ function MC_random_walk!(n_steps::Int,
             proposed_raw = was_null ? raw : raw + step_delta
             proposed_energy = proposed_raw + perturbation_energy
         elseif carried
-            proposed_raw = interacting_energy(config, h)
+            proposed_raw = _lattice_proposal_energy(
+                config, h, _lattice_walk_apply!, hop_from, hop_to)
             proposed_energy = proposed_raw + perturbation_energy
         else
             proposed_raw = zero_e
-            proposed_energy = interacting_energy(config, h) + perturbation_energy
+            proposed_energy = _lattice_proposal_energy(
+                config, h, _lattice_walk_apply!, hop_from, hop_to) + perturbation_energy
         end
 
         # No per-proposal @debug here: its log-level check ran on every proposal of the fixed-N walk
@@ -808,12 +810,7 @@ function _lattice_walk_apply!(lattice::SLattice, hop_from::Int, hop_to::Int)
 end
 
 function _lattice_walk_apply!(lattice::AtomicLattice, hop_from::Int, hop_to::Int)
-    from = ntuple(c -> is_occupied(lattice, hop_from, c),
-                  num_lattice_components(lattice))
-    to = ntuple(c -> is_occupied(lattice, hop_to, c),
-                num_lattice_components(lattice))
-    from != to && swap_sites!(lattice, hop_from, hop_to)
-    return lattice
+    return swap_sites!(lattice, hop_from, hop_to)
 end
 
 function _lattice_walk_apply!(lattice::MLattice{C,G}, hop_from::Int, hop_to::Int) where {C,G}
@@ -947,11 +944,12 @@ function MC_cluster_walk!(n_steps::Int,
 
         u_tie = rand()
         if carried
-            proposed_raw = interacting_energy(config, h)
+            proposed_raw = _lattice_proposal_energy(config, h, _apply_cluster_pairs!, cluster_pairs)
             proposed_energy = proposed_raw + offset
         else
             perturbation_energy = energy_perturb * (u_tie - 0.5) * unit(lattice.energy)
-            proposed_energy = interacting_energy(config, h) + perturbation_energy
+            proposed_energy = _lattice_proposal_energy(
+                config, h, _apply_cluster_pairs!, cluster_pairs) + perturbation_energy
         end
 
         if proposed_energy < emax_u
@@ -972,6 +970,20 @@ end
 # ======================================================================
 # Grand-canonical move primitives
 # ======================================================================
+
+# Ordinary lattice evaluation has no extra exception-handling path.
+@inline _lattice_proposal_energy(config::AbstractLattice, h, revert!, args...) =
+    interacting_energy(config, h)
+
+"""Restore an AtomicLattice proposal if its energy evaluation fails."""
+function _lattice_proposal_energy(config::AtomicLattice, h, revert!, args...)
+    try
+        return interacting_energy(config, h)
+    catch
+        revert!(config, args...)
+        rethrow()
+    end
+end
 
 _check_lattice_energy_model(::AbstractLattice, ::ClassicalHamiltonian) = nothing
 function _check_lattice_energy_model(lattice::AtomicLattice,
@@ -1467,7 +1479,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
     for _ in 1:n_steps
         r = rand()
         config = lattice.configuration
-        n = n_occupied(config)
+        n = sum(config.components[1])
         was_null = false
 
         if r < p_move
@@ -1497,9 +1509,9 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                         length(config.components[1]) - n)
                     if use_deltas
                         step_delta = site_flip_delta(config, h, hop_from)
-                        set_occupied!(config, hop_from, false)
+                        AbstractWalkers._set_lattice_occupied!(config, hop_from, false)
                         step_delta += site_flip_delta(config, h, hop_to)
-                        set_occupied!(config, hop_to, true)
+                        AbstractWalkers._set_lattice_occupied!(config, hop_to, true)
                     else
                         _lattice_walk_apply!(config, hop_from, hop_to)
                     end
@@ -1509,15 +1521,13 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     # with the second delta evaluated on the intermediate
                     # state; an equal-occupancy pair performs no flips and
                     # contributes exactly zero.
-                    hop_from = rand(1:num_sites(config))
-                    hop_to = rand(1:num_sites(config))
-                    if is_occupied(config, hop_from) != is_occupied(config, hop_to)
+                    hop_from = rand(eachindex(config.components[1]))
+                    hop_to = rand(eachindex(config.components[1]))
+                    if config.components[1][hop_from] != config.components[1][hop_to]
                         step_delta = site_flip_delta(config, h, hop_from)
-                        old_from = is_occupied(config, hop_from)
-                        old_to = is_occupied(config, hop_to)
-                        set_occupied!(config, hop_from, old_to)
+                        AbstractWalkers._set_lattice_occupied!(config, hop_from, !config.components[1][hop_from])
                         step_delta += site_flip_delta(config, h, hop_to)
-                        set_occupied!(config, hop_to, old_from)
+                        AbstractWalkers._set_lattice_occupied!(config, hop_to, !config.components[1][hop_to])
                     else
                         was_null = true
                     end
@@ -1526,8 +1536,8 @@ function MC_grand_canonical_walk!(n_steps::Int,
                     # Post-exchange classification: a non-null pair still
                     # differs after the exchange; an equal-occupancy pair
                     # was a no-op
-                    was_null = is_occupied(config, hop_from) ==
-                               is_occupied(config, hop_to)
+                    was_null = config.components[1][hop_from] ==
+                               config.components[1][hop_to]
                 end
                 move_type = :move
                 swap_attempted += 1
@@ -1561,7 +1571,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
                                              length(config.components[1]) - n)
                     insert_from_biased = false
                 end
-                set_occupied!(config, insert_site, true)
+                AbstractWalkers._set_lattice_occupied!(config, insert_site, true)
             else
                 # p_bias == 0: no sub-channel draw; lattice_insert_particle!
                 # draws the site exactly once
@@ -1590,7 +1600,7 @@ function MC_grand_canonical_walk!(n_steps::Int,
                 # lattice_delete_particle!) to capture the vacated site
                 # for the reverse composite density (keep in lockstep)
                 deleted_site = _rand_site(config.components[1], true, n)
-                set_occupied!(config, deleted_site, false)
+                AbstractWalkers._set_lattice_occupied!(config, deleted_site, false)
             else
                 success, _, deleted_site = lattice_delete_particle!(config)
                 if !success
@@ -1618,10 +1628,11 @@ function MC_grand_canonical_walk!(n_steps::Int,
         elseif use_deltas && move_type != :cluster
             proposed_raw = raw + step_delta
         else
-            proposed_raw = interacting_energy(config, h)
+            proposed_raw = _lattice_proposal_energy(config, h, _gc_revert_move!,
+                move_type, hop_from, hop_to, cluster_pairs, insert_site, deleted_site)
         end
         proposed_energy = proposed_raw + perturbation_energy
-        n_new = n_occupied(config)
+        n_new = sum(config.components[1])
         proposed_omega = proposed_energy - mu * n_new * unit(lattice.energy)
 
         if proposed_omega >= omega_max_u
@@ -1739,9 +1750,9 @@ recorded site back. No random draws.
     elseif move_type == :cluster
         _apply_cluster_pairs!(config, cluster_pairs)
     elseif move_type == :insert
-        set_occupied!(config, insert_site, false)
+        AbstractWalkers._set_lattice_occupied!(config, insert_site, false)
     else # :delete
-        set_occupied!(config, deleted_site, true)
+        AbstractWalkers._set_lattice_occupied!(config, deleted_site, true)
     end
     return config
 end

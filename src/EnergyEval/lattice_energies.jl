@@ -271,6 +271,7 @@ end
 
 function site_flip_delta(lattice::AtomicLattice{1},
                          h::GenericLatticeHamiltonian{N,U}, site::Int) where {N,U}
+    AbstractWalkers._validate_atomic_components(lattice)
     checkbounds(lattice.components[1], site)
     _check_shell_counts(lattice.neighbors, N)
     occ = lattice.components[1]

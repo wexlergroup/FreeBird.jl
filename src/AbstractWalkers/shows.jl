@@ -186,7 +186,7 @@ Print the geometry summary a live set shows above its walkers.
 
 Dispatch selects the fields appropriate to each lattice representation.
 """
-function print_lattice_header(io::IO, lattice::MLattice)
+function print_lattice_header(io::IO, lattice::AbstractLattice)
     println(io, "    lattice_vectors:      ", lattice.lattice_vectors)
     println(io, "    supercell_dimensions: ", lattice.supercell_dimensions)
     println(io, "    periodicity:          ", lattice.periodicity)

@@ -108,6 +108,56 @@
         @test SamplingSchemes.get_bin_index(0.0, bins) == 2  # Edge case: exact boundary, put in bin 2
     end
 
+    @testset "AtomicLattice lower energy boundary" begin
+        lattice = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", surface=:fcc100,
+            supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+            periodicity=(true, true, false), adsorbate_atoms=["O"],
+            components=[1], num_nearest_neighbors=0,
+            type_of_sites=["hollow"])
+        h = GenericLatticeHamiltonian(-0.04, Float64[], u"eV")
+        @test SamplingSchemes._lattice_bin_index(lattice, -0.04, [-0.04, 0.0]) == 1
+        @test SamplingSchemes.get_bin_index(-0.04, [-0.04, 0.0]) == 0
+        parameters = WangLandauParameters(
+            num_steps=2, f_min=2.0, energy_min=-0.04,
+            energy_max=-0.03, num_energy_bins=3, max_iter=0,
+            random_seed=42)
+        energies, configurations, _, entropy, histogram =
+            wang_landau(lattice, h, parameters)
+        @test first(energies) == -0.04
+        @test configurations[1] isa AtomicLattice
+        @test entropy[1] > 0
+        @test all(>=(0), histogram)
+
+        for bins in (Float64[], [-0.04], [-0.04, -0.04],
+                     [-0.03, -0.04], [NaN, 0.0], [-0.05, Inf])
+            invalid = WangLandauParameters(1, 0.8, 2.0, 1.5, bins, 0, 0.01, 42)
+            @test_throws ArgumentError wang_landau(lattice, h, invalid)
+        end
+        for (field, values) in ((:num_steps, (0, -1)), (:max_iter, (-1,)),
+                               (:flatness_criterion, (-0.1, 1.0, NaN, Inf)),
+                               (:f_initial, (0.0, 1.0, NaN, Inf)),
+                               (:f_min, (0.0, 1.0, NaN, Inf)))
+            for value in values
+                invalid = deepcopy(parameters)
+                setproperty!(invalid, field, value)
+                @test_throws ArgumentError wang_landau(lattice, h, invalid)
+            end
+        end
+        outside_window = WangLandauParameters(
+            num_steps=1, f_min=2.0, energy_min=0.0,
+            energy_max=1.0, num_energy_bins=2, max_iter=0)
+        @test_throws ArgumentError wang_landau(lattice, h, outside_window)
+        namespace = FreeBird.EnergyEval.pydict()
+        FreeBird.EnergyEval.pyimport("builtins").exec("""
+class FreeBirdNonfiniteWLCalculator:
+    def get_potential_energy(self, atoms): return float('nan')
+""", namespace)
+        nonfinite = PyMLPotential(FreeBird.AbstractPotentials.ASEcalculator(
+            namespace["FreeBirdNonfiniteWLCalculator"]()))
+        @test_throws DomainError wang_landau(lattice, nonfinite, parameters)
+    end
+
     if isfile("entropy.csv")
         rm("entropy.csv", force=true)
     end

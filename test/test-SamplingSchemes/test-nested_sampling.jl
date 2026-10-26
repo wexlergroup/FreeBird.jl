@@ -770,6 +770,35 @@
                 rm("test.ls", force=true)
             end
         end
+
+        @testset "AtomicLattice PyMLPotential fixed-N step" begin
+            lattice = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                components=[1], num_nearest_neighbors=0,
+                type_of_sites=["hollow"])
+            calculator = FreeBird.EnergyEval.pyimport(
+                "ase.calculators.lj").LennardJones()
+            potential = PyMLPotential(
+                FreeBird.AbstractPotentials.ASEcalculator(calculator))
+            liveset = LatticeGasWalkers(
+                [LatticeWalker(deepcopy(lattice)) for _ in 1:4], potential)
+            counts_before = [occupied_site_count(w.configuration)
+                             for w in liveset.walkers]
+            params = LatticeNestedSamplingParameters(
+                mc_steps=4, energy_perturbation=1e-9,
+                allowed_fail_count=100, random_seed=20261001)
+
+            _, _, updated_liveset, _ = nested_sampling_step!(
+                liveset, params, MCRandomWalkClone())
+
+            @test all(isfinite(w.energy.val) for w in updated_liveset.walkers)
+            @test [occupied_site_count(w.configuration)
+                   for w in updated_liveset.walkers] == counts_before
+            @test all(w.configuration isa AtomicLattice{1,SquareLattice}
+                      for w in updated_liveset.walkers)
+        end
     end
 
 

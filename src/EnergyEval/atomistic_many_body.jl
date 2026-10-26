@@ -91,6 +91,8 @@ function interacting_energy(lattice::AtomicLattice, calc::PyMLPotential)
     end
     energy = pyconvert(
         Float64, calc.calc.calculator.get_potential_energy(atoms))
+    isfinite(energy) || throw(DomainError(energy,
+        "the AtomicLattice Python calculator must return a finite energy in eV"))
     return energy * u"eV"
 end
 

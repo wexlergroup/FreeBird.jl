@@ -888,6 +888,10 @@
                 set_occupied!(atomic, site, !is_occupied(atomic, site))
             end
         end
+        invalid_geometry = deepcopy(atomic)
+        invalid_geometry.cutoff_radii[1] += 0.1
+        @test_throws ArgumentError site_flip_delta(
+            invalid_geometry, pair, 1)
 
         multi = AtomicLattice{2,SquareLattice}(
             lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
@@ -970,6 +974,34 @@ class FreeBirdMetadataSensitiveCalculator:
             Bool, atomic.ase_lattice.info.__contains__("adsorbate_info"))
     end
 
+
+    @testset "AtomicLattice calculator failures preserve the ASE cache" begin
+        lattice = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["H"], components=[1],
+            num_nearest_neighbors=0, type_of_sites=["ontop"])
+        namespace = FreeBird.EnergyEval.pydict()
+        FreeBird.EnergyEval.pyimport("builtins").exec("""
+class FreeBirdFaultCalculator:
+    def __init__(self, value): self.value = value
+    def get_potential_energy(self, atoms):
+        atoms.positions[:] += 1
+        if self.value == 'raise': raise RuntimeError('injected calculator failure')
+        return self.value
+""", namespace)
+        before = FreeBird.EnergyEval.pyconvert(
+            Matrix{Float64}, lattice.ase_lattice.get_positions())
+        for value in (NaN, Inf, -Inf, "raise")
+            calculator = PyMLPotential(FreeBird.AbstractPotentials.ASEcalculator(
+                namespace["FreeBirdFaultCalculator"](value)))
+            expected_error = value isa String ? FreeBird.EnergyEval.PyException : DomainError
+            @test_throws expected_error interacting_energy(lattice, calculator)
+            @test FreeBird.EnergyEval.pyconvert(
+                Matrix{Float64}, lattice.ase_lattice.get_positions()) == before
+            @test isnothing(FreeBird.AbstractWalkers._validate_atomic_ase_cache(lattice))
+        end
+    end
 
     @testset "ICETHamiltonian" begin
         # The mapping helpers are pure Julia; constructing ICETHamiltonian
@@ -1093,6 +1125,27 @@ class FreeBirdMetadataSensitiveCalculator:
                 FreeBird.EnergyEval._icet_geometry_signature(lat))
             @test interacting_energy(one_occupied, h_meV) == 0.008u"eV"
 
+            for value in (NaN, Inf, -Inf)
+                invalid_reference = ICETHamiltonian(
+                    calculator, num_sites(lat), value, collect(1:num_sites(lat)),
+                    0, 8, 1.0, "O", FreeBird.EnergyEval._icet_geometry_signature(lat))
+                @test_throws DomainError interacting_energy(empty, invalid_reference)
+            end
+            overflowing_energy = ICETHamiltonian(
+                calculator, num_sites(lat), 0.0, collect(1:num_sites(lat)),
+                0, 8, floatmax(Float64), "O",
+                FreeBird.EnergyEval._icet_geometry_signature(lat))
+            @test_throws DomainError interacting_energy(one_occupied, overflowing_energy)
+
+            invalid_map = collect(1:num_sites(lat))
+            invalid_map[2] = 1
+            h_invalid_map = ICETHamiltonian(
+                calculator, num_sites(lat), 0.0, invalid_map,
+                0, 8, 1.0, "O",
+                FreeBird.EnergyEval._icet_geometry_signature(lat))
+            @test_throws ArgumentError interacting_energy(
+                one_occupied, h_invalid_map)
+
             smaller = AtomicLattice{1,SquareLattice}(
                 lattice_atom="Pd", surface=:fcc100,
                 supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
@@ -1129,10 +1182,69 @@ class FreeBirdMetadataSensitiveCalculator:
             "no_such_cluster_expansion.ce", lat;
             energy_scale_to_eV=big"1e-10000")
 
-        # Construction propagates import and missing-file failures once its
-        # unit conversion has been supplied explicitly.
-        @test_throws FreeBird.EnergyEval.PyException ICETHamiltonian(
-            "no_such_cluster_expansion.ce", lat; energy_scale_to_eV=1.0)
+        namespace = FreeBird.EnergyEval.pydict()
+        FreeBird.EnergyEval.pyimport("builtins").exec("""
+import importlib.util
+icet_available = (importlib.util.find_spec("icet") is not None and
+                  importlib.util.find_spec("mchammer") is not None)
+""", namespace)
+        if FreeBird.EnergyEval.pyconvert(Bool, namespace["icet_available"])
+            @testset "ICET binary-model file constructor" begin
+                mktempdir() do directory
+                    namespace["model_path"] = joinpath(directory, "binary.ce")
+                    FreeBird.EnergyEval.pyimport("builtins").exec("""
+import numpy as np
+from ase import Atoms
+from icet import ClusterSpace, ClusterExpansion
+spacing = 3.947 / np.sqrt(2)
+primitive = Atoms("X", positions=[[spacing / 2, spacing / 2, 0]],
+                  cell=[spacing, spacing, 20.0], pbc=True)
+cluster_space = ClusterSpace(primitive, cutoffs=[1.01 * spacing],
+                             chemical_symbols=["X", "O"])
+expansion = ClusterExpansion(cluster_space,
+                            0.13 + 0.2 * np.arange(len(cluster_space)))
+expansion.write(model_path)
+reference = expansion.get_cluster_space_copy().primitive_structure.repeat((4, 4, 1))
+reference.set_atomic_numbers([0] * len(reference))
+empty_energy = expansion.predict(reference) * len(reference)
+""", namespace)
+                    model_path = FreeBird.EnergyEval.pyconvert(
+                        String, namespace["model_path"])
+                    h = ICETHamiltonian(model_path, lat; energy_scale_to_eV=1.0)
+                    @test h.n_sites == num_sites(lat)
+                    @test (h.empty_occupation, h.occupied_occupation) == (0, 8)
+                    @test_throws FreeBird.EnergyEval.PyException ICETHamiltonian(
+                        joinpath(directory, "missing.ce"), lat;
+                        energy_scale_to_eV=1.0)
+                    reference = namespace["reference"]
+                    empty_energy = FreeBird.EnergyEval.pyconvert(
+                        Float64, namespace["empty_energy"])
+                    for occupied in (Int[], [1], [1, 3, 4, 6], collect(1:num_sites(lat)))
+                        config = deepcopy(lat)
+                        fill!(config.components[1], false)
+                        config.components[1][occupied] .= true
+                        numbers = zeros(Int, num_sites(lat))
+                        numbers[h.julia_to_icet[occupied]] .= 8
+                        reference.set_atomic_numbers(numbers)
+                        expected = FreeBird.EnergyEval.pyconvert(
+                            Float64, namespace["expansion"].predict(reference)) *
+                            num_sites(lat) - empty_energy
+                        @test ustrip(u"eV", interacting_energy(config, h)) ≈
+                              expected atol=1e-11
+                    end
+                end
+            end
+        else
+            exception = try
+                ICETHamiltonian("no_such_cluster_expansion.ce", lat;
+                                 energy_scale_to_eV=1.0)
+                nothing
+            catch error
+                error
+            end
+            @test exception isa FreeBird.EnergyEval.PyException
+            @test occursin("ModuleNotFoundError", sprint(showerror, exception))
+        end
 
         # Optional integration gate for installations that provide ICET and a
         # compatible 4×4 Pd(100) binary cluster expansion.

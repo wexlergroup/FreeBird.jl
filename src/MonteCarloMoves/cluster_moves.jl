@@ -12,13 +12,13 @@ Because cluster growth does not depend on the occupancy field, the proposal is s
 P(cluster | config_A) = P(cluster | config_B). This means no Metropolis correction is needed;
 in nested sampling, one simply checks E_proposed < E_max.
 
-The parameter `p` controls the average cluster size: `p ≈ 0` gives single-site moves,
-`p → 1` gives lattice-spanning clusters.
+The parameter `p` controls the average cluster size: `p = 0` gives a seed-only
+cluster, while `p = 1` grows through every connected first-shell neighbor.
 
 # Arguments
 - `lattice`: A supported periodic `MLattice`, or an `AtomicLattice` whose
   adsorption-site set has a validated point-inversion map.
-- `p::Float64`: Growth probability for BFS cluster construction (0 < p < 1).
+- `p::Float64`: Growth probability for BFS cluster construction (`0 ≤ p ≤ 1`).
 - `record::Union{Nothing,Vector{Tuple{Int,Int}}}=nothing`: When a vector is
   supplied, every applied (site, reflected_site) pair is appended to it;
   re-applying the recorded pairs (each pair swap is an involution) reverts
@@ -77,6 +77,12 @@ function geometric_cluster_swap!(lattice::MLattice{C,SquareLattice}, p::Float64;
 end
 
 # --- Internal helpers (not exported) ---
+
+@inline function _validate_atomic_cluster_probability(p::Float64)
+    isfinite(p) && 0.0 <= p <= 1.0 || throw(ArgumentError(
+        "cluster growth probability p must be finite and satisfy 0 ≤ p ≤ 1; got $p"))
+    return nothing
+end
 
 """
     _apply_cluster_pairs!(lattice::MLattice{C,G}, pairs::Vector{Tuple{Int,Int}}) where {C,G}
@@ -145,6 +151,12 @@ is preserved (no reflection in the non-periodic z direction).
     return _grid_to_site(rx, ry, gz, Lx, Ly)
 end
 
+@inline _cluster_first_shell(lattice::MLattice, site::Int) =
+    lattice.neighbors[site][1]
+
+@inline _cluster_first_shell(lattice::AtomicLattice, site::Int) =
+    isempty(lattice.neighbors[site]) ? Int[] : lattice.neighbors[site][1]
+
 """
     _build_geometric_cluster(lattice, seed, reflect, p) -> Vector{Tuple{Int,Int}}
 
@@ -153,12 +165,6 @@ pairing each visited site with its image under the `reflect` closure (a
 self-inverse site-index map supplied by the geometry-specific caller).
 Returns a vector of (site, reflected_site) pairs.
 """
-@inline _cluster_first_shell(lattice::MLattice, site::Int) =
-    lattice.neighbors[site][1]
-
-@inline _cluster_first_shell(lattice::AtomicLattice, site::Int) =
-    isempty(lattice.neighbors[site]) ? Int[] : lattice.neighbors[site][1]
-
 function _build_geometric_cluster(lattice::AbstractLattice,
                                   seed::Int,
                                   reflect::F,
@@ -335,10 +341,10 @@ indices, and each site's layer is reflected alongside its in-plane
 position. The stacked site set is a Bravais lattice for any stacking
 offset, so the inversion is a symmetry of the whole site set and the
 first-shell cluster growth may cross layers freely. Offset stacks have a
-non-orthogonal supercell; the minimum-image neighbour path searches the
-nearby lattice translations and therefore handles that skew exactly.
-Use `image_multiplicity=true` only when a deliberately small periodic cell
-must count distinct images of the same site as separate bonds. At
+non-orthogonal supercell and must be built with `image_multiplicity=true`:
+the default minimum-image neighbour path takes the rounded image rather
+than the nearest one on a non-orthogonal supercell and can drop in-cutoff
+bonds (pre-existing neighbour-list behaviour, not changed here). At
 `supercell_dimensions[3] == 1` the layer term is identically zero, the
 pivot and seed draws are the same draws in the same order, and the
 integer arithmetic is the same, so single-layer trajectories are
@@ -423,10 +429,13 @@ end
 
 Perform a periodic point-inversion cluster move using a validated reflection
 map over `all_sites`. Every component mask is exchanged, so the
-move preserves each species count exactly.
+move preserves each species count exactly. The selected adsorption-site set
+must be closed under inversion about at least one of its own sites; otherwise
+the function throws an `ArgumentError`.
 """
 function geometric_cluster_swap!(lattice::AtomicLattice, p::Float64;
                                  record::Union{Nothing,Vector{Tuple{Int,Int}}}=nothing)
+    _validate_atomic_cluster_probability(p)
     n_sites = num_sites(lattice)
     pivot = rand(1:n_sites)
     reflection_row = AbstractWalkers._ensure_atomic_reflection_row!(lattice, pivot)

@@ -19,14 +19,8 @@ A cluster-expansion Hamiltonian evaluated by ICET's `ClusterExpansionCalculator`
 - `geometry_signature::NamedTuple`: surface, cell, boundary, site-family, and
   ordered-site identity of the lattice used to build the calculator mapping.
 
-# ICET is not a dependency of FreeBird
-
-`pyimport("icet")` happens inside the constructor below, never at module scope,
-so `using FreeBird` neither imports nor requires ICET. Only constructing an
-`ICETHamiltonian` does.
-
-ICET is a Python module and cannot activate a Julia package extension.
-Importing it inside the constructor keeps ICET optional when loading FreeBird.
+ICET is optional and imported only when constructing an `ICETHamiltonian`.
+Loading FreeBird does not require ICET.
 """
 struct ICETHamiltonian <: ClassicalHamiltonian
     calculator::Py
@@ -116,6 +110,10 @@ end
 Load a cluster expansion from `ce_path` and build a calculator for the supercell
 of `base_lattice`.
 
+Requires a one-species, in-plane-periodic fcc(100) adsorption lattice. The ICET
+primitive structure is repeated by `(nx, ny, 1)`; its in-plane cell and site
+count must match the adsorption lattice. Incompatible models are rejected.
+
 Requires ICET and mchammer to be importable by the Python interpreter PythonCall
 is using; the import happens here and nowhere else.
 
@@ -197,6 +195,8 @@ function ICETHamiltonian(ce_path::String, base_lattice::AtomicLattice;
     occ_empty = pylist(fill(empty_code, n_sites))
     E_clean = pyconvert(Float64, calc.calculate_total(occupations=occ_empty)) *
               energy_scale
+    isfinite(E_clean) || throw(DomainError(E_clean,
+        "the ICET model must have a finite empty-lattice energy in eV"))
 
     icet_pos = pyconvert(Matrix{Float64}, model.get_positions())[:, 1:2]
     icet_to_julia = build_icet_to_julia_map(base_lattice, icet_pos)
@@ -323,6 +323,9 @@ function interacting_energy(lattice::AtomicLattice, h::ICETHamiltonian)
     length(h.julia_to_icet) == h.n_sites || throw(DimensionMismatch(
         "ICETHamiltonian site map has $(length(h.julia_to_icet)) entries, " *
         "expected $(h.n_sites)"))
+    sort(h.julia_to_icet) == collect(1:h.n_sites) || throw(ArgumentError(
+        "ICETHamiltonian site map must be a permutation of 1:$(h.n_sites), " *
+        "got $(h.julia_to_icet)"))
     only(lattice.adsorbate_atoms) == h.adsorbate_atom || throw(ArgumentError(
         "ICETHamiltonian was built for adsorbate $(h.adsorbate_atom), but the " *
         "lattice uses $(only(lattice.adsorbate_atoms))"))
@@ -336,5 +339,8 @@ function interacting_energy(lattice::AtomicLattice, h::ICETHamiltonian)
     end
     raw_energy = pyconvert(Float64,
         h.calculator.calculate_total(occupations=pylist(occ)))
-    return (raw_energy * h.energy_scale_to_eV - h.E_clean) * u"eV"
+    energy = raw_energy * h.energy_scale_to_eV - h.E_clean
+    isfinite(energy) || throw(DomainError(energy,
+        "the ICET model must return a finite adsorption energy in eV"))
+    return energy * u"eV"
 end

@@ -96,15 +96,37 @@ function enumerate_lattices(init_lattice::AtomicLattice{C,G}) where {C,G}
         end
     end
     sort!(labels)
-    all_configs = unique_permutations(labels)
+    homogeneous = first(labels) == last(labels)
+    binary_subsets = C == 1 && !homogeneous
+    occupied_subsets = true
+    all_configs = if binary_subsets
+        number_occupied = count(init_lattice.components[1])
+        number_empty = total_sites - number_occupied
+        occupied_subsets = number_occupied <= number_empty
+        subsets = collect(combinations(1:total_sites,
+            min(number_occupied, number_empty)))
+        # Sorted label permutations visit occupied subsets in reverse order,
+        # but vacant subsets in forward order.
+        occupied_subsets && reverse!(subsets)
+        subsets
+    elseif homogeneous
+        [labels]
+    else
+        unique_permutations(labels)
+    end
     lattices = Vector{typeof(init_lattice)}(undef, length(all_configs))
     # Python-backed ASE objects must be copied serially: PythonCall object
     # allocation from multiple Julia threads can corrupt the interpreter.
     for index in eachindex(all_configs)
         lattice = deepcopy(init_lattice)
         config = all_configs[index]
-        for c in 1:C
-            lattice.components[c] .= config .== c
+        if binary_subsets
+            fill!(lattice.components[1], !occupied_subsets)
+            lattice.components[1][config] .= occupied_subsets
+        else
+            for c in 1:C
+                lattice.components[c] .= config .== c
+            end
         end
         lattice.ase_dirty = true
         lattices[index] = lattice
@@ -113,13 +135,13 @@ function enumerate_lattices(init_lattice::AtomicLattice{C,G}) where {C,G}
 end
 
 """
-    exact_enumeration(lattice::AbstractLattice, energy_model)
+    exact_enumeration(lattice::Union{MLattice,AtomicLattice}, energy_model)
 
 Enumerate all possible configurations of a lattice system and compute the energy of each configuration.
 
 # Arguments
-- `lattice::AbstractLattice`: The starting lattice system to enumerate. All
-  configurations with its component counts will be generated.
+- `lattice`: An `MLattice` or `AtomicLattice` to enumerate. All configurations
+  with its component counts will be generated.
 - `h`: The lattice energy model. `AtomicLattice` also accepts a
   `PyMLPotential`.
 

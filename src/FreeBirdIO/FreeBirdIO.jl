@@ -54,14 +54,16 @@ end
 """
     convert_system_to_walker(at::FlexibleSystem, resume::Bool)
 
-Converts a `FlexibleSystem` object to an `AtomWalker` object.
+Converts a `FlexibleSystem` to a walker, using its representation metadata.
 
 # Arguments
 - `at::FlexibleSystem`: The `FlexibleSystem` object to convert.
 - `resume::Bool`: Whether to resume from previous data.
 
 # Returns
-- `AtomWalker`: The converted `AtomWalker` object.
+- `AtomWalker` or `LatticeWalker`: The converted walker. AtomicLattice
+  metadata selects a `LatticeWalker`; ordinary atomic frames select an
+  `AtomWalker`.
 
 """
 function convert_system_to_walker(at::FlexibleSystem, resume::Bool)
@@ -84,6 +86,27 @@ _split_metadata(value::AbstractVector) = string.(value)
 _split_metadata(value::Tuple) = string.(value)
 _split_metadata(value) = isempty(string(value)) ? String[] : String.(split(string(value), ','))
 
+# A non-numeric prefix prevents extXYZ's fixed-decimal float formatting from
+# rounding the constructor scalars needed to reproduce the site fingerprint.
+_encode_atomic_geometry_scalar(value::Float64) = "f64=" * repr(value)
+_decode_atomic_geometry_scalar(value::Real) = Float64(value)
+function _decode_atomic_geometry_scalar(value::AbstractString)
+    startswith(value, "f64=") || throw(ArgumentError(
+        "AtomicLattice geometry scalars must be numeric or f64-prefixed text"))
+    return parse(Float64, value[5:end])
+end
+
+# ExtXYZ treats the standalone element symbol F as a Boolean token. Prefix
+# chemical-symbol metadata so every element is preserved as text.
+_encode_atomic_symbols(symbols) = "symbols=" * join(symbols, ',')
+_decode_atomic_symbols(value::Bool) = [value ? "T" : "F"]
+function _decode_atomic_symbols(value)
+    if value isa AbstractString && startswith(value, "symbols=")
+        return _split_metadata(value[9:end])
+    end
+    return _split_metadata(value)
+end
+
 function _atomic_lattice_geometry(name::AbstractString)
     name == "SquareLattice" && return SquareLattice
     name == "TriangularLattice" && return TriangularLattice
@@ -102,12 +125,26 @@ function _atomic_site_geometry_fingerprint(lattice::AtomicLattice)
         end
         return state
     end
+    function mix_coordinate(state::UInt64, coordinate::Real)
+        scaled = Float64(coordinate) * 1e10
+        if isfinite(scaled) && -0x1p63 <= scaled < 0x1p63
+            # Use fixed-point encoding for coordinates within the Int64 range.
+            return mix_word(state, reinterpret(UInt64, round(Int64, scaled)))
+        end
+        # A finite coordinate can overflow the fixed-point Int64 encoding.
+        # Mark that alternate representation explicitly before mixing its
+        # rounded floating-point bits to keep the checksum deterministic.
+        state = mix_word(state, UInt64(0x6f766572666c6f77)) # "overflow"
+        rounded = round(Float64(coordinate); digits=10)
+        rounded == 0.0 && (rounded = 0.0) # canonicalize signed zero
+        return mix_word(state, reinterpret(UInt64, rounded))
+    end
     state = mix_word(state, UInt64(length(lattice.all_sites)))
     for (x, y) in lattice.all_sites
         # Ten decimal places are far below the site's physical tolerance but
         # avoid rejecting a trajectory for harmless last-bit ASE drift.
-        state = mix_word(state, reinterpret(UInt64, round(Int64, x * 1e10)))
-        state = mix_word(state, reinterpret(UInt64, round(Int64, y * 1e10)))
+        state = mix_coordinate(state, x)
+        state = mix_coordinate(state, y)
     end
     # The non-numeric prefix forces ExtXYZ to preserve the checksum as text.
     return "fnv64=" * string(state; base=16, pad=16)
@@ -170,30 +207,39 @@ function convert_system_to_atomic_lattice_walker(at::FlexibleSystem, resume::Boo
         "unsupported AtomicLattice energy convention '$convention'; " *
         "expected 'bare_E_v1'"))
 
-    adsorbates = _split_metadata(data[:adsorbate_atoms])
+    adsorbates = _decode_atomic_symbols(data[:adsorbate_atoms])
     site_types = _split_metadata(data[:type_of_sites])
     dims = Tuple(parse.(Int, _split_metadata(data[:supercell_dimensions])))
     pbc = Tuple(Bool(parse(Int, x)) for x in _split_metadata(data[:lattice_periodicity]))
     length(dims) == 3 || throw(ArgumentError("supercell_dimensions must contain three integers"))
     length(pbc) == 3 || throw(ArgumentError("lattice_periodicity must contain three booleans"))
+    all(>(0), dims) || throw(ArgumentError(
+        "supercell_dimensions must contain positive integers"))
+    # Every supported elemental builder supplies nx*ny*nz substrate atoms.
+    # Reject impossible metadata before asking ASE to allocate that slab.
+    substrate_count = try
+        foldl(Base.Checked.checked_mul, dims; init=1)
+    catch error
+        error isa OverflowError || rethrow()
+        throw(ArgumentError("trajectory supercell_dimensions overflow the substrate count"))
+    end
+    substrate_count <= length(at) || throw(ArgumentError(
+        "trajectory dimensions require $substrate_count substrate atoms, " *
+        "but the stored frame contains only $(length(at)) atoms"))
 
     geometry = _atomic_lattice_geometry(string(data[:lattice_geometry]))
     surface = string(data[:ase_surface])
-    if surface in ("hcp0001", "hcp10m10") && !haskey(data, :lattice_constant_c)
-        throw(ArgumentError(
-            "AtomicLattice trajectory is missing metadata: lattice_constant_c"))
-    end
     raw_multiplicity = data[:image_multiplicity]
     image_multiplicity = raw_multiplicity isa Bool ? raw_multiplicity :
         Bool(parse(Int, string(raw_multiplicity)))
     lattice_type = AtomicLattice{length(adsorbates),geometry}
     lattice_constant_c = haskey(data, :lattice_constant_c) ?
-        Float64(data[:lattice_constant_c]) : nothing
+        _decode_atomic_geometry_scalar(data[:lattice_constant_c]) : nothing
     lattice = lattice_type(
-        lattice_atom=string(data[:lattice_atom]),
+        lattice_atom=only(_decode_atomic_symbols(data[:lattice_atom])),
         surface=surface,
         supercell_dimensions=dims,
-        lattice_constant=Float64(data[:lattice_constant]),
+        lattice_constant=_decode_atomic_geometry_scalar(data[:lattice_constant]),
         lattice_constant_c=lattice_constant_c,
         periodicity=pbc,
         adsorbate_atoms=adsorbates,
@@ -201,7 +247,7 @@ function convert_system_to_atomic_lattice_walker(at::FlexibleSystem, resume::Boo
         num_nearest_neighbors=Int(data[:num_nearest_neighbors]),
         image_multiplicity=image_multiplicity,
         type_of_sites=site_types,
-        adsorbate_height=Float64(data[:adsorbate_height]))
+        adsorbate_height=_decode_atomic_geometry_scalar(data[:adsorbate_height]))
     expected = string(data[:site_geometry_fingerprint])
     actual = _atomic_site_geometry_fingerprint(lattice)
     expected == actual || throw(ArgumentError(
@@ -399,25 +445,59 @@ function convert_walker_to_system(at::LatticeWalker)
         energy_convention="bare_E_v1",
         freebird_walker="AtomicLattice",
         lattice_geometry=geometry,
-        lattice_atom=lattice.lattice_atom,
+        lattice_atom=_encode_atomic_symbols((lattice.lattice_atom,)),
         ase_surface=string(lattice.surface),
-        adsorbate_atoms=join(lattice.adsorbate_atoms, ','),
+        adsorbate_atoms=_encode_atomic_symbols(lattice.adsorbate_atoms),
         supercell_dimensions=join(lattice.supercell_dimensions, ','),
-        lattice_constant=lattice.lattice_constant,
+        lattice_constant=_encode_atomic_geometry_scalar(lattice.lattice_constant),
         lattice_periodicity=join(Int.(lattice.periodicity), ','),
         num_nearest_neighbors=lattice.num_nearest_neighbors,
         image_multiplicity=Int(lattice.image_multiplicity),
         type_of_sites=join(lattice.type_of_sites, ','),
-        adsorbate_height=lattice.adsorbate_height,
+        adsorbate_height=_encode_atomic_geometry_scalar(lattice.adsorbate_height),
         site_geometry_fingerprint=_atomic_site_geometry_fingerprint(lattice),
         # The non-numeric prefix prevents ExtXYZ from parsing a long bit mask
         # as a fixed-width integer (and overflowing for realistic lattices).
         component_occupations=join(
             ("bits=" * join(Int.(component)) for component in lattice.components), ';'))
     if lattice.lattice_constant_c !== nothing
-        metadata = merge(metadata, (lattice_constant_c=lattice.lattice_constant_c,))
+        metadata = merge(metadata, (lattice_constant_c=
+            _encode_atomic_geometry_scalar(lattice.lattice_constant_c),))
     end
     return AbstractSystem(config; metadata...)
+end
+
+"""Identify the walker representation already stored in a trajectory file."""
+function _trajectory_storage_kind(filename::String)
+    (!isfile(filename) || filesize(filename) == 0) && return nothing
+    return open(filename, "r") do io
+        first_line = strip(readline(io))
+        if tryparse(Int, first_line) !== nothing
+            eof(io) && return :unknown
+            comment = readline(io)
+            occursin(r"(?:^|\s)[\"']?(?:atomic_lattice_schema|freebird_walker)[\"']?\s*=", comment) ||
+                return :unknown
+            # Parse the frame so quoted values and whitespace around '='
+            # follow the same rules as the trajectory reader.
+            frames = ExtXYZ.read_frames(filename, 1:1)
+            isempty(frames) && return :unknown
+            metadata = frames[1]["info"]
+            atomic = haskey(metadata, "atomic_lattice_schema") ||
+                     get(metadata, "freebird_walker", "") == "AtomicLattice"
+            return atomic ?
+                   :atomic_lattice_extxyz : :atom_extxyz
+        end
+        return :unknown
+    end
+end
+
+function _require_append_storage(filename::String, expected::Symbol)
+    existing = _trajectory_storage_kind(filename)
+    expected !== :atomic_lattice_extxyz && existing !== :atomic_lattice_extxyz &&
+        return nothing
+    (existing === nothing || existing === expected) && return nothing
+    throw(ArgumentError(
+        "cannot append $expected data to '$filename', which contains $existing data"))
 end
 
 """
@@ -426,6 +506,7 @@ end
 Append an `AtomWalker` object to a file.
 """
 function append_walker(filename::String, at::AtomWalker{C}) where C
+    _require_append_storage(filename, :atom_extxyz)
     sys = convert_walker_to_system(at)
     write_frame(filename, ExtXYZ.write_dict(Atoms(sys)), append=true)
 end
@@ -515,7 +596,11 @@ Write a collection of `LatticeWalker` objects to a file.
 
 """
 function write_walkers(filename::String, ats::Vector{LatticeWalker{C}}; append=false) where C
+    # An empty append cannot alter the representation already on disk.
+    append && isempty(ats) && isfile(filename) && filesize(filename) > 0 &&
+        return nothing
     if !isempty(ats) && all(at -> at.configuration isa AtomicLattice, ats)
+        append && _require_append_storage(filename, :atomic_lattice_extxyz)
         systems = convert_walker_to_system.(ats)
         if append
             for system in systems
@@ -528,6 +613,7 @@ function write_walkers(filename::String, ats::Vector{LatticeWalker{C}}; append=f
     elseif any(at -> at.configuration isa AtomicLattice, ats)
         throw(ArgumentError("cannot serialize mixed AtomicLattice and non-atomic lattice walkers"))
     end
+    append && _require_append_storage(filename, :lattice_csv)
     occupancies = [at.configuration.components for at in ats]
     energies = [at.energy.val for at in ats]
     iter = [at.iter for at in ats]

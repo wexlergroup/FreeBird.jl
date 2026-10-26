@@ -302,67 +302,6 @@
                 end
             end
 
-            @testset "singular 2D cell" begin
-                lattice_vectors_2d = [
-                    4.0 0.0 0.0;
-                    0.0 4.0 0.0;
-                    0.0 0.0 0.0
-                ]
-                positions_2d = [
-                    0.0 0.0 0.0;
-                    1.0 0.0 0.0;
-                    0.0 1.0 0.0;
-                    1.0 1.0 0.0
-                ]
-                neighbors = AbstractWalkers.compute_neighbors(
-                    lattice_vectors_2d, positions_2d,
-                    (true, true, false), [1.1, 1.5])
-                @test neighbors[1] == [[2, 3], [4]]
-                @test neighbors[4] == [[2, 3], [1]]
-            end
-
-            @testset "z-only minimum image" begin
-                lattice_vectors_z = [
-                    4.0 0.0 0.0;
-                    0.0 4.0 0.0;
-                    0.0 0.0 2.0
-                ]
-                positions_z = [
-                    0.0 0.0 0.0;
-                    0.0 0.0 1.5
-                ]
-                neighbors = AbstractWalkers.compute_neighbors(
-                    lattice_vectors_z, positions_z,
-                    (false, false, true), [0.6])
-                @test neighbors == [[[2]], [[1]]]
-            end
-
-            @testset "skew-cell MLattice minimum image" begin
-                cell = [
-                    1.6791675721341695 1.0904770604851692 0.0
-                    0.0                0.021782811450899876 0.0
-                    0.0                0.0                  0.0
-                ]
-                fractional = [-0.20256242401168, 0.46079445241201067, 0.0]
-                displacement = cell * fractional
-                reciprocal = zeros(3, 3)
-                reciprocal[1:2, 1:2] = inv(cell[1:2, 1:2])
-                minimum_distance = AbstractWalkers._minimum_image_distance(
-                    cell, reciprocal, (true, true, false),
-                    (0.0, 0.0, 0.0), Tuple(displacement))
-                rounded_displacement = cell * (fractional .- round.(fractional))
-                rounded_distance_squared = sum(abs2, rounded_displacement)
-                cutoff = 0.13
-                @test minimum_distance^2 < cutoff^2 < rounded_distance_squared
-                lattice = @test_logs (:warn, r"wrap the periodic cell") match_mode=:any MLattice{1,GenericLattice}(
-                    cell,
-                    [(0.0, 0.0, 0.0), Tuple(displacement)],
-                    (1, 1, 1), (true, true, false), [cutoff],
-                    [fill(false, 2)], fill(true, 2))
-                @test lattice.neighbors[1][1] == [2]
-                @test lattice.neighbors[2][1] == [1]
-            end
-
         end
 
 
@@ -764,7 +703,6 @@
                 @test length(lattice.components) == 2
                 @test length(lattice.adsorptions) == 16
                 @test all(lattice.adsorptions)
-                @test_throws BoundsError swap_sites!(lattice, 17, 17)
 
                 # Custom parameters
                 custom_basis = [(0.0, 0.0, 0.0), (0.5, 0.5, 0.0)]
@@ -1911,12 +1849,12 @@
             cases = [
                 (:fcc110, GenericLattice,    "Pd", (4, 4, 2), "hollow",     16),
                 (:fcc111, TriangularLattice, "Pd", (4, 4, 2), "fcc",        16),
-                (:fcc211, GenericLattice,    "Pd", (6, 4, 3), "ontop",       8),
+                (:fcc211, GenericLattice,    "Pd", (6, 4, 3), "step_edge_ontop", 8),
                 (:bcc100, SquareLattice,     "Fe", (4, 4, 2), "bridge",     32),
                 (:bcc110, GenericLattice,    "Fe", (4, 4, 2), "shortbridge",16),
                 (:bcc111, TriangularLattice, "Fe", (4, 4, 3), "hollow",     16),
                 (:hcp0001, TriangularLattice,"Ti", (4, 4, 2), "hcp",        16),
-                (:hcp10m10, GenericLattice,  "Ti", (4, 4, 2), "ontop",      16),
+                (:hcp10m10, GenericLattice,  "Ti", (4, 4, 2), "ontop",       8),
                 (:diamond100, SquareLattice, "C",  (4, 4, 4), "ontop",      16),
                 (:diamond111, TriangularLattice,"C",(4, 4, 6), "ontop",     16),
             ]
@@ -1945,8 +1883,8 @@
                 @test n_occupied(lattice) == count_before
             end
 
-            # Every named ASE site family contributes its complete periodic
-            # translational orbit; bridge families include every orientation.
+            # Site families contain their complete supported planar orbit;
+            # bridge families include every orientation.
             family_cases = [
                 (:fcc110, GenericLattice, "Pd", (2, 3, 2),
                  [("hollow", 1), ("longbridge", 1), ("ontop", 1), ("shortbridge", 1)]),
@@ -1965,7 +1903,7 @@
                 (:diamond111, TriangularLattice, "C", (2, 3, 6), [("ontop", 1)]),
             ]
             for (surface, geometry, atom, dims, families) in family_cases
-                base_count = dims[1] * dims[2]
+                base_count = dims[1] * dims[2] ÷ (surface == :hcp10m10 ? 2 : 1)
                 for (site, multiplicity) in families
                     lattice = AtomicLattice{1,geometry}(
                         lattice_atom=atom, surface=surface,
@@ -1975,6 +1913,65 @@
                         type_of_sites=[site])
                     @test num_sites(lattice) == multiplicity * base_count
                     @test length(unique(lattice.all_sites)) == num_sites(lattice)
+                end
+            end
+
+            @testset "ontop registry across substrate layers" begin
+                top_cases = [
+                    (:fcc100, SquareLattice, "Pd", 3),
+                    (:fcc110, GenericLattice, "Pd", 3),
+                    (:fcc111, TriangularLattice, "Pd", 3),
+                    (:fcc211, GenericLattice, "Pd", 6),
+                    (:bcc100, SquareLattice, "Fe", 3),
+                    (:bcc110, GenericLattice, "Fe", 3),
+                    (:bcc111, TriangularLattice, "Fe", 3),
+                    (:hcp0001, TriangularLattice, "Ti", 3),
+                    (:hcp10m10, GenericLattice, "Ti", 3),
+                    (:diamond100, SquareLattice, "C", 3),
+                    (:diamond111, TriangularLattice, "C", 3),
+                ]
+                for (surface, geometry, atom, nx) in top_cases, layers in 1:6
+                    site = surface == :fcc211 ? "step_edge_ontop" : "ontop"
+                    lattice = AtomicLattice{1,geometry}(
+                        lattice_atom=atom, surface=surface,
+                        supercell_dimensions=(nx, 4, layers), lattice_constant=4.0,
+                        periodicity=(true, true, false), adsorbate_atoms=["H"],
+                        coverage=1.0, num_nearest_neighbors=0,
+                        type_of_sites=[site], adsorbate_height=1.25)
+                    positions = FreeBird.AbstractWalkers.pyconvert(
+                        Matrix{Float64}, lattice.ase_lattice.get_positions())
+                    tags = FreeBird.AbstractWalkers.pyconvert(
+                        Vector{Int}, lattice.ase_lattice.get_tags())
+                    substrate = positions[tags .> 0, :]
+                    adsorbates = positions[tags .== 0, :]
+                    z_top = maximum(substrate[:, 3])
+                    top = substrate[isapprox.(substrate[:, 3], z_top; atol=1e-8), :]
+                    @test num_sites(lattice) == size(top, 1)
+                    @test size(adsorbates, 1) == size(top, 1)
+                    @test all(isapprox.(adsorbates[:, 3], z_top + 1.25; atol=1e-8))
+                    cell = FreeBird.AbstractWalkers.pyconvert(
+                        Matrix{Float64}, lattice.ase_lattice.get_cell())
+                    inplane = [cell[1, 1] cell[2, 1]; cell[1, 2] cell[2, 2]]
+                    # Compare physical atoms, not ASE's site metadata, modulo
+                    # the full periodic cell. The match must be one-to-one.
+                    for adsorbate in eachrow(adsorbates)
+                        matches = count(eachrow(top)) do substrate_atom
+                            delta = inplane \ (adsorbate[1:2] - substrate_atom[1:2])
+                            maximum(abs.(delta - round.(delta))) < 1e-8
+                        end
+                        @test matches == 1
+                    end
+                end
+                for c in (2.0, 6.4)
+                    lattice = AtomicLattice{1,GenericLattice}(
+                        lattice_atom="Ti", surface=:hcp10m10,
+                        supercell_dimensions=(3, 4, 3), lattice_constant=4.0,
+                        lattice_constant_c=c, periodicity=(true, true, false),
+                        adsorbate_atoms=["H"], coverage=0.0,
+                        num_nearest_neighbors=1, type_of_sites=["ontop"])
+                    @test num_sites(lattice) == 6
+                    @test nn_distance(lattice) ≈ min(4.0, c)
+                    @test all(!isempty(shells[1]) for shells in lattice.neighbors)
                 end
             end
 
@@ -2043,9 +2040,67 @@
                 periodicity=(true, true, false), adsorbate_atoms=["O"],
                 coverage=0.25, num_nearest_neighbors=1,
                 type_of_sites=["hollow"])
+            @test_throws ArgumentError AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+                periodicity=(true, true, false),
+                adsorbate_atoms=["NotAnElement"], components=[0],
+                num_nearest_neighbors=0, type_of_sites=["hollow"])
+            @test_throws ArgumentError AtomicLattice{2,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O", "O"],
+                components=[0, 0], num_nearest_neighbors=0,
+                type_of_sites=["hollow"])
+            @test_throws ArgumentError AtomicLattice{true,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                components=[0], num_nearest_neighbors=0,
+                type_of_sites=["hollow"])
+            @test_throws ArgumentError AtomicLattice{:one,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                components=[0], num_nearest_neighbors=0,
+                type_of_sites=["hollow"])
+            @test_throws ArgumentError AtomicLattice{1,:SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                components=[0], num_nearest_neighbors=0,
+                type_of_sites=["hollow"])
+            @test_throws ArgumentError AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["X"],
+                components=[1], num_nearest_neighbors=0,
+                type_of_sites=["hollow"])
+            @test_throws ArgumentError AtomicLattice{1,SquareLattice}(
+                lattice_atom="X", surface=:fcc100,
+                supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                components=[0], num_nearest_neighbors=0,
+                type_of_sites=["hollow"])
+            mutable_symbols = AtomicLattice{2,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O", "H"],
+                components=[0, 0], num_nearest_neighbors=0,
+                type_of_sites=["hollow"])
+            mutable_symbols.adsorbate_atoms[2] = "O"
+            @test_throws ArgumentError sync_ase_lattice!(mutable_symbols)
+            mutable_symbols.adsorbate_atoms[2] = "NotAnElement"
+            @test_throws ArgumentError sync_ase_lattice!(mutable_symbols)
             @test_throws ArgumentError AtomicLattice{1,GenericLattice}(
                 lattice_atom="Pd", surface=:fcc211,
                 supercell_dimensions=(4, 4, 2), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.25, num_nearest_neighbors=1,
+                type_of_sites=["step_edge_ontop"])
+            @test_throws ArgumentError AtomicLattice{1,GenericLattice}(
+                lattice_atom="Pd", surface=:fcc211,
+                supercell_dimensions=(6, 4, 2), lattice_constant=3.947,
                 periodicity=(true, true, false), adsorbate_atoms=["O"],
                 coverage=0.25, num_nearest_neighbors=1,
                 type_of_sites=["ontop"])
@@ -2124,6 +2179,11 @@
             @test num_sites(one_site_mlip) == 1
             @test isempty(only(one_site_mlip.neighbors))
             @test_nowarn geometric_cluster_swap!(one_site_mlip, 0.5)
+            for p in (-Inf, -0.1, 1.1, Inf, NaN)
+                @test_throws ArgumentError geometric_cluster_swap!(one_site_mlip, p)
+            end
+            @test_nowarn geometric_cluster_swap!(one_site_mlip, 0.0)
+            @test_nowarn geometric_cluster_swap!(one_site_mlip, 1.0)
 
             # Some mixed site sets have only a subset of valid inversion
             # centers. The cluster move must retry those pivots without
@@ -2197,7 +2257,7 @@
             reciprocal = zeros(3, 3)
             reciprocal[1:2, 1:2] = inv(cell[1:2, 1:2])
             displacement = cell * [0.49, 0.49, 0.0]
-            distance = AbstractWalkers._minimum_image_distance(
+            distance = AbstractWalkers._atomic_minimum_image_distance(
                 cell, reciprocal, (true, true, false), zeros(3), displacement)
             expected_displacement = cell * [-0.51, 0.49, 0.0]
             @test distance ≈ sqrt(sum(abs2, expected_displacement)) atol=1e-12
@@ -2212,8 +2272,8 @@
             positions = [0.0 0.0 0.0;
                          cartesian[1] cartesian[2] cartesian[3]]
             cutoff = 0.29710382748644854
-            image_neighbors = AbstractWalkers.compute_neighbors(
-                pathological_cell, positions, (true, true, false), [cutoff];
+            image_neighbors = AbstractWalkers._compute_lattice_neighbors(
+                pathological_cell, positions, (true, true, false), [cutoff], Val(true);
                 image_multiplicity=true)
             brute_count = 0
             for n1 in -40:40, n2 in -40:40

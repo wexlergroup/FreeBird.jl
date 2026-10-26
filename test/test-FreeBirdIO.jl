@@ -263,6 +263,74 @@ end
         @test fresh.iter == 0
         @test fresh.configuration.components == lattice.components
 
+        numeric_metadata = deepcopy(frames[1])
+        numeric_metadata.data[:lattice_constant] = lattice.lattice_constant
+        numeric_metadata.data[:adsorbate_height] = lattice.adsorbate_height
+        numeric_restored = convert_system_to_walker(numeric_metadata, true)
+        @test numeric_restored.configuration.all_sites == lattice.all_sites
+        @test numeric_restored.configuration.components == lattice.components
+
+        @testset "impossible frame dimensions fail before slab allocation" begin
+            namespace = FreeBird.EnergyEval.pydict()
+            namespace["build"] = FreeBird.AbstractWalkers.ase.build
+            FreeBird.EnergyEval.pyimport("builtins").exec("""
+original_builder = build.fcc100
+builder_called = False
+def guarded_builder(*args, **kwargs):
+    global builder_called
+    builder_called = True
+    raise RuntimeError('invalid frame reached slab allocation')
+build.fcc100 = guarded_builder
+""", namespace)
+            try
+                for dimensions in ("1000000,1000000,1000000",
+                                   "$(typemax(Int)),2,1", "0,2,1", "-1,2,1")
+                    corrupted = deepcopy(frames[1])
+                    corrupted.data[:supercell_dimensions] = dimensions
+                    @test_throws ArgumentError convert_system_to_walker(corrupted, true)
+                    @test_throws ArgumentError convert_system_to_walker(corrupted, false)
+                end
+                @test !FreeBird.EnergyEval.pyconvert(Bool, namespace["builder_called"])
+            finally
+                FreeBird.AbstractWalkers.ase.build.fcc100 = namespace["original_builder"]
+            end
+        end
+
+        @testset "chemical symbols retain their text identity" begin
+            for (substrate, species) in (("Pd", ["F"]), ("F", ["H"]),
+                                         ("F", ["F"]), ("Pd", ["F", "H"]),
+                                         ("Pd", ["H", "F"]))
+                configuration = AtomicLattice{length(species),SquareLattice}(
+                    lattice_atom=substrate, supercell_dimensions=(2, 2, 1),
+                    lattice_constant=3.947, periodicity=(true, true, false),
+                    adsorbate_atoms=species, components=fill(1, length(species)),
+                    num_nearest_neighbors=0, type_of_sites=["hollow"])
+                mktempdir() do directory
+                    path = joinpath(directory, "symbols.extxyz")
+                    original = LatticeWalker(configuration)
+                    write_single_walker(path, original)
+                    write_single_walker(path, original, true)
+                    for restored in read_walkers(path)
+                        @test restored.configuration.lattice_atom == substrate
+                        @test restored.configuration.adsorbate_atoms == species
+                        @test restored.configuration.components == configuration.components
+                    end
+                    frame = first(read_configs(path))
+                    @test startswith(frame.data[:lattice_atom], "symbols=")
+                    @test startswith(frame.data[:adsorbate_atoms], "symbols=")
+                    # Numeric/Boolean inference in unprefixed chemical fields
+                    # must not lose fluorine's chemical identity.
+                    frame.data[:lattice_atom] = substrate == "F" ? false : substrate
+                    frame.data[:adsorbate_atoms] = species == ["F"] ?
+                        false : join(species, ',')
+                    decoded = convert_system_to_walker(frame, true).configuration
+                    @test decoded.lattice_atom == substrate
+                    @test decoded.adsorbate_atoms == species
+                    @test decoded.components == configuration.components
+                end
+            end
+        end
+
         raw_frame = read(filename, String)
         bad_schema = "atomic_lattice_bad_schema.extxyz"
         write(bad_schema, replace(raw_frame,
@@ -305,6 +373,88 @@ end
         write_single_walker(filename, walker, true)
         @test length(read_walkers(filename)) == 2
         rm(filename, force=true)
+
+        mlattice_lattice = MLattice{1,SquareLattice}(
+            supercell_dimensions=(2, 2, 1), cutoff_radii=[1.1])
+        mlattice_walker = LatticeWalker(mlattice_lattice)
+        quoted_filename = "quoted_mlattice_trajectory.csv"
+        quoted_rows = DataFrame(iter=[0], energy=[0.0],
+            configuration=[mlattice_lattice.components])
+        FreeBird.FreeBirdIO.CSV.write(
+            quoted_filename, quoted_rows; quotestrings=true)
+        @test startswith(readline(quoted_filename), "\"iter\",\"energy\"")
+        write_single_walker(quoted_filename, mlattice_walker, true)
+        @test length(FreeBird.FreeBirdIO.CSV.File(quoted_filename)) == 2
+        quoted_contents = read(quoted_filename, String)
+        write_walkers(quoted_filename, LatticeWalker{1}[]; append=true)
+        @test read(quoted_filename, String) == quoted_contents
+        rm(quoted_filename, force=true)
+
+        mixed_filename = "mixed_lattice_trajectory.extxyz"
+        write_walkers(mixed_filename, [mlattice_walker])
+        original_contents = read(mixed_filename, String)
+        @test_throws ArgumentError write_single_walker(
+            mixed_filename, walker, true)
+        @test read(mixed_filename, String) == original_contents
+        rm(mixed_filename, force=true)
+
+        write_walkers(mixed_filename, [walker])
+        atomic_contents = read(mixed_filename, String)
+        write_walkers(mixed_filename, LatticeWalker{1}[]; append=true)
+        @test read(mixed_filename, String) == atomic_contents
+        @test_throws ArgumentError write_single_walker(
+            mixed_filename, mlattice_walker, true)
+        atom_walker = AtomWalker(
+            FreeBirdIO.generate_random_starting_config(10.0, 1))
+        @test_throws ArgumentError write_single_walker(
+            mixed_filename, atom_walker, true)
+        @test read(mixed_filename, String) == atomic_contents
+        rm(mixed_filename, force=true)
+
+        @testset "AtomicLattice detection leaves ordinary appends unchanged" begin
+            mktempdir() do directory
+                comments = ("This is an ordinary XYZ comment",
+                            "A plain XYZ comment: a=b=c",
+                            "A plain XYZ comment: a=\"unfinished",
+                            "note=\"text atomic_lattice_schema=1\"",
+                            "freebird_walker=AtomWalker")
+                for comment in comments, ordinary in (atom_walker, mlattice_walker)
+                    path = joinpath(directory, "ordinary.xyz")
+                    contents = "1\n$comment\nH 0 0 0\n"
+                    write(path, contents)
+                    @test FreeBird.FreeBirdIO._trajectory_storage_kind(path) !==
+                          :atomic_lattice_extxyz
+                    write_single_walker(path, ordinary, true)
+                    appended = read(path, String)
+                    @test startswith(appended, contents)
+                    @test sizeof(appended) > sizeof(contents)
+                end
+            end
+        end
+
+        for marker in ("atomic_lattice_schema = 1",
+                       "atomic_lattice_schema =1")
+            spaced_contents = replace(atomic_contents,
+                "atomic_lattice_schema=1" => marker)
+            write(mixed_filename, spaced_contents)
+            @test read_single_walker(mixed_filename) isa LatticeWalker{1}
+            @test_throws ArgumentError write_single_walker(
+                mixed_filename, atom_walker, true)
+            @test_throws ArgumentError write_single_walker(
+                mixed_filename, mlattice_walker, true)
+            @test read(mixed_filename, String) == spaced_contents
+            write_single_walker(mixed_filename, walker, true)
+            @test length(read_walkers(mixed_filename)) == 2
+            @test all(w -> w isa LatticeWalker{1}, read_walkers(mixed_filename))
+            rm(mixed_filename, force=true)
+        end
+
+        write_single_walker(mixed_filename, atom_walker)
+        atom_contents = read(mixed_filename, String)
+        @test_throws ArgumentError write_single_walker(
+            mixed_filename, walker, true)
+        @test read(mixed_filename, String) == atom_contents
+        rm(mixed_filename, force=true)
 
         multi = AtomicLattice{2,SquareLattice}(
             lattice_atom="Pd",
@@ -366,5 +516,91 @@ end
         @test hcp_restored.configuration.lattice_constant_c == 4.8
         @test isempty(hcp_restored.configuration.cutoff_radii)
         rm(hcp_filename, force=true)
+
+        hcp_default_c = AtomicLattice{1,TriangularLattice}(
+            lattice_atom="Ti", surface=:hcp0001,
+            supercell_dimensions=(2, 2, 2), lattice_constant=2.95,
+            periodicity=(true, true, false), adsorbate_atoms=["H"],
+            components=[1], num_nearest_neighbors=0,
+            type_of_sites=["hcp"])
+        hcp_default_c_filename = "atomic_lattice_hcp_default_c.extxyz"
+        write_single_walker(
+            hcp_default_c_filename, LatticeWalker(hcp_default_c))
+        hcp_default_c_restored = read_single_walker(hcp_default_c_filename)
+        @test hcp_default_c_restored.configuration.surface == :hcp0001
+        @test hcp_default_c_restored.configuration.lattice_constant_c === nothing
+        @test hcp_default_c_restored.configuration.components ==
+              hcp_default_c.components
+        rm(hcp_default_c_filename, force=true)
+
+        for (surface, geometry, atom, a, c, height) in (
+                (:fcc100, SquareLattice, "Pd", 3.947123456789123,
+                 nothing, 1.123456789123),
+                (:fcc100, SquareLattice, "Pd", 10000.123456789,
+                 nothing, 1.0),
+                (:hcp10m10, GenericLattice, "Ti", 2.95123456789123,
+                 4.80123456789123, 1.123456789123))
+            lattice = AtomicLattice{1,geometry}(
+                lattice_atom=atom, surface=surface,
+                supercell_dimensions=(2, 4, 3), lattice_constant=a,
+                lattice_constant_c=c, periodicity=(true, true, false),
+                adsorbate_atoms=["H"], components=[1],
+                num_nearest_neighbors=0, type_of_sites=["ontop"],
+                adsorbate_height=height)
+            mktempdir() do directory
+                filename = joinpath(directory, "precision.extxyz")
+                walker = LatticeWalker(lattice)
+                write_single_walker(filename, walker)
+                for append in (false, true)
+                    append && write_single_walker(filename, walker, true)
+                    restored = last(read_walkers(filename)).configuration
+                    @test restored.lattice_constant == a
+                    @test restored.lattice_constant_c == c
+                    @test restored.adsorbate_height == height
+                    @test restored.all_sites == lattice.all_sites
+                    @test restored.components == lattice.components
+                end
+            end
+        end
+
+        for (surface, geometry, atom, expected_sites) in (
+                (:diamond100, SquareLattice, "C", 12),
+                (:hcp10m10, GenericLattice, "Ti", 6))
+            lattice = AtomicLattice{1,geometry}(
+                lattice_atom=atom, surface=surface,
+                supercell_dimensions=(3, 4, 3), lattice_constant=4.0,
+                periodicity=(true, true, false), adsorbate_atoms=["H"],
+                components=[2], num_nearest_neighbors=1,
+                type_of_sites=["ontop"])
+            mktempdir() do directory
+                filename = joinpath(directory, "ontop.extxyz")
+                walker = LatticeWalker(lattice; energy=-0.25u"eV", iter=3)
+                write_single_walker(filename, walker)
+                restored = read_single_walker(filename)
+                @test num_sites(restored.configuration) == expected_sites
+                @test restored.configuration.all_sites == lattice.all_sites
+                @test restored.configuration.components == lattice.components
+                @test restored.configuration.neighbors == lattice.neighbors
+                @test restored.energy == walker.energy
+                @test restored.iter == walker.iter
+            end
+        end
+
+        large_cell = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", surface=:fcc100,
+            supercell_dimensions=(2, 2, 1), lattice_constant=1e9,
+            periodicity=(true, true, false), adsorbate_atoms=["O"],
+            components=[1], num_nearest_neighbors=0,
+            type_of_sites=["hollow"])
+        large_cell_filename = "atomic_lattice_large_cell.extxyz"
+        large_cell_walker = LatticeWalker(
+            large_cell; energy=-0.25u"eV", iter=4)
+        write_single_walker(large_cell_filename, large_cell_walker)
+        large_cell_restored = read_single_walker(large_cell_filename)
+        @test large_cell_restored.configuration.components == large_cell.components
+        @test large_cell_restored.configuration.all_sites == large_cell.all_sites
+        @test large_cell_restored.energy == large_cell_walker.energy
+        @test large_cell_restored.iter == large_cell_walker.iter
+        rm(large_cell_filename, force=true)
     end
 end

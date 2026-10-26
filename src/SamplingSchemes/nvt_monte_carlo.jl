@@ -47,6 +47,11 @@ function _validate_atomic_nvt_inputs(temperature::Float64,
         "num_steps must be non-negative, got $num_steps"))
     isfinite(kb) && kb > 0.0 || throw(ArgumentError(
         "kb must be finite and positive, got $kb"))
+    thermal_energy = kb * temperature
+    isfinite(thermal_energy) && thermal_energy > 0.0 &&
+        isfinite(1.0 / thermal_energy) || throw(ArgumentError(
+            "kb * temperature and its reciprocal must remain finite and " *
+            "positive in Float64"))
     return nothing
 end
 
@@ -54,12 +59,13 @@ function _validate_atomic_nvt_parameters(parameters::MetropolisMCParameters,
                                          kb::Float64)
     parameters.equilibrium_steps >= 0 || throw(ArgumentError(
         "equilibrium_steps must be non-negative"))
-    parameters.sampling_steps > 0 || throw(ArgumentError(
-        "sampling_steps must be positive"))
-    all(temp -> isfinite(temp) && temp > 0.0, parameters.temperatures) ||
-        throw(ArgumentError("temperatures must be finite and positive"))
+    parameters.sampling_steps >= 2 || throw(ArgumentError(
+        "sampling_steps must be at least 2 to estimate an energy variance"))
     isfinite(kb) && kb > 0.0 || throw(ArgumentError(
         "kb must be finite and positive, got $kb"))
+    for temperature in parameters.temperatures
+        _validate_atomic_nvt_inputs(temperature, 0, kb)
+    end
     return nothing
 end
 
@@ -146,6 +152,25 @@ function nvt_monte_carlo(
     end
 
     return energies, configurations, accepted_steps
+end
+
+"""Validated classical NVT entry point for an `AtomicLattice`."""
+function nvt_monte_carlo(
+    mc_routine::MCNewSample,
+    lattice::AtomicLattice,
+    h::ClassicalHamiltonian,
+    temperature::Float64,
+    num_steps::Int64,
+    random_seed::Int64;
+    kb::Float64=8.617_333_262e-5,
+)
+    _validate_atomic_nvt_inputs(temperature, num_steps, kb)
+    return invoke(
+        nvt_monte_carlo,
+        Tuple{MCNewSample,AbstractLattice,ClassicalHamiltonian,
+              Float64,Int64,Int64},
+        mc_routine, lattice, h, temperature, num_steps, random_seed;
+        kb=kb)
 end
 
 """
@@ -406,6 +431,8 @@ function monte_carlo_sampling(
         equi_rate = equilibration_accepted_steps / mc_params.equilibrium_steps
 
         @info "Temperature: $temp K, Equilibration energy: $equi_mean, Variance: $(round(equi_var; sigdigits=4)), Acceptance rate: $(round(equi_rate; sigdigits=4))"
+
+
         # Sample the lattice. The production seed is derived from the
         # equilibration seed (random_seed + 1): passing the same seed replays
         # the equilibration random stream, correlating the two phases
@@ -440,17 +467,11 @@ function monte_carlo_sampling(
     return energies, configs, cvs, acceptance_rates
 end
 
-"""
-    monte_carlo_sampling(MCNewSample(), lattice::AtomicLattice,
-                         potential::PyMLPotential, parameters; kb=...)
-
-Run fixed-composition Metropolis sampling for an `AtomicLattice` over the
-temperature ladder in `parameters`.
-"""
-function monte_carlo_sampling(
+# Shared driver for AtomicLattice energy models.
+function _atomic_monte_carlo_sampling(
     routine::MCNewSample,
     lattice::AtomicLattice,
-    potential::PyMLPotential,
+    potential,
     parameters::MetropolisMCParameters;
     kb::Float64=8.617333262e-5,
 )
@@ -484,7 +505,8 @@ function monte_carlo_sampling(
         energy_variance = var(sampled_energies)
         acceptance_rate = sampled_accepted / parameters.sampling_steps
         energies[i] = mean_energy
-        cvs[i] = energy_variance / (kb * temperature^2)
+        # Divide in stages so temperature^2 need not be representable.
+        cvs[i] = (energy_variance / temperature) / (kb * temperature)
         acceptance_rates[i] = acceptance_rate
         configurations[i] = sampled_configurations[end]
         current_lattice = sampled_configurations[end]
@@ -492,6 +514,36 @@ function monte_carlo_sampling(
     end
 
     return energies, configurations, cvs, acceptance_rates
+end
+
+"""
+    monte_carlo_sampling(MCNewSample(), lattice::AtomicLattice,
+                         potential::PyMLPotential, parameters; kb=...)
+
+Run fixed-composition Metropolis sampling for an `AtomicLattice` over the
+temperature ladder in `parameters`.
+"""
+function monte_carlo_sampling(
+    routine::MCNewSample,
+    lattice::AtomicLattice,
+    potential::PyMLPotential,
+    parameters::MetropolisMCParameters;
+    kb::Float64=8.617333262e-5,
+)
+    return _atomic_monte_carlo_sampling(
+        routine, lattice, potential, parameters; kb=kb)
+end
+
+"""Run fixed-composition sampling for an `AtomicLattice` classical model."""
+function monte_carlo_sampling(
+    routine::MCNewSample,
+    lattice::AtomicLattice,
+    potential::ClassicalHamiltonian,
+    parameters::MetropolisMCParameters;
+    kb::Float64=8.617333262e-5,
+)
+    return _atomic_monte_carlo_sampling(
+        routine, lattice, potential, parameters; kb=kb)
 end
 
 """

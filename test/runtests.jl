@@ -21,6 +21,8 @@ include("test-AbstractPotentials.jl")
 
 include("test-AbstractWalkers.jl")
 
+include("test-AtomicLattice-literature.jl")
+
 include("test-AnalysisTools.jl")
 
 include("test-EnergyEval.jl")

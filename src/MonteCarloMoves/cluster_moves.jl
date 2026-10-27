@@ -1,7 +1,7 @@
 """
-    geometric_cluster_swap!(lattice::MLattice{C,SquareLattice}, p::Float64) where C
+    geometric_cluster_swap!(lattice, p::Float64)
 
-Perform a geometric cluster move on a square lattice by point inversion through a random pivot.
+Perform a geometric cluster move by point inversion through a random pivot.
 
 A random pivot site and seed site are chosen on the periodic lattice. A cluster of sites is
 grown from the seed via BFS, adding first-shell neighbors with fixed probability `p`
@@ -12,12 +12,13 @@ Because cluster growth does not depend on the occupancy field, the proposal is s
 P(cluster | config_A) = P(cluster | config_B). This means no Metropolis correction is needed;
 in nested sampling, one simply checks E_proposed < E_max.
 
-The parameter `p` controls the average cluster size: `p ≈ 0` gives single-site moves,
-`p → 1` gives lattice-spanning clusters.
+The parameter `p` controls the average cluster size: `p = 0` gives a seed-only
+cluster, while `p = 1` grows through every connected first-shell neighbor.
 
 # Arguments
-- `lattice::MLattice{C,SquareLattice}`: The lattice to perform the cluster move on.
-- `p::Float64`: Growth probability for BFS cluster construction (0 < p < 1).
+- `lattice`: A supported periodic `MLattice`, or an `AtomicLattice` whose
+  adsorption-site set has a validated point-inversion map.
+- `p::Float64`: Growth probability for BFS cluster construction (`0 ≤ p ≤ 1`).
 - `record::Union{Nothing,Vector{Tuple{Int,Int}}}=nothing`: When a vector is
   supplied, every applied (site, reflected_site) pair is appended to it;
   re-applying the recorded pairs (each pair swap is an involution) reverts
@@ -25,7 +26,7 @@ The parameter `p` controls the average cluster size: `p ≈ 0` gives single-site
   random-number draw.
 
 # Returns
-- `lattice::MLattice{C,SquareLattice}`: The mutated lattice after the cluster swap.
+- `lattice`: The mutated lattice after the cluster swap.
 
 # Notes
 - Preserves per-component particle counts exactly.
@@ -77,6 +78,12 @@ end
 
 # --- Internal helpers (not exported) ---
 
+@inline function _validate_atomic_cluster_probability(p::Float64)
+    isfinite(p) && 0.0 <= p <= 1.0 || throw(ArgumentError(
+        "cluster growth probability p must be finite and satisfy 0 ≤ p ≤ 1; got $p"))
+    return nothing
+end
+
 """
     _apply_cluster_pairs!(lattice::MLattice{C,G}, pairs::Vector{Tuple{Int,Int}}) where {C,G}
 
@@ -94,6 +101,14 @@ function _apply_cluster_pairs!(lattice::MLattice{C,G},
                     lattice.components[comp][b], lattice.components[comp][a]
             end
         end
+    end
+    return lattice
+end
+
+function _apply_cluster_pairs!(lattice::AtomicLattice,
+                               pairs::Vector{Tuple{Int,Int}})
+    for (a, b) in pairs
+        a != b && swap_sites!(lattice, a, b)
     end
     return lattice
 end
@@ -136,6 +151,12 @@ is preserved (no reflection in the non-periodic z direction).
     return _grid_to_site(rx, ry, gz, Lx, Ly)
 end
 
+@inline _cluster_first_shell(lattice::MLattice, site::Int) =
+    lattice.neighbors[site][1]
+
+@inline _cluster_first_shell(lattice::AtomicLattice, site::Int) =
+    isempty(lattice.neighbors[site]) ? Int[] : lattice.neighbors[site][1]
+
 """
     _build_geometric_cluster(lattice, seed, reflect, p) -> Vector{Tuple{Int,Int}}
 
@@ -144,7 +165,7 @@ pairing each visited site with its image under the `reflect` closure (a
 self-inverse site-index map supplied by the geometry-specific caller).
 Returns a vector of (site, reflected_site) pairs.
 """
-function _build_geometric_cluster(lattice::MLattice,
+function _build_geometric_cluster(lattice::AbstractLattice,
                                   seed::Int,
                                   reflect::F,
                                   p::Float64) where {F}
@@ -163,7 +184,7 @@ function _build_geometric_cluster(lattice::MLattice,
         push!(cluster, (s, r))
 
         # Grow to first-shell neighbors with probability p
-        for n in lattice.neighbors[s][1]
+        for n in _cluster_first_shell(lattice, s)
             if n ∉ visited && rand() < p
                 push!(stack, n)
             end
@@ -401,4 +422,47 @@ function geometric_cluster_swap!(lattice::MLattice{C,GenericLattice}, p::Float64
     throw(ArgumentError("geometric_cluster_swap! supports square and triangular " *
         "lattices only, got a GenericLattice configuration; use swap-only " *
         "decorrelation (clusters_freq = 0) for generic geometries"))
+end
+
+"""
+    geometric_cluster_swap!(lattice::AtomicLattice, p::Float64)
+
+Perform a periodic point-inversion cluster move using a validated reflection
+map over `all_sites`. Every component mask is exchanged, so the
+move preserves each species count exactly. The selected adsorption-site set
+must be closed under inversion about at least one of its own sites; otherwise
+the function throws an `ArgumentError`.
+"""
+function geometric_cluster_swap!(lattice::AtomicLattice, p::Float64;
+                                 record::Union{Nothing,Vector{Tuple{Int,Int}}}=nothing)
+    _validate_atomic_cluster_probability(p)
+    n_sites = num_sites(lattice)
+    pivot = rand(1:n_sites)
+    reflection_row = AbstractWalkers._ensure_atomic_reflection_row!(lattice, pivot)
+    if isempty(reflection_row)
+        # Conditional on a valid symmetry center, every valid pivot remains
+        # equally likely while only one O(M) mapping is stored.
+        for candidate in randperm(n_sites)
+            reflection_row = AbstractWalkers._ensure_atomic_reflection_row!(
+                lattice, candidate)
+            if !isempty(reflection_row)
+                pivot = candidate
+                break
+            end
+        end
+    end
+    isempty(reflection_row) && throw(ArgumentError(
+        "the AtomicLattice adsorption-site set has no periodic point-inversion " *
+        "center, so geometric cluster moves are unavailable for " *
+        "type_of_sites=$(lattice.type_of_sites) and periodicity=$(lattice.periodicity)"))
+    seed = rand(1:n_sites)
+    reflect = site -> reflection_row[site]
+    cluster = _build_geometric_cluster(lattice, seed, reflect, p)
+    _apply_cluster_pairs!(lattice, cluster)
+    if record !== nothing
+        for pair in cluster
+            pair[1] != pair[2] && push!(record, pair)
+        end
+    end
+    return lattice
 end

@@ -59,6 +59,122 @@
             @test accepted1 == accepted2
         end
     end
+
+    @testset "AtomicLattice Python-calculator snapshots are independent" begin
+        lattice = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        ase_lj = FreeBird.EnergyEval.pyimport(
+            "ase.calculators.lj").LennardJones()
+        calc = PyMLPotential(
+            FreeBird.AbstractPotentials.ASEcalculator(ase_lj))
+
+        energies, configs, accepted = nvt_monte_carlo(
+            MCNewSample(), lattice, calc, 300.0, Int64(5), Int64(42))
+
+        @test length(energies) == 5
+        @test all(isfinite, energies)
+        @test 0 <= accepted <= 5
+        @test all(!FreeBird.AbstractWalkers.pyis(
+            lattice.ase_lattice, config.ase_lattice) for config in configs)
+        @test all(!FreeBird.AbstractWalkers.pyis(
+            configs[i].ase_lattice, configs[j].ase_lattice)
+            for i in eachindex(configs) for j in (i + 1):length(configs))
+
+        classical = GenericLatticeHamiltonian(
+            -0.04, [-0.01, -0.0025], u"eV")
+        @test_throws ArgumentError nvt_monte_carlo(
+            MCNewSample(), lattice, classical, -1.0, Int64(2), Int64(42))
+        @test_throws ArgumentError nvt_monte_carlo(
+            MCNewSample(), lattice, classical, 300.0, Int64(-1), Int64(42))
+        @test_throws ArgumentError nvt_monte_carlo(
+            MCNewSample(), lattice, classical, 300.0, Int64(2), Int64(42);
+            kb=0.0)
+        for model in (classical, calc)
+            @test_throws ArgumentError nvt_monte_carlo(
+                MCNewSample(), lattice, model, nextfloat(0.0), Int64(2), Int64(42))
+            @test_throws ArgumentError nvt_monte_carlo(
+                MCNewSample(), lattice, model, 300.0, Int64(2), Int64(42);
+                kb=floatmax(Float64))
+            invalid_thermal = MetropolisMCParameters(
+                [300.0, nextfloat(0.0)]; equilibrium_steps=0, sampling_steps=2)
+            @test_throws ArgumentError monte_carlo_sampling(
+                MCNewSample(), lattice, model, invalid_thermal)
+        end
+        flat_model = GenericLatticeHamiltonian(0.0, zeros(2), u"eV")
+        for temperature in (1e-200, 1e200)
+            parameters = MetropolisMCParameters(
+                [temperature]; equilibrium_steps=0, sampling_steps=2)
+            _, _, cvs, rates = monte_carlo_sampling(
+                MCNewSample(), lattice, flat_model, parameters)
+            @test cvs == [0.0]
+            @test rates == [1.0]
+        end
+
+        zero_eq = MetropolisMCParameters(
+            [300.0]; equilibrium_steps=0, sampling_steps=3,
+            random_seed=42)
+        zero_energies, zero_configs, zero_cvs, zero_rates =
+            monte_carlo_sampling(MCNewSample(), lattice, calc, zero_eq)
+        @test length(zero_energies) == 1
+        @test length(zero_configs) == 1
+        @test all(isfinite, zero_energies)
+        @test all(isfinite, zero_cvs)
+        @test all(rate -> 0.0 <= rate <= 1.0, zero_rates)
+
+        multi = AtomicLattice{2,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O", "H"],
+            components=[1, 1],
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        multi_energies, multi_configs, _ = nvt_monte_carlo(
+            MCNewSample(), multi, calc, 300.0, Int64(5), Int64(43))
+        @test length(multi_energies) == 5
+        @test all(isfinite, multi_energies)
+        @test all(occupied_site_count(config) == [1, 1]
+                  for config in multi_configs)
+        @test all(all(sum(component[site] for component in config.components) <= 1
+                      for site in 1:num_sites(config)) for config in multi_configs)
+
+        empty_lattice = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O"], coverage=0.0,
+            num_nearest_neighbors=0, type_of_sites=["hollow"])
+        namespace = FreeBird.EnergyEval.pydict()
+        FreeBird.EnergyEval.pyimport("builtins").exec(
+            """
+class FreeBirdCountingCalculator:
+    def __init__(self):
+        self.calls = 0
+
+    def get_potential_energy(self, atoms):
+        self.calls += 1
+        return float(len(atoms))
+""", namespace)
+        counting_python_calc = namespace["FreeBirdCountingCalculator"]()
+        counting_calc = PyMLPotential(
+            FreeBird.AbstractPotentials.ASEcalculator(counting_python_calc))
+        null_energies, null_configs, null_accepted = nvt_monte_carlo(
+            MCNewSample(), empty_lattice, counting_calc, 300.0,
+            Int64(5), Int64(44))
+        @test FreeBird.EnergyEval.pyconvert(
+            Int, counting_python_calc.calls) == 1
+        @test null_accepted == 5
+        @test all(==(null_energies[1]), null_energies)
+        @test all(iszero(occupied_site_count(config)[1])
+                  for config in null_configs)
+    end
 end
 
 @testset "nvt Monte Carlo atomistic version" begin
@@ -238,6 +354,59 @@ end
         pr_e, pr_c, pr_acc = nvt_monte_carlo(MCNewSample(), eq_c[end], ham, 300.0, 80, seed + 1)
         @test d_energies[1] == mean(pr_e)
         @test d_rates[1] == pr_acc / 80
+
+        # AtomicLattice + Python-calculator driver wiring: keep the same
+        # phase-seed contract as the classical lattice overload.
+        atomic = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            components=[1],
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        ase_lj = FreeBird.EnergyEval.pyimport(
+            "ase.calculators.lj").LennardJones()
+        calc = PyMLPotential(
+            FreeBird.AbstractPotentials.ASEcalculator(ase_lj))
+        atomic_params = MetropolisMCParameters([300.0];
+            equilibrium_steps=12, sampling_steps=16, random_seed=seed)
+        atomic_e, atomic_configs, atomic_cv, atomic_rates =
+            monte_carlo_sampling(MCNewSample(), atomic, calc, atomic_params)
+        _, atomic_eq_configs, _ = nvt_monte_carlo(
+            MCNewSample(), atomic, calc, 300.0, Int64(12), Int64(seed))
+        atomic_pr_e, atomic_pr_configs, atomic_pr_acc = nvt_monte_carlo(
+            MCNewSample(), atomic_eq_configs[end], calc, 300.0,
+            Int64(16), Int64(seed + 1))
+        @test atomic_e[1] == mean(atomic_pr_e)
+        @test atomic_cv[1] == var(atomic_pr_e) / (8.617333262e-5 * 300.0^2)
+        @test atomic_rates[1] == atomic_pr_acc / 16
+        @test atomic_configs[1].components == atomic_pr_configs[end].components
+
+        # Atomic lattices use the same zero-equilibration and custom-kb
+        # contract with classical and Python-backed energy models.
+        classical_zero_eq = MetropolisMCParameters([300.0];
+            equilibrium_steps=0, sampling_steps=16, random_seed=seed)
+        classical_e, classical_configs, classical_cv, classical_rates =
+            monte_carlo_sampling(
+                MCNewSample(), atomic, ham, classical_zero_eq; kb=1.0)
+        classical_pr_e, classical_pr_configs, classical_pr_acc =
+            nvt_monte_carlo(
+                MCNewSample(), atomic, ham, 300.0, Int64(16),
+                Int64(seed + 1); kb=1.0)
+        @test classical_e[1] == mean(classical_pr_e)
+        @test classical_cv[1] == var(classical_pr_e) / 300.0^2
+        @test classical_rates[1] == classical_pr_acc / 16
+        @test classical_configs[1].components ==
+              classical_pr_configs[end].components
+        one_sample = MetropolisMCParameters([300.0];
+            equilibrium_steps=0, sampling_steps=1, random_seed=seed)
+        @test_throws ArgumentError monte_carlo_sampling(
+            MCNewSample(), atomic, ham, one_sample)
+        @test_throws ArgumentError monte_carlo_sampling(
+            MCNewSample(), atomic, calc, one_sample)
+
         # Atomistic driver: same-seed reproducibility end to end
         p1 = MetropolisMCParameters([500.0];
             equilibrium_steps=100, sampling_steps=100, step_size=0.3, random_seed=99)

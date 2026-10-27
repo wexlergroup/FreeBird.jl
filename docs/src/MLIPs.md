@@ -181,3 +181,67 @@ energies, liveset, _ = nested_sampling(ls, ns_params, 10_000, mc, save)
 ```
 
 Fundamentally, using other MLIPs follows the same procedure as above. Be aware of the computational costs with MLIPS, one typically needs to use GPU for fast energy evaluations, or massively parallel CPU computations to distribute the workload.
+
+## Lattice sampling on an `AtomicLattice`
+
+A `PyMLPotential` can evaluate configurations of an [`AtomicLattice`](@ref).
+FreeBird turns each site-occupancy pattern into the corresponding ASE
+structure before asking the calculator for its energy.
+
+This example performs a short fixed-particle-number Monte Carlo calculation
+for one oxygen atom on a 2×2 Pd(100) surface:
+
+```julia
+using FreeBird
+
+mlp = mace_model(
+    model="small", default_dtype="float64", enable_cueq=false)
+
+lattice = AtomicLattice{1,SquareLattice}(
+    lattice_atom="Pd",
+    surface=:fcc100,
+    supercell_dimensions=(2, 2, 1),
+    lattice_constant=3.947,
+    periodicity=(true, true, false),
+    adsorbate_atoms=["O"],
+    components=[1],
+    num_nearest_neighbors=0,
+    type_of_sites=["hollow"],
+)
+
+params = MetropolisMCParameters(
+    [300.0],
+    equilibrium_steps=10,
+    sampling_steps=20,
+    random_seed=42,
+)
+
+energies, configurations, heat_capacities, acceptance_rates =
+    monte_carlo_sampling(MCNewSample(), lattice, mlp, params)
+```
+
+`MCNewSample` moves the adsorbate between lattice sites while keeping its
+particle count fixed. Fixed-composition exact enumeration, fixed-N nested
+sampling, and Wang–Landau sampling can use the same lattice and potential.
+Multi-species lattices are also supported when the underlying calculator can
+evaluate every listed element.
+
+The third entry of `supercell_dimensions` is the number of substrate layers,
+not a vacuum thickness. Converge the layer count for the property of interest,
+and validate or relax `adsorbate_height` for the selected substrate, site,
+adsorbate, and potential. The constructor applies one height to every species
+and does not perform structural relaxation.
+
+The example uses double precision because Monte Carlo decisions depend on
+energy differences between configurations. Single precision can be faster, but
+should be treated as an explicit performance tradeoff and checked against a
+double-precision run.
+
+MLIP lattice moves evaluate the complete atomic structure for every changed
+proposal, so calculations can be much slower than a lattice Hamiltonian.
+During each temperature run, the sampler stores an independent ASE frame at
+every step, so peak memory grows with both slab size and step count.
+Start with a small surface and short run when checking a new model. For lattice
+sampling, use `MLattice` with a `ClassicalHamiltonian` when no
+explicit atomic structure is needed; a `PyMLPotential` lattice calculation
+requires an `AtomicLattice`.

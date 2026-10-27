@@ -34,6 +34,46 @@
     end
 
     @testset "enumerate_lattices function tests" begin
+        @testset "single-species AtomicLattice configuration order" begin
+            for number_sites in 1:8, number_occupied in 0:number_sites
+                lattice = AtomicLattice{1,SquareLattice}(
+                    lattice_atom="Pd", supercell_dimensions=(number_sites, 1, 1),
+                    lattice_constant=3.947, periodicity=(true, true, false),
+                    adsorbate_atoms=["O"], components=[number_occupied],
+                    num_nearest_neighbors=0, type_of_sites=["ontop"])
+                labels = vcat(zeros(Int, number_sites - number_occupied),
+                              ones(Int, number_occupied))
+                configurations = SamplingSchemes.unique_permutations(labels)
+                expected = [configuration .== 1 for configuration in configurations]
+                results = SamplingSchemes.enumerate_lattices(lattice)
+                @test [result.components[1] for result in results] == expected
+                @test all(result -> count(result.components[1]) == number_occupied,
+                          results)
+                @test all(result -> result.ase_dirty, results)
+                @test all(result -> result.components[1] !== lattice.components[1],
+                          results)
+                @test count(lattice.components[1]) == number_occupied
+            end
+        end
+
+        @testset "homogeneous AtomicLattice occupations" begin
+            for (species, counts) in ((["O"], [0]), (["O"], [4]),
+                                      (["O", "H"], [0, 0]),
+                                      (["O", "H"], [0, 4]))
+                lattice = AtomicLattice{length(species),SquareLattice}(
+                    lattice_atom="Pd", supercell_dimensions=(2, 2, 1),
+                    lattice_constant=3.947, periodicity=(true, true, false),
+                    adsorbate_atoms=species, components=counts,
+                    num_nearest_neighbors=0, type_of_sites=["ontop"])
+                results = SamplingSchemes.enumerate_lattices(lattice)
+                @test length(results) == 1
+                @test only(results) !== lattice
+                @test only(results).components == lattice.components
+                @test occupied_site_count(only(results)) == counts
+                @test only(results).components[1] !== lattice.components[1]
+            end
+        end
+
         @testset "MLattice as init_lattice cases" begin
             # 2x1 square lattice with 2 components
             lattice = MLattice{2,SquareLattice}(

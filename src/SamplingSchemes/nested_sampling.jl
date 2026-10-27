@@ -1655,12 +1655,11 @@ end
 """
     _clone_walker_shared_geometry(w::LatticeWalker)
 
-Clone a lattice walker for a replacement walk, copying only its occupancy
-vectors, energy, and iteration counter while sharing the run-invariant
-geometry by reference (the `Val(:share_geometry)` constructor). The
-geometry fields are never mutated after construction and the lattice
-drivers are serial loops, so the clone is behaviorally identical to a
-`deepcopy`: it draws no randomness and changes no floating-point value.
+Clone a lattice walker for a replacement walk. `MLattice` copies only its
+occupancy vectors, energy, and iteration counter while sharing run-invariant
+geometry through the `Val(:share_geometry)` constructor. `AtomicLattice`
+uses `deepcopy`, which also clones its Python-backed ASE cache. Neither
+path draws randomness or changes floating-point values.
 """
 _clone_walker_shared_geometry(w::LatticeWalker) =
     _shared_geometry_walker(w, w.configuration)
@@ -1671,8 +1670,11 @@ function _shared_geometry_walker(w::LatticeWalker, cfg::MLattice{C,G}) where {C,
     return LatticeWalker(shared, energy=w.energy, iter=w.iter)
 end
 
+_shared_geometry_walker(w::LatticeWalker, cfg::AtomicLattice) = deepcopy(w)
+
 """
-    _keep_unmoved_clone!(walker::LatticeWalker, h, ceiling::Float64, delta::Float64; mu::Float64=0.0) -> Bool
+    _keep_unmoved_clone!(walker::LatticeWalker, h, ceiling::Float64,
+                         delta::Float64; mu::Float64=0.0) -> Bool
 
 Keep a replacement whose decorrelation walk accepted no move. The clone still
 holds its parent's arrangement, which lies below the ceiling, so it is a
@@ -1797,7 +1799,7 @@ function _init_gc_walkers!(liveset::LatticeGasWalkers, gc_params::GrandCanonical
             occupied = findall(walker.configuration.components[1])
             shuffle!(occupied)
             for i in 1:(n_occ - n_max)
-                walker.configuration.components[1][occupied[i]] = false
+                AbstractWalkers._set_lattice_occupied!(walker.configuration, occupied[i], false)
             end
         end
         assign_energy!(walker, h; perturb_energy=gc_params.energy_perturbation)

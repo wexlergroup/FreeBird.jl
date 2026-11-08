@@ -150,10 +150,13 @@ methods. Row `i`'s shell is
 where \$t_j = \\exp(\\texttt{log\\_compression}_j)\$ is the compression factor charged
 for cull \$j\$: for an ordinary cull from `n` live walkers `e^{-1/n}` under the serial
 steps' default `compression=:geometric` or `n/(n+1)` under `:mean`, and `(n-1)/n` for a
-plateau tie evicted without replacement under both (see `NestedSamplingParameters`). The
+plateau tie evicted without replacement under both (see `NestedSamplingParameters`); the
+evictions of a block of copies of one configuration carry an ordinary cull's charge at the
+block's starting live count. The
 ledger's `n_live` column holds the live count each cull was made from, so a ledger converts
 between the conventions exactly: replace each ordinary row's charge by the other
-convention's value at its `n_live` and keep the tie rows. For a tie-free fixed-`K` ledger
+convention's value at its `n_live` (at the `n_live` of the block's first row for a block of
+copies) and keep the other tie rows. For a tie-free fixed-`K` ledger
 the column is uniformly `-1/K` (`:geometric`) or `log(K/(K+1))` (`:mean`), and this method
 with the default `ω0 = 1.0` agrees with the iteration-based method as `ωᵢ(1:n, K)` or
 `ωᵢ(1:n, K; ω0=(K+1)/K, compression=:mean)` up to floating-point evaluation
@@ -861,7 +864,7 @@ Three conventions are fixed by measurement and documented here:
   `length(live_emax)`, never over the nominal walker count: a run that ends inside a
   plateau eviction block has fewer live walkers than it started with, and splitting over
   the nominal count loses `(1 - live/K)` of the terminal mass.
-- A ledger with zero rows is a legal input, produced by zero-accept runs (see the
+- A ledger with zero rows is a legal input, produced by runs in which no step recorded a row (see the
   driver's stall contract): the entire prior mass then sits in the live set, which is
   the exact reduction for a fully degenerate landscape. A ledger that has rows but no
   `:log_compression` column is rejected: its compression cannot be reconstructed here.

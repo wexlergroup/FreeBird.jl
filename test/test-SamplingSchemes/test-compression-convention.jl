@@ -149,11 +149,12 @@ const CC_CALIBRATE = get(ENV, "FB_CALIBRATE", "") == "1"
         cc_rm(tag) = for f in ("_cc_$(tag).csv", "_cc_$(tag).w.extxyz", "_cc_$(tag).l.extxyz")
             rm(f, force=true)
         end
-        # three bit-exact duplicate dimers above two deeper ones: a 3-tie block, then ordinary culls
+        # three dimers whose energies are set equal (bit-exact copies would be a block of
+        # copies, charged as ordinary culls) above two deeper ones: a 3-tie block, then ordinary culls
         function tie_run(compression, tag)
             Random.seed!(76543)
-            dup = cc_pair(2.90)
-            ls = LJAtomWalkers([deepcopy(dup), deepcopy(dup), deepcopy(dup), cc_pair(2.82), cc_pair(2.84)], cc_lj)
+            ls = LJAtomWalkers([cc_pair(2.90), cc_pair(2.90 + 1e-6), cc_pair(2.90 + 2e-6), cc_pair(2.82), cc_pair(2.84)], cc_lj)
+            foreach(k -> ls.walkers[k].energy = ls.walkers[1].energy, 2:3)
             p = NestedSamplingParameters(mc_steps=5, initial_step_size=0.5, step_size=0.5,
                 step_size_lo=0.01, step_size_up=2.0, accept_range=(0.25, 0.75),
                 allowed_fail_count=1000, energy_perturbation=1e-12, compression=compression)
@@ -196,7 +197,9 @@ const CC_CALIBRATE = get(ENV, "FB_CALIBRATE", "") == "1"
         df3, _, _ = nested_sampling(ls3, p3, 3, MCRandomWalkClone(), cc_save("r"); record_move_rates=true)
         cc_rm("r")
         @test names(df3)[1:4] == ["iter", "emax", "log_compression", "n_live"]
-        @test all(df3.log_compression .== -1.0 ./ df3.n_live)
+        # every row is an ordinary cull or the eviction of a copy, charged as an ordinary
+        # cull from the block's starting live count, which is the K of this run
+        @test all(df3.log_compression .== -1.0 / 4)
         # the column is reserved against observable-name collisions
         @test :n_live in FreeBird.SamplingSchemes._RESERVED_LEDGER_COLUMNS
     end

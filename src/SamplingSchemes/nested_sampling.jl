@@ -12,7 +12,8 @@ If `mc_steps` is not divisible by the number of workers, the actual number of MC
 - `step_size_up::Float64`: The upper bound of the step size.
 - `accept_range::Tuple{Float64, Float64}`: The range of acceptance rates for adjusting the step size.
 e.g. (0.25, 0.75) means that the step size will decrease if the acceptance rate is below 0.25 and increase if it is above 0.75.
-- `fail_count::Int64`: The number of failed MC moves in a row.
+- `fail_count::Int64`: Consecutive steps whose walk accepted no move (their unmoved clones
+are kept when below the ceiling).
 - `allowed_fail_count::Int64`: The maximum number of failed MC moves allowed before resetting the step size.
 - `energy_perturbation::Float64`: The perturbation value used to adjust the energy of the walkers.
 - `random_seed::Int64`: The seed for the random number generator.
@@ -27,6 +28,9 @@ e.g. (0.25, 0.75) means that the step size will decrease if the acceptance rate 
   has been fully evicted without replacement. `0` (the default) means no plateau block is
   in progress; the field is set and cleared by `nested_sampling_step!` and should not be
   set by callers.
+- `plateau_copy_block::Bool`: Internal bookkeeping beside `plateau_refill_target`: whether
+  the block in progress was classified, when its first walker was evicted, as copies of
+  one configuration (see `_copy_tie_block`). Set and cleared with the target.
 - `compression::Symbol`: The compression convention the serial atomistic step methods
   charge for an ordinary cull from `n_live` walkers into the `log_compression` ledger
   column: `:geometric` (the default) charges `-1/n_live`, the mean of `ln t` for the
@@ -34,7 +38,9 @@ e.g. (0.25, 0.75) means that the step size will decrease if the acceptance rate 
   `log(n_live/(n_live + 1))`, the log of the mean of `t`, which reproduces ledgers written
   before this field existed bit for bit. Plateau-tie evictions charge
   `log((n_live - 1)/n_live)` under both, since that factor is a volume-fraction estimate
-  rather than a moment of a shrinkage variate. The choice never enters a walk or an
+  rather than a moment of a shrinkage variate; the evictions of a block of copies of one
+  configuration are charged as ordinary culls at the block's starting live count
+  (see `_copy_tie_block`). The choice never enters a walk or an
   acceptance decision: it changes the recorded column and nothing else. See `ωᵢ` in
   `AnalysisTools` for the reduction-side keyword of the same name and the size of the
   difference between the conventions.
@@ -59,7 +65,11 @@ mutable struct NestedSamplingParameters <: SamplingParameters
     plateau_refill_target::Int64
     move_stats::Dict{Symbol,Int}
     compression::Symbol
+    plateau_copy_block::Bool
 end
+
+# the full positional form without the block classification (a block starts unclassified)
+NestedSamplingParameters(args::Vararg{Any,19}) = NestedSamplingParameters(args..., false)
 
 function NestedSamplingParameters(;
             mc_steps::Int64=200,
@@ -83,7 +93,7 @@ function NestedSamplingParameters(;
             compression::Symbol=:geometric,
             )
     _check_compression(compression)
-    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, accept_range, fail_count, allowed_fail_count, energy_perturbation, random_seed, cluster_p, cluster_accepted, cluster_total, cluster_p_history, cluster_accept_history, cluster_adjust_iterations, plateau_refill_target, move_stats, compression)
+    NestedSamplingParameters(mc_steps, initial_step_size, step_size, step_size_lo, step_size_up, accept_range, fail_count, allowed_fail_count, energy_perturbation, random_seed, cluster_p, cluster_accepted, cluster_total, cluster_p_history, cluster_accept_history, cluster_adjust_iterations, plateau_refill_target, move_stats, compression, false)
 end
 
 """
@@ -663,13 +673,86 @@ function _tie_block_length(walkers)
     return n
 end
 
+"""
+    _unmoved_clone_below(accept::Bool, rate::Real, key, ceiling) -> Bool
+
+Whether an atomistic nested-sampling step keeps the clone of a decorrelation walk that
+accepted no move. `accept` and `rate` are the walk kernel's flag and acceptance rate
+(the flag before any energy re-anchor), `key` the clone's ordering key after the walk
+(its energy, or Ω = E − μN in the ideal-gas-referenced steps) and `ceiling` the key of
+the walker being culled. Returns `true` when the walk accepted nothing (`accept` false
+and `rate` not positive, `NaN` included for a walk of zero steps) and the key lies
+strictly below the ceiling. Every rejected proposal of the atomistic kernels restores
+the previous state exactly (positions, particle count and stored energy), so such a
+clone is its parent unchanged: a survivor below the ceiling, and therefore a sample of
+the constrained prior like any walked clone (a rejected proposal is a move to the same
+state, and the walk leaves the constrained prior invariant whatever it accepts).
+
+Discarding the clone and retrying from another parent would select new walkers by
+their parents' ability to move: walkers whose walks often fail would be copied too
+rarely, biasing the estimated prior masses. A kept clone ties its parent's key exactly;
+when the pair reaches the ceiling it is evicted as a block of exact ties by the
+plateau-aware machinery of the serial steps (see `nested_sampling_step!`), its rows
+charged as ordinary culls because the tie comes from copying (see `_copy_tie_block`). The
+strict comparison leaves a clone of a walker tied with the ceiling unkept (the
+all-tied fallback, and `MCRandomWalkMaxE`, which walks a copy of the culled walker); the
+step then records nothing, as before. Draws no random number.
+"""
+_unmoved_clone_below(accept::Bool, rate::Real, key, ceiling) =
+    !accept && !(rate > 0) && key < ceiling
+
+"""
+    _copy_tie_block(walkers, n_tied::Int) -> Bool
+
+Whether the `n_tied` exact ties at the head of a sorted walker vector are copies of one
+configuration rather than an atom of the law of the ordering key: every tied walker holds a
+bit-identical configuration with at least one free particle. A position vector of continuous
+coordinates is reproduced bit for bit only by copying, so such a block is one sample of the
+constrained prior held by `n_tied` walkers (a kept clone, its parent and any copies of them).
+If the live set holds `m` distinct states, removing one of them lowers `ln X` by `1/m` on
+average while `n_tied ≈ n/m`, so the block's total charge is `-n_tied/n`: its rows
+are charged as ordinary culls at the block's starting live count (`_tie_eviction_log_t`). The
+atom factor `(n_live - 1)/n_live` would instead read `n_tied/n` as a measured prior mass and
+over-compress, without bound as copies accumulate.
+
+Two kinds of tie keep the atom charge: the empty configuration, which is one state of positive
+prior mass however it arose (no free particle), and tied walkers whose configurations differ
+(the vacuum plateau of a truncated potential, or a level of Ω shared by different particle
+counts). A block mixing the two keeps it too. The second kind is not always an atom: under a
+truncated potential a clone that moved only particles beyond every cutoff ties its parent with
+a different configuration, and is charged as an atom though it too is a tie of copying; telling
+it apart would need per-walker lineage. Conversely, a block whose walkers are all copies of one
+configuration is charged as copies even if that configuration lies on an atom. Called once per block, at
+its first eviction: the classification is latched in the parameters so that the rows of a mixed
+block keep one charge when only copies remain.
+"""
+function _copy_tie_block(walkers, n_tied::Int)
+    n_tied >= 2 || return false
+    head = walkers[1]
+    sum(head.list_num_par[.!head.frozen]) > 0 || return false
+    head_positions = position(head.configuration, :)
+    for k in 2:n_tied
+        walkers[k].list_num_par == head.list_num_par || return false
+        position(walkers[k].configuration, :) == head_positions || return false
+    end
+    return true
+end
+
+# The charge of one eviction of a plateau block: the atom factor with the shrinking live
+# count, or, for a block of copies, an ordinary cull's charge at the block's starting live
+# count under the run's compression convention.
+_tie_eviction_log_t(n_live::Int, params) = params.plateau_copy_block ?
+    _ordinary_cull_log_t(params.plateau_refill_target, params.compression) :
+    log((n_live - 1) / n_live)
+
 # Compression conventions charged by the serial atomistic step methods (the reduction-side
 # keyword of the same name lives in `AnalysisTools.ωᵢ`). An ordinary cull from n live walkers
 # leaves the fraction t ~ Beta(n, 1) of the enclosed prior volume: :geometric charges
 # E[ln t] = -1/n (Skilling's convention), :mean charges ln E[t] = ln(n/(n+1)) (the log of the mean
 # of t, the historical value). A plateau-tie eviction charges ln((n-1)/n) under both: that factor is a volume-fraction
 # estimate (each live point stands for 1/n of the current volume), not a moment of a shrinkage
-# variate. The charge is bookkeeping only; no walk, acceptance or ordering decision reads it.
+# variate. The evictions of a block of copies are ordinary culls in this respect (see
+# `_copy_tie_block`). The charge is bookkeeping only; no walk, acceptance or ordering decision reads it.
 const _COMPRESSION_CONVENTIONS = (:geometric, :mean)
 
 function _check_compression(compression::Symbol)
@@ -697,14 +780,17 @@ when two or more live walkers tie the ceiling bit-exactly, the tied walkers are 
 one by one without replacement, each eviction compressing the prior volume by
 `(n_live - 1)/n_live` with the shrinking live count, and the live set is refilled by
 cloning and decorrelating survivors below the plateau only once the last tied walker has
-been evicted. A normal (unique-ceiling) cull is charged according to
+been evicted. The exception is a block of copies of one configuration, a tie of copying and
+not an atom of the energy law (see `_copy_tie_block`), whose evictions are charged as
+ordinary culls at the block's starting live count. A normal (unique-ceiling) cull is charged according to
 `ns_params.compression`: `-1/n_live` under the default `:geometric` (the mean of `ln t`
 for the shrinkage factor `t ~ Beta(n_live, 1)`, Skilling's convention) or
 `log(n_live/(n_live + 1))` under `:mean` (the log of the mean of `t`, the historical charge). The
 per-cull log-compression is returned as a fifth value and recorded by the
 [`nested_sampling`](@ref) driver in a `log_compression` ledger column, beside an `n_live`
 column holding the live count the cull was made from (so a ledger converts between the
-conventions exactly, tie blocks and short refills included); the column is consumed by
+conventions exactly, tie blocks and short refills included, a copy block's rows through the
+`n_live` of the block's first row); the column is consumed by
 the log-compression method of `ωᵢ`. For tie-free ledgers the column is uniformly `-1/K`
 (`:geometric`) or `log(K/(K+1))` (`:mean`), and the iteration-based `ωᵢ` with the matching
 `compression` keyword gives the same weights. One documented
@@ -719,6 +805,17 @@ applies to the two SERIAL `MCRoutine` step methods (`AtomWalkers` and
 `LJSurfaceWalkers`); the parallel, distributed, and mixed-moves step methods keep the
 previous fixed-compression semantics and their ledgers carry no `log_compression`
 column.
+
+A clone whose decorrelation walk accepted no move (in the ordinary cull and in the
+plateau refill alike) is kept when it lies strictly below the ceiling: it is then a copy of
+a survivor below the ceiling and so a sample of the constrained prior (see
+`_unmoved_clone_below`). Discarding it and
+cloning another survivor instead would under-copy walkers whose walks rarely move. The
+kept clone ties its parent's energy exactly, and the pair is later evicted as a block
+of exact ties, charged as ordinary culls (see `_copy_tie_block`). `fail_count` still counts consecutive walks that
+accepted no move, so the driver's step-size reset fires on the same condition as
+before. A walk that accepted moves but whose clone does not end strictly below the
+ceiling (the re-anchor check of the external-field walk) records nothing, as before.
 
 # Arguments
 - `liveset::AtomWalkers`: The set of atom walkers.
@@ -750,15 +847,17 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     if (n_tied >= 2 || ns_params.plateau_refill_target != 0) && n_tied < n_live
         # Plateau block: evict the worst tied walker without replacement
         # (Fowlie-Handley-Su), charging (n_live - 1)/n_live with the shrinking
-        # live count. With the refill target set and a unique ceiling, this is
+        # live count (a block of copies: an ordinary cull's charge at its starting
+        # live count, `_copy_tie_block`). With the refill target set and a unique ceiling, this is
         # the last tied walker of the block: evict it, then refill.
         if ns_params.plateau_refill_target == 0
             ns_params.plateau_refill_target = n_live
+            ns_params.plateau_copy_block = _copy_tie_block(ats, n_tied)
         end
         popfirst!(ats)
         update_iter!(liveset)
         iter = liveset.walkers[1].iter
-        log_t = log((n_live - 1) / n_live)
+        log_t = _tie_eviction_log_t(n_live, ns_params)
         if n_tied == 1
             # The plateau is exhausted: refill by cloning survivors and
             # decorrelating strictly below the plateau energy (volume-neutral;
@@ -768,11 +867,12 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
                 # The refill walk uses the routine's own dimension constraint so
                 # refilled clones stay on the constrained prior manifold.
                 if length(mc_routine.dims) == 3
-                    accept_r, _, at_r = MC_random_walk!(ns_params.mc_steps, deepcopy(rand(ats)), lj, ns_params.step_size, emax)
+                    accept_r, rate_r, at_r = MC_random_walk!(ns_params.mc_steps, deepcopy(rand(ats)), lj, ns_params.step_size, emax)
                 else
-                    accept_r, _, at_r = MC_random_walk_2D!(ns_params.mc_steps, deepcopy(rand(ats)), lj, ns_params.step_size, emax; dims=mc_routine.dims)
+                    accept_r, rate_r, at_r = MC_random_walk_2D!(ns_params.mc_steps, deepcopy(rand(ats)), lj, ns_params.step_size, emax; dims=mc_routine.dims)
                 end
-                if accept_r
+                # a clone whose walk accepted no move is kept (`_unmoved_clone_below`)
+                if accept_r || _unmoved_clone_below(accept_r, rate_r, at_r.energy, emax)
                     push!(ats, at_r)
                 else
                     refill_fails += 1
@@ -780,6 +880,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
             end
             length(ats) < ns_params.plateau_refill_target && @warn "Plateau refill left the live set at $(length(ats)) of $(ns_params.plateau_refill_target) walkers after $(refill_fails) failed decorrelation attempts; subsequent culls are charged with the actual live count."
             ns_params.plateau_refill_target = 0
+            ns_params.plateau_copy_block = false
         end
         return iter, emax, liveset, ns_params, log_t
     end
@@ -807,11 +908,13 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     _accumulate_move_stats!(ns_params,
         (move_attempted=ns_params.mc_steps,
          move_accepted=round(Int, rate * ns_params.mc_steps)))
-    if accept
+    # A clone whose walk accepted no move is kept (`_unmoved_clone_below`);
+    # `fail_count` still counts consecutive walks that accepted no move
+    if accept || _unmoved_clone_below(accept, rate, at.energy, emax)
         push!(ats, at)
         popfirst!(ats)
         update_iter!(liveset)
-        ns_params.fail_count = 0
+        ns_params.fail_count = accept ? 0 : ns_params.fail_count + 1
         iter = liveset.walkers[1].iter
         log_t = _ordinary_cull_log_t(n_live, ns_params.compression)
     else
@@ -1036,16 +1139,18 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSampl
         # (Fowlie-Handley-Su); see the AtomWalkers method docstring.
         if ns_params.plateau_refill_target == 0
             ns_params.plateau_refill_target = n_live
+            ns_params.plateau_copy_block = _copy_tie_block(ats, n_tied)
         end
         popfirst!(ats)
         update_iter!(liveset)
         iter = liveset.walkers[1].iter
-        log_t = log((n_live - 1) / n_live)
+        log_t = _tie_eviction_log_t(n_live, ns_params)
         if n_tied == 1
             refill_fails = 0
             while length(ats) < ns_params.plateau_refill_target && refill_fails < ns_params.allowed_fail_count
-                accept_r, _, at_r = MC_random_walk!(ns_params.mc_steps, deepcopy(rand(ats)), lj, ns_params.step_size, emax, liveset.surface)
-                if accept_r
+                accept_r, rate_r, at_r = MC_random_walk!(ns_params.mc_steps, deepcopy(rand(ats)), lj, ns_params.step_size, emax, liveset.surface)
+                # a clone whose walk accepted no move is kept (`_unmoved_clone_below`)
+                if accept_r || _unmoved_clone_below(accept_r, rate_r, at_r.energy, emax)
                     push!(ats, at_r)
                 else
                     refill_fails += 1
@@ -1053,6 +1158,7 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSampl
             end
             length(ats) < ns_params.plateau_refill_target && @warn "Plateau refill left the live set at $(length(ats)) of $(ns_params.plateau_refill_target) walkers after $(refill_fails) failed decorrelation attempts; subsequent culls are charged with the actual live count."
             ns_params.plateau_refill_target = 0
+            ns_params.plateau_copy_block = false
         end
         return iter, emax, liveset, ns_params, log_t
     end
@@ -1070,11 +1176,12 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers, ns_params::NestedSampl
     end
     # accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
     # @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: $(round(ns_params.step_size; sigdigits=4))"
-    if accept
+    # A clone whose walk accepted no move is kept (`_unmoved_clone_below`)
+    if accept || _unmoved_clone_below(accept, rate, at.energy, emax)
         push!(ats, at)
         popfirst!(ats)
         update_iter!(liveset)
-        ns_params.fail_count = 0
+        ns_params.fail_count = accept ? 0 : ns_params.fail_count + 1
         iter = liveset.walkers[1].iter
         log_t = _ordinary_cull_log_t(n_live, ns_params.compression)
     else
@@ -1105,6 +1212,9 @@ Returns
 
 Note
 - To invoke the parallel version of this routine, use `MCMixedMovesParallel` as the `mc_routine` argument.
+- A clone whose walk accepted no move is kept when it lies strictly below the ceiling
+  (see `_unmoved_clone_below`); this method has no plateau-aware tie handling, so the
+  kept clone and its parent are later culled one after the other as ordinary culls.
 """
 function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCMixedMoves; ns_iteration::Int=0)
     sort_by_energy!(liveset)
@@ -1118,11 +1228,12 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
 
     # accept, rate, at = MC_random_walk!(ns_params.mc_steps, to_walk, lj, ns_params.step_size, emax)
     # @info "iter: $(liveset.walkers[1].iter), acceptance rate: $(round(rate; sigdigits=4)), emax: $(round(typeof(1.0u"eV"), emax; sigdigits=10)), is_accepted: $accept, step_size: $(round(ns_params.step_size; sigdigits=4))"
-    if accept
+    # A clone whose walk accepted no move is kept (`_unmoved_clone_below`)
+    if accept || _unmoved_clone_below(accept, rate, at.energy, emax)
         push!(ats, at)
         popfirst!(ats)
         update_iter!(liveset)
-        ns_params.fail_count = 0
+        ns_params.fail_count = accept ? 0 : ns_params.fail_count + 1
         iter = liveset.walkers[1].iter
     else
         # @warn "Failed to accept MC move"
@@ -1501,6 +1612,7 @@ function nested_sampling(liveset::AbstractLiveSet,
     # Defensive: a parameters object recovered from a run that ended inside a
     # plateau block must not arm a fresh run's first cull as a tie eviction.
     ns_params.plateau_refill_target = 0
+    ns_params.plateau_copy_block = false
     empty!(ns_params.move_stats)
     if record_move_rates
         # Both halves of the restriction are load-bearing: the per-iteration
@@ -2516,8 +2628,10 @@ One canonical nested-sampling step decorrelated by the Galilean reflective walk:
 the shape of the serial random-walk step (plateau-aware tie eviction included,
 with refill walks running the reflective kernel below the plateau), with the
 replacement clone drawn from the survivors and decorrelated through
-`MC_galilean_walk!`. Returns the serial steps' five-value shape, so the driver
-records `log_compression` and `n_live` as usual.
+`MC_galilean_walk!`. A clone whose walk ended no segment inside the constraint is
+kept, as in the serial random-walk step (see `_unmoved_clone_below`). Returns the
+serial steps' five-value shape, so the driver records `log_compression` and `n_live`
+as usual.
 """
 function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingParameters, mc_routine::MCGalileanWalk; ns_iteration::Int=0)
     sort_by_energy!(liveset)
@@ -2531,18 +2645,20 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     if (n_tied >= 2 || ns_params.plateau_refill_target != 0) && n_tied < n_live
         if ns_params.plateau_refill_target == 0
             ns_params.plateau_refill_target = n_live
+            ns_params.plateau_copy_block = _copy_tie_block(ats, n_tied)
         end
         popfirst!(ats)
         update_iter!(liveset)
         iter = liveset.walkers[1].iter
-        log_t = log((n_live - 1) / n_live)
+        log_t = _tie_eviction_log_t(n_live, ns_params)
         if n_tied == 1
             refill_fails = 0
             while length(ats) < ns_params.plateau_refill_target && refill_fails < ns_params.allowed_fail_count
-                accept_r, _, at_r = MC_galilean_walk!(ns_params.mc_steps, deepcopy(rand(ats)), pot, emax;
+                accept_r, rate_r, at_r = MC_galilean_walk!(ns_params.mc_steps, deepcopy(rand(ats)), pot, emax;
                                                       step_size=ns_params.step_size,
                                                       n_refresh=mc_routine.n_refresh)
-                if accept_r
+                # a clone whose walk accepted no move is kept (`_unmoved_clone_below`)
+                if accept_r || _unmoved_clone_below(accept_r, rate_r, at_r.energy, emax)
                     push!(ats, at_r)
                 else
                     refill_fails += 1
@@ -2550,6 +2666,7 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
             end
             length(ats) < ns_params.plateau_refill_target && @warn "Plateau refill left the live set at $(length(ats)) of $(ns_params.plateau_refill_target) walkers after $(refill_fails) failed decorrelation attempts; subsequent culls are charged with the actual live count."
             ns_params.plateau_refill_target = 0
+            ns_params.plateau_copy_block = false
         end
         return iter, emax, liveset, ns_params, log_t
     end
@@ -2560,11 +2677,12 @@ function nested_sampling_step!(liveset::AtomWalkers, ns_params::NestedSamplingPa
     # Segment counters accumulate on the ordinary path only; refill walks
     # above are deliberately not accumulated (the plateau contract)
     _accumulate_move_stats!(ns_params, gal_stats)
-    if accept
+    # A clone whose walk accepted no move is kept (`_unmoved_clone_below`)
+    if accept || _unmoved_clone_below(accept, rate, at.energy, emax)
         push!(ats, at)
         popfirst!(ats)
         update_iter!(liveset)
-        ns_params.fail_count = 0
+        ns_params.fail_count = accept ? 0 : ns_params.fail_count + 1
         iter = liveset.walkers[1].iter
         log_t = _ordinary_cull_log_t(n_live, ns_params.compression)
     else
@@ -2717,7 +2835,9 @@ default keeps the energy-sorted construction); both enter the post-run reduction
 - `step_size_up::Float64`: Upper bound for the step-size adjustment.
 - `accept_range::Tuple{Float64,Float64}`: Acceptance-rate window forwarded to the
   step-size adjustment.
-- `fail_count::Int64`: Consecutive failed replacements.
+- `fail_count::Int64`: Consecutive steps whose replacement walk accepted no move (their
+  unmoved clones are kept when below the ceiling), whose clone moved but ended with a
+  re-anchored Ω not below the ceiling, or that attempted no walk.
 - `allowed_fail_count::Int64`: Maximum consecutive failures before the driver's stall
   contract fires (see `ideal_gas_referenced_nested_sampling`). The default (100,
   matching the canonical atomistic loop) suits interacting descents, where a run of
@@ -2726,11 +2846,17 @@ default keeps the energy-sorted construction); both enter the post-run reduction
   block (mutable runtime state; reset at driver entry when `initialize=true` and
   carried across `initialize=false` continuations, which own it: a chunked driver
   restores it from its own checkpoint).
+- `plateau_copy_block::Bool`: Whether the block in progress was classified, when its first
+  walker was evicted, as copies of one configuration (see `_copy_tie_block`; mutable
+  runtime state, set and cleared with `plateau_refill_target`, and restored with it by a
+  chunked driver).
 - `refill_fail_budget::Int64`: Failure budget for one plateau-refill loop. The default
   0 keeps the historical behavior of charging refill failures against
   `allowed_fail_count` cumulatively; a positive value gives each refill loop its own
   budget, so recovering from one difficult plateau block cannot permanently shrink
-  the live set within the stall budget.
+  the live set within the stall budget. A refill keeps the clone of a walk that accepted
+  no move, so a refill attempt fails only when a clone that moved, through its walk or a
+  Galilean burst, has a re-anchored Ω not below the plateau.
 - `move_stats::Dict{Symbol,Int}`: Run-total per-move-type attempt/accept counters
   accumulated from every ordinary-cull decorrelation walk (cleared once at run
   start; plateau-refill walks are not accumulated).
@@ -2776,7 +2902,9 @@ default keeps the energy-sorted construction); both enter the post-run reduction
 - `compression::Symbol`: The convention charged for an ordinary cull into the
   `log_compression` column, `:geometric` (the default, `-1/n_live`, the mean of `ln t`
   for `t ~ Beta(n_live, 1)`) or `:mean` (`log(n_live/(n_live + 1))`, the historical
-  value); plateau-tie evictions charge `log((n_live - 1)/n_live)` under both.
+  value); plateau-tie evictions charge `log((n_live - 1)/n_live)` under both, and the
+  evictions of a block of copies of one configuration are charged as ordinary culls at
+  the block's starting live count (see `_copy_tie_block`).
   Bookkeeping only: no walk, acceptance or ordering decision reads it. See
   `NestedSamplingParameters` and `ωᵢ` in `AnalysisTools`.
 Two fields carried by sibling parameter structs are deliberately absent. No
@@ -2803,7 +2931,11 @@ mutable struct AtomisticIGRefGCNSParameters <: SamplingParameters
     n_max::Int64
     chemical_potential::typeof(0.0u"eV")
     compression::Symbol
+    plateau_copy_block::Bool
 end
+
+# the full positional form without the block classification (a block starts unclassified)
+AtomisticIGRefGCNSParameters(args::Vararg{Any,16}) = AtomisticIGRefGCNSParameters(args..., false)
 
 """
     AtomisticIGRefGCNSParameters(;
@@ -2859,7 +2991,7 @@ function AtomisticIGRefGCNSParameters(;
         mc_steps, reference_activity, species,
         initial_step_size, step_size, step_size_lo, step_size_up, accept_range,
         fail_count, allowed_fail_count, plateau_refill_target, refill_fail_budget, move_stats,
-        n_max, chemical_potential, compression,
+        n_max, chemical_potential, compression, false,
     )
 end
 
@@ -3204,7 +3336,14 @@ the z0-weighted prior. Accepted clones (cull and refill alike) have their energi
 re-anchored by a from-scratch `interacting_energy` recompute and are re-checked against
 the ceiling before entering the live set: the kernel's incremental bookkeeping leaves
 rounding dust that would otherwise fragment bit-exact energy plateaus into artificial
-sub-levels and admit clones whose true energy sits on, not below, the ceiling.
+sub-levels and admit clones whose true energy sits on, not below, the ceiling. A clone
+whose walk accepted no move (cull and refill alike) is its parent unchanged and, when it
+lies strictly below the ceiling, is kept (see `_unmoved_clone_below`) and passes through any
+Galilean burst like an accepted clone: it ties its parent's Ω exactly unless the burst moved
+it, and the pair is later evicted as a block of exact ties, charged as ordinary culls
+unless it is an atom such as the empty configuration (see `_copy_tie_block`). A clone
+whose walk accepted moves but whose re-anchored Ω is not below the ceiling records
+nothing, as before.
 
 # Returns
 - `iter`: Iteration number (or `missing` if the step failed).
@@ -3239,14 +3378,17 @@ function nested_sampling_step!(liveset::AtomWalkers,
     if (n_tied >= 2 || params.plateau_refill_target != 0) && n_tied < n_live
         # Plateau block: evict the worst tied walker without replacement
         # (Fowlie-Handley-Su), charging (n_live - 1)/n_live with the shrinking
-        # live count; see the canonical atomistic step for the full contract.
+        # live count (a block of copies: an ordinary cull's charge at its starting
+        # live count, `_copy_tie_block`); see the canonical atomistic step for the
+        # full contract.
         if params.plateau_refill_target == 0
             params.plateau_refill_target = n_live
+            params.plateau_copy_block = _copy_tie_block(ats, n_tied)
         end
         popfirst!(ats)
         update_iter!(liveset)
         iter = liveset.walkers[1].iter
-        log_t = log((n_live - 1) / n_live)
+        log_t = _tie_eviction_log_t(n_live, params)
         if n_tied == 1
             # The plateau is exhausted: refill by cloning survivors and
             # decorrelating strictly below the plateau energy with the
@@ -3255,14 +3397,19 @@ function nested_sampling_step!(liveset::AtomWalkers,
             refill_budget = params.refill_fail_budget > 0 ? params.refill_fail_budget : params.allowed_fail_count
             while length(ats) < params.plateau_refill_target && refill_fails < refill_budget
                 at_r = deepcopy(rand(ats))
-                accept_r, _, at_r, _ = MC_grand_canonical_walk!(
+                accept_r, rate_r, at_r, _ = MC_grand_canonical_walk!(
                     _gc_walk_length(params, mc_routine, at_r.list_num_par[1]), at_r, pot, omega_max;
                     z0V=z0V, species=params.species,
                     p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
                     step_size=params.step_size, n_max=params.n_max,
                     p_bias=mc_routine.p_bias, bias_radius=mc_routine.bias_radius,
                     bias_grid=mc_routine.bias_grid, mu=mu)
-                if accept_r && mc_routine.galilean_steps > 0 && at_r.list_num_par[1] > 0
+                # a clone whose walk accepted no move is kept (`_unmoved_clone_below`)
+                kept_r = _unmoved_clone_below(accept_r, rate_r, _grand_potential(at_r, mu), omega_max)
+                # the burst runs on a kept clone too: gating it on the walk's outcome
+                # would break the composition's invariance
+                burst_r = (accept_r || kept_r) && mc_routine.galilean_steps > 0 && at_r.list_num_par[1] > 0
+                if burst_r
                     # Optional reflective decorrelation burst at the clone's
                     # current particle count; measure-preserving at fixed N, so
                     # the composition preserves the constrained reference
@@ -3275,15 +3422,17 @@ function nested_sampling_step!(liveset::AtomWalkers,
                                       step_size=mc_routine.galilean_step_size,
                                       n_refresh=mc_routine.galilean_n_refresh)
                 end
-                if accept_r
+                if accept_r || burst_r
                     # Re-anchor the clone's energy from scratch: the kernel's
                     # incremental bookkeeping leaves dust that would fragment
                     # bit-exact plateaus and admit sub-ceiling dust crossings
                     at_r.energy = interacting_energy(at_r.configuration, pot,
                         at_r.list_num_par, at_r.frozen) + at_r.energy_frozen_part
-                    accept_r = _grand_potential(at_r, mu) < omega_max
+                    below_r = _grand_potential(at_r, mu) < omega_max
+                    accept_r &= below_r
+                    kept_r &= below_r
                 end
-                if accept_r
+                if accept_r || kept_r
                     push!(ats, at_r)
                 else
                     refill_fails += 1
@@ -3291,6 +3440,7 @@ function nested_sampling_step!(liveset::AtomWalkers,
             end
             length(ats) < params.plateau_refill_target && @warn "Plateau refill left the live set at $(length(ats)) of $(params.plateau_refill_target) walkers after $(refill_fails) failed decorrelation attempts; subsequent culls are charged with the actual live count."
             params.plateau_refill_target = 0
+            params.plateau_copy_block = false
         end
         # Step-size adaptation and move-stats accumulation stay off inside
         # plateau blocks by design: refill walks run under a fixed plateau
@@ -3323,7 +3473,12 @@ function nested_sampling_step!(liveset::AtomWalkers,
         step_size=params.step_size, n_max=params.n_max,
         p_bias=mc_routine.p_bias, bias_radius=mc_routine.bias_radius,
         bias_grid=mc_routine.bias_grid, mu=mu)
-    if accept && mc_routine.galilean_steps > 0 && to_walk.list_num_par[1] > 0
+    # A clone whose walk accepted no move is kept (`_unmoved_clone_below`)
+    kept = _unmoved_clone_below(accept, rate, _grand_potential(to_walk, mu), omega_max)
+    # the burst runs on a kept clone too: gating it on the walk's outcome would break the
+    # composition's invariance
+    burst = (accept || kept) && mc_routine.galilean_steps > 0 && to_walk.list_num_par[1] > 0
+    if burst
         # Optional reflective decorrelation burst (see the refill branch).
         # Its counters accumulate immediately, unconditionally on the
         # subsequent re-anchor outcome: the burst's cost is paid either way,
@@ -3337,17 +3492,20 @@ function nested_sampling_step!(liveset::AtomWalkers,
                           n_refresh=mc_routine.galilean_n_refresh)
         _accumulate_move_stats!(params, gal_stats)
     end
-    if accept
+    if accept || burst
         # Re-anchor the clone's energy from scratch (see the refill branch)
         to_walk.energy = interacting_energy(to_walk.configuration, pot,
             to_walk.list_num_par, to_walk.frozen) + to_walk.energy_frozen_part
-        accept = _grand_potential(to_walk, mu) < omega_max
+        below = _grand_potential(to_walk, mu) < omega_max
+        accept &= below
+        kept &= below
     end
-    if accept
+    if accept || kept
         push!(ats, to_walk)
         popfirst!(ats)
         update_iter!(liveset)
-        params.fail_count = 0
+        # `fail_count` still counts consecutive walks that accepted no move
+        params.fail_count = accept ? 0 : params.fail_count + 1
         iter = liveset.walkers[1].iter
         log_t = _ordinary_cull_log_t(n_live, params.compression)
     else
@@ -3409,14 +3567,17 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers,
     if (n_tied >= 2 || params.plateau_refill_target != 0) && n_tied < n_live
         # Plateau block: evict the worst tied walker without replacement
         # (Fowlie-Handley-Su), charging (n_live - 1)/n_live with the shrinking
-        # live count; see the canonical atomistic step for the full contract.
+        # live count (a block of copies: an ordinary cull's charge at its starting
+        # live count, `_copy_tie_block`); see the canonical atomistic step for the
+        # full contract.
         if params.plateau_refill_target == 0
             params.plateau_refill_target = n_live
+            params.plateau_copy_block = _copy_tie_block(ats, n_tied)
         end
         popfirst!(ats)
         update_iter!(liveset)
         iter = liveset.walkers[1].iter
-        log_t = log((n_live - 1) / n_live)
+        log_t = _tie_eviction_log_t(n_live, params)
         if n_tied == 1
             # The plateau is exhausted: refill by cloning survivors and
             # decorrelating strictly below the plateau energy with the
@@ -3425,11 +3586,13 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers,
             refill_budget = params.refill_fail_budget > 0 ? params.refill_fail_budget : params.allowed_fail_count
             while length(ats) < params.plateau_refill_target && refill_fails < refill_budget
                 at_r = deepcopy(rand(ats))
-                accept_r, _, at_r, _ = MC_grand_canonical_walk!(
+                accept_r, rate_r, at_r, _ = MC_grand_canonical_walk!(
                     _gc_walk_length(params, mc_routine, at_r.list_num_par[1]), at_r, pot, omega_max, surface;
                     z0V=z0V, species=params.species,
                     p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
                     step_size=params.step_size, n_max=params.n_max, mu=mu)
+                # a clone whose walk accepted no move is kept (`_unmoved_clone_below`)
+                kept_r = _unmoved_clone_below(accept_r, rate_r, _grand_potential(at_r, mu), omega_max)
                 if accept_r
                     # Re-anchor the clone's energy from scratch (see the
                     # AtomWalkers method), against the surface
@@ -3437,7 +3600,7 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers,
                         at_r.list_num_par, at_r.frozen, surface.configuration) + at_r.energy_frozen_part
                     accept_r = _grand_potential(at_r, mu) < omega_max
                 end
-                if accept_r
+                if accept_r || kept_r
                     push!(ats, at_r)
                 else
                     refill_fails += 1
@@ -3445,6 +3608,7 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers,
             end
             length(ats) < params.plateau_refill_target && @warn "Plateau refill left the live set at $(length(ats)) of $(params.plateau_refill_target) walkers after $(refill_fails) failed decorrelation attempts; subsequent culls are charged with the actual live count."
             params.plateau_refill_target = 0
+            params.plateau_copy_block = false
         end
         # Step-size adaptation and move-stats accumulation stay off inside
         # plateau blocks by design: refill walks run under a fixed plateau
@@ -3475,6 +3639,8 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers,
         z0V=z0V, species=params.species,
         p_move=mc_routine.p_move, p_insert=mc_routine.p_insert,
         step_size=params.step_size, n_max=params.n_max, mu=mu)
+    # A clone whose walk accepted no move is kept (`_unmoved_clone_below`)
+    kept = _unmoved_clone_below(accept, rate, _grand_potential(to_walk, mu), omega_max)
     if accept
         # Re-anchor the clone's energy from scratch (see the AtomWalkers
         # method), against the surface
@@ -3482,11 +3648,12 @@ function nested_sampling_step!(liveset::LJSurfaceWalkers,
             to_walk.list_num_par, to_walk.frozen, surface.configuration) + to_walk.energy_frozen_part
         accept = _grand_potential(to_walk, mu) < omega_max
     end
-    if accept
+    if accept || kept
         push!(ats, to_walk)
         popfirst!(ats)
         update_iter!(liveset)
-        params.fail_count = 0
+        # `fail_count` still counts consecutive walks that accepted no move
+        params.fail_count = accept ? 0 : params.fail_count + 1
         iter = liveset.walkers[1].iter
         log_t = _ordinary_cull_log_t(n_live, params.compression)
     else
@@ -3583,14 +3750,19 @@ its entirety on one Ω never attempts a replacement walk (the interior below suc
 atom carries at most a fraction of order 1/K of its mass, which ordinary culls charging
 K/(K+1) per walker would misstate by up to a factor of order K), so the stall fires
 after `allowed_fail_count` counted failures. A plateau whose survivors all sit on
-such an atom cannot be refilled (isolated particles of a truncated pair potential share
+such an atom refills only with copies of it (isolated particles of a truncated pair potential share
 one exact energy, so at a nonzero μ every N = 1 walker sits on one Ω, and the refill
 clones the survivors below it, which are the empties): such a clone stays strictly below
-the plateau only by accepting no move, which the refill counts as a failure, whatever
-bound clusters of negligible prior mass also lie below; the refill exhausts its budget,
-the live set shrinks to the survivors, and a live set reduced to a single walker counts
-every subsequent replacement as failed rather than drawing a parent from an empty range,
-so the stall contract fires there too.
+the plateau only by accepting no move, and the refill keeps it, whatever bound clusters
+of negligible prior mass also lie below; the live set refills with copies of the atom,
+which a subsequent step finds tied in its entirety, so the stall contract fires there
+too. A live set reduced to a single walker (by refill walks that accepted moves but
+whose re-anchored Ω is not below the plateau) counts every subsequent replacement as
+failed rather than drawing a parent from an empty range. `fail_count` counts
+consecutive steps whose replacement walk accepted no move, kept clones included, steps
+whose moved clone is not below the ceiling after its re-anchor, and
+steps that attempted no walk; the stall stop follows the ledger push, so the row of a
+step that kept its clone is recorded before the run stops.
 With `stop_on_stall=false` the driver keeps the warn-and-continue contract of the sibling
 loops (the failure counter is reset, the step size is reset to
 `params.initial_step_size` following the canonical loop's contract, and the loop
@@ -3649,7 +3821,7 @@ blocks sample different constrained reference measures, or, for μ, the same mea
 under two different ceilings); and a run stopped mid-plateau-eviction resumes the
 eviction with the refill target the parameters carry (`plateau_refill_target` is kept
 on entry when `initialize=false`; a driver that rebuilds its parameters from a
-checkpoint must restore it there), so the walkers evicted before the boundary are
+checkpoint must restore it, and `plateau_copy_block`, there), so the walkers evicted before the boundary are
 refilled once the plateau is exhausted; a continuation entered with a zero target
 re-derives it from the current, reduced live count and never refills them (the
 compression bookkeeping stays exact either way, since every charge uses the actual
@@ -3659,7 +3831,7 @@ live count).
 - `df::DataFrame`: Columns `[:iter, :emax, :num_particles, :log_compression, :n_live]`, plus
   `:omega` (the culled walker's Ω = E − μN) under a nonzero `chemical_potential`, plus
   the acceptance columns when requested, plus one column per requested observable.
-  Zero-accept runs return the schema with no rows.
+  Runs in which no step records a row return the schema with no rows.
 - `liveset::AtomWalkers`: The final liveset (surviving walkers).
 - `params::AtomisticIGRefGCNSParameters`: Updated parameters.
 """
@@ -3692,7 +3864,7 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
     # it, or the target is re-derived from the reduced live count and the
     # walkers evicted before the boundary are never refilled (a permanent
     # shrink of the live set with exact but coarser compression)
-    initialize && (params.plateau_refill_target = 0)
+    initialize && (params.plateau_refill_target = 0; params.plateau_copy_block = false)
     params.fail_count = 0
     empty!(params.move_stats)
 
@@ -3746,15 +3918,14 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
 
         @debug "Atomistic IG-ref GC-NS step $i, iter: $iter, emax: $emax, N: $n_par"
 
-        if params.fail_count >= params.allowed_fail_count
-            if stop_on_stall
-                @warn "Atomistic IG-ref GC-NS: $(params.allowed_fail_count) consecutive failed replacements; returning the partial ledger and the intact live set (stop_on_stall=true)."
-                break
-            else
-                @warn "Atomistic IG-ref GC-NS: Failed $(params.allowed_fail_count) times in a row. Reset step size!"
-                params.fail_count = 0
-                params.step_size = params.initial_step_size
-            end
+        # The stall stop follows the ledger push below, so the row of a step
+        # that kept its clone is recorded before the run stops; the warn-and-reset
+        # branch keeps its place (the step-size column records the reset value)
+        stalled = stop_on_stall && params.fail_count >= params.allowed_fail_count
+        if !stop_on_stall && params.fail_count >= params.allowed_fail_count
+            @warn "Atomistic IG-ref GC-NS: Failed $(params.allowed_fail_count) times in a row. Reset step size!"
+            params.fail_count = 0
+            params.step_size = params.initial_step_size
         end
 
         if !(iter isa typeof(missing))
@@ -3790,6 +3961,12 @@ function ideal_gas_referenced_nested_sampling(liveset::AtomWalkers,
             @info "Atomistic IG-ref GC-NS iter: $(iter), E: $(emax), N: $(n_par)"
         elseif print_info && iter isa typeof(missing)
             @info "Atomistic IG-ref GC-NS MC move failed, step: $(i)"
+        end
+
+        if stalled
+            # the break leaves fail_count at threshold
+            @warn "Atomistic IG-ref GC-NS: $(params.allowed_fail_count) consecutive steps without an accepted replacement walk; returning the partial ledger and the intact live set (stop_on_stall=true)."
+            break
         end
 
         write_df_every_n(df, i, save_strategy)

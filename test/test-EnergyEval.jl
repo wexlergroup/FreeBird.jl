@@ -851,6 +851,415 @@
         @test frozen_energy(empty_at, cps, [0, 0], [true, true]) == 0.0u"eV"
     end
 
+    @testset "AtomicLattice lattice Hamiltonians" begin
+        atomic = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O"], coverage=0.0,
+            num_nearest_neighbors=2, type_of_sites=["hollow"])
+        atomic.components[1][[1, 2, 6, 11]] .= true
+        atomic.ase_dirty = true
+        pair = GenericLatticeHamiltonian(-0.04, [-0.01, -0.0025], u"eV")
+        single_component_matrix = MLatticeHamiltonian(1, [pair])
+
+        expected = FreeBird.EnergyEval.lattice_interaction_energy(
+            atomic.components[1], atomic.neighbors, pair) +
+            sum(atomic.components[1]) * pair.on_site_interaction
+        @test interacting_energy(atomic, pair) == expected
+
+        field = collect(1:num_sites(atomic)) .* 1e-3 .* u"eV"
+        field_ham = SiteFieldLatticeHamiltonian(pair, field)
+        @test interacting_energy(atomic, field_ham) ==
+              expected + sum(field[atomic.components[1]])
+
+        cluster_ham = ClusterLatticeHamiltonian(pair,
+            [ClusterInteraction(0.012u"eV", [(1, 2, 6)])])
+        @test interacting_energy(atomic, cluster_ham) == expected + 0.012u"eV"
+
+        @test interacting_energy(atomic, single_component_matrix) == expected
+
+        for ham in (pair, single_component_matrix, field_ham, cluster_ham)
+            for site in (1, 3, 6, 16)
+                e0 = interacting_energy(atomic, ham)
+                delta = site_flip_delta(atomic, ham, site)
+                set_occupied!(atomic, site, !is_occupied(atomic, site))
+                e1 = interacting_energy(atomic, ham)
+                @test isapprox(e1 - e0, delta; atol=1e-13u"eV")
+                set_occupied!(atomic, site, !is_occupied(atomic, site))
+            end
+        end
+        invalid_geometry = deepcopy(atomic)
+        invalid_geometry.cutoff_radii[1] += 0.1
+        @test_throws ArgumentError site_flip_delta(
+            invalid_geometry, pair, 1)
+
+        multi = AtomicLattice{2,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O", "H"], coverage=0.0,
+            num_nearest_neighbors=2, type_of_sites=["hollow"])
+        multi.components[1][[1, 2, 6]] .= true
+        multi.components[2][[3, 7, 12]] .= true
+        h_multi = MLatticeHamiltonian(2, [
+            GenericLatticeHamiltonian(-0.04, [-0.01, -0.002], u"eV"),
+            GenericLatticeHamiltonian(-0.03, [-0.008, -0.001], u"eV"),
+            GenericLatticeHamiltonian(-0.02, [-0.006, -0.0005], u"eV")])
+        expected_multi = zero(1.0u"eV")
+        for i in 1:2
+            ham = h_multi.Hamiltonians[i, i]
+            expected_multi += FreeBird.EnergyEval.lattice_interaction_energy(
+                multi.components[i], multi.neighbors, ham)
+            expected_multi += sum(multi.components[i]) * ham.on_site_interaction
+            for j in (i + 1):2
+                expected_multi += FreeBird.EnergyEval.inter_component_energy(
+                    multi.components[i], multi.components[j], multi.neighbors,
+                    h_multi.Hamiltonians[i, j])
+            end
+        end
+        @test isapprox(interacting_energy(multi, h_multi), expected_multi;
+                       atol=1e-13u"eV")
+
+        tiny = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["O"], coverage=0.5,
+            num_nearest_neighbors=1, type_of_sites=["hollow"])
+        tiny_ham = GenericLatticeHamiltonian(-0.04, [-0.01], u"eV")
+        exact_df, exact_liveset = exact_enumeration(tiny, tiny_ham)
+        @test nrow(exact_df) == 6
+        @test length(exact_liveset.walkers) == 6
+        @test all(sum(first(config)) == 2 for config in exact_df.config)
+        @test all(w -> w.energy == interacting_energy(w.configuration, tiny_ham),
+                  exact_liveset.walkers)
+    end
+
+    @testset "AtomicLattice Python calculator metadata isolation" begin
+        atomic = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", surface=:fcc100,
+            supercell_dimensions=(2, 2, 2), lattice_constant=3.947,
+            periodicity=(true, true, false), adsorbate_atoms=["H"],
+            components=[1], num_nearest_neighbors=0,
+            type_of_sites=["hollow"])
+
+        namespace = FreeBird.EnergyEval.pydict()
+        FreeBird.EnergyEval.pyimport("builtins").exec(
+            """
+import copy
+
+class FreeBirdMetadataSensitiveCalculator:
+    def __init__(self):
+        self.previous_info = None
+        self.calls = 0
+        self.saw_adsorbate_info = []
+
+    def get_potential_energy(self, atoms):
+        self.calls += 1
+        self.saw_adsorbate_info.append("adsorbate_info" in atoms.info)
+        if self.previous_info is not None:
+            self.previous_info == atoms.info
+        self.previous_info = copy.deepcopy(atoms.info)
+        return float(len(atoms))
+""", namespace)
+        python_calc = namespace["FreeBirdMetadataSensitiveCalculator"]()
+        calc = PyMLPotential(
+            FreeBird.AbstractPotentials.ASEcalculator(python_calc))
+
+        expected = length(atomic.ase_lattice) * u"eV"
+        @test interacting_energy(atomic, calc) == expected
+        @test interacting_energy(deepcopy(atomic), calc) == expected
+        @test FreeBird.EnergyEval.pyconvert(Int, python_calc.calls) == 2
+        @test FreeBird.EnergyEval.pyconvert(
+            Vector{Bool}, python_calc.saw_adsorbate_info) == [false, false]
+        @test FreeBird.EnergyEval.pyconvert(
+            Bool, atomic.ase_lattice.info.__contains__("adsorbate_info"))
+    end
+
+
+    @testset "AtomicLattice calculator failures preserve the ASE cache" begin
+        lattice = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", supercell_dimensions=(2, 2, 1),
+            lattice_constant=3.947, periodicity=(true, true, false),
+            adsorbate_atoms=["H"], components=[1],
+            num_nearest_neighbors=0, type_of_sites=["ontop"])
+        namespace = FreeBird.EnergyEval.pydict()
+        FreeBird.EnergyEval.pyimport("builtins").exec("""
+class FreeBirdFaultCalculator:
+    def __init__(self, value): self.value = value
+    def get_potential_energy(self, atoms):
+        atoms.positions[:] += 1
+        if self.value == 'raise': raise RuntimeError('injected calculator failure')
+        return self.value
+""", namespace)
+        before = FreeBird.EnergyEval.pyconvert(
+            Matrix{Float64}, lattice.ase_lattice.get_positions())
+        for value in (NaN, Inf, -Inf, "raise")
+            calculator = PyMLPotential(FreeBird.AbstractPotentials.ASEcalculator(
+                namespace["FreeBirdFaultCalculator"](value)))
+            expected_error = value isa String ? FreeBird.EnergyEval.PyException : DomainError
+            @test_throws expected_error interacting_energy(lattice, calculator)
+            @test FreeBird.EnergyEval.pyconvert(
+                Matrix{Float64}, lattice.ase_lattice.get_positions()) == before
+            @test isnothing(FreeBird.AbstractWalkers._validate_atomic_ase_cache(lattice))
+        end
+    end
+
+    @testset "ICETHamiltonian" begin
+        # The mapping helpers are pure Julia; constructing ICETHamiltonian
+        # performs the optional Python import.
+
+        @test ICETHamiltonian <: ClassicalHamiltonian
+        @test fieldnames(ICETHamiltonian) ==
+              (:calculator, :n_sites, :E_clean, :julia_to_icet,
+               :empty_occupation, :occupied_occupation, :energy_scale_to_eV,
+               :adsorbate_atom, :geometry_signature)
+
+        resolve_codes = FreeBird.EnergyEval._resolve_icet_occupation_codes
+        @test resolve_codes([[0, 8], [8, 0]], 8, nothing, nothing) == (0, 8)
+        @test resolve_codes([[0, 1], [1, 0]], 8, nothing, nothing) == (0, 1)
+        @test resolve_codes([[2, 3]], 8, 2, nothing) == (2, 3)
+        @test resolve_codes([[2, 3]], 8, nothing, 3) == (2, 3)
+        @test_throws ArgumentError resolve_codes([[2, 3]], 8, nothing, nothing)
+        @test_throws ArgumentError resolve_codes([[0, 1], [0, 8]], 8,
+                                                  nothing, nothing)
+        @test_throws ArgumentError resolve_codes([[0, 1, 8]], 8,
+                                                  nothing, nothing)
+
+        lat = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"]
+        )
+
+        # For fcc(100), the nearest-neighbor distance is a/sqrt(2).
+        @test nn_distance(lat) ≈ 3.947 / sqrt(2)
+        @test nn_distance(lat) ≈ 2.791 atol=1e-3
+
+        ase_cell = FreeBird.EnergyEval.pyconvert(
+            Matrix{Float64}, lat.ase_lattice.get_cell())
+        @test isnothing(FreeBird.EnergyEval._validate_icet_model_cell(
+            lat, ase_cell, (true, true, false)))
+        wrong_cell = copy(ase_cell)
+        wrong_cell[1:2, 1:2] .*= 1.05
+        @test_throws ArgumentError FreeBird.EnergyEval._validate_icet_model_cell(
+            lat, wrong_cell, (true, true, false))
+        @test_throws ArgumentError FreeBird.EnergyEval._validate_icet_model_cell(
+            lat, ase_cell, (true, false, false))
+        @test_throws ArgumentError FreeBird.EnergyEval._validate_icet_model_cell(
+            lat, ase_cell, (true, true, true))
+        tilted_cell = copy(ase_cell)
+        tilted_cell[1, 3] += 0.25
+        @test_throws ArgumentError FreeBird.EnergyEval._validate_icet_model_cell(
+            lat, tilted_cell, (true, true, false))
+
+        invalid_cache = deepcopy(lat)
+        invalid_positions = FreeBird.EnergyEval.pyconvert(
+            Matrix{Float64}, invalid_cache.ase_lattice.get_positions())
+        invalid_positions[1, 3] += 0.25
+        invalid_cache.ase_lattice.set_positions(invalid_positions)
+        @test_throws ArgumentError FreeBird.EnergyEval._validate_icet_model_cell(
+            invalid_cache, ase_cell, (true, true, false))
+
+        @testset "build_icet_to_julia_map recovers a permutation" begin
+            # ICET orders its sites its own way and can use a translated
+            # coordinate origin. Synthesise exactly that: take the lattice's own
+            # sites, permute them, shift them, and check the map inverts it.
+            n = length(lat.all_sites)
+            # A fixed permutation rather than a random one: the test should say
+            # the same thing every time it runs, and a cyclic shift is a valid
+            # permutation for any n.
+            perm = circshift(collect(1:n), 3)
+            @test perm != collect(1:n)   # so a map that returns the identity fails
+            off_x, off_y = 0.5, -0.3
+            icet_pos = zeros(n, 2)
+            for (icet_idx, julia_idx) in enumerate(perm)
+                icet_pos[icet_idx, 1] = lat.all_sites[julia_idx][1] - off_x
+                icet_pos[icet_idx, 2] = lat.all_sites[julia_idx][2] - off_y
+            end
+
+            # Equivalent periodic images must map to the same sites. The
+            # fcc(100) in-plane cell length is nx*a/sqrt(2), not nx*a.
+            ase_cell = FreeBird.AbstractWalkers.pyconvert(
+                Matrix{Float64}, lat.ase_lattice.get_cell())
+            cell_x = hypot(ase_cell[1, 1], ase_cell[1, 2])
+            cell_y = hypot(ase_cell[2, 1], ase_cell[2, 2])
+            icet_pos[2:2:end, 1] .+= cell_x
+            icet_pos[3:3:end, 2] .-= cell_y
+
+            m = FreeBird.EnergyEval.build_icet_to_julia_map(lat, icet_pos)
+            @test m == perm
+            @test length(unique(m)) == n        # bijective, as asserted internally
+            @test sort(m) == collect(1:n)
+
+            # A site with no partner is an error rather than a silent zero.
+            bad = copy(icet_pos)
+            bad[1, 1] += 1000.0
+            bad[1, 2] += 1000.0
+            @test_throws ErrorException FreeBird.EnergyEval.build_icet_to_julia_map(
+                lat, bad)
+        end
+
+        @testset "occupation codes and energy scaling" begin
+            calculator_type = FreeBird.EnergyEval.pyimport("builtins").eval(
+                "type('FreeBirdMockICET', (), {'calculate_total': " *
+                "lambda self, occupations: float(sum(occupations))})",
+                FreeBird.EnergyEval.pydict())
+            calculator = calculator_type()
+            empty = deepcopy(lat)
+            empty.components[1] .= false
+            one_occupied = deepcopy(empty)
+            one_occupied.components[1][1] = true
+
+            h_eV = ICETHamiltonian(calculator, num_sites(lat), 0.0,
+                collect(1:num_sites(lat)), 0, 8, 1.0, "O",
+                FreeBird.EnergyEval._icet_geometry_signature(lat))
+            @test interacting_energy(empty, h_eV) == 0.0u"eV"
+            @test interacting_energy(one_occupied, h_eV) == 8.0u"eV"
+
+            h_meV = ICETHamiltonian(calculator, num_sites(lat), 0.0,
+                collect(1:num_sites(lat)), 0, 8, 1e-3, "O",
+                FreeBird.EnergyEval._icet_geometry_signature(lat))
+            @test interacting_energy(one_occupied, h_meV) == 0.008u"eV"
+
+            for value in (NaN, Inf, -Inf)
+                invalid_reference = ICETHamiltonian(
+                    calculator, num_sites(lat), value, collect(1:num_sites(lat)),
+                    0, 8, 1.0, "O", FreeBird.EnergyEval._icet_geometry_signature(lat))
+                @test_throws DomainError interacting_energy(empty, invalid_reference)
+            end
+            overflowing_energy = ICETHamiltonian(
+                calculator, num_sites(lat), 0.0, collect(1:num_sites(lat)),
+                0, 8, floatmax(Float64), "O",
+                FreeBird.EnergyEval._icet_geometry_signature(lat))
+            @test_throws DomainError interacting_energy(one_occupied, overflowing_energy)
+
+            invalid_map = collect(1:num_sites(lat))
+            invalid_map[2] = 1
+            h_invalid_map = ICETHamiltonian(
+                calculator, num_sites(lat), 0.0, invalid_map,
+                0, 8, 1.0, "O",
+                FreeBird.EnergyEval._icet_geometry_signature(lat))
+            @test_throws ArgumentError interacting_energy(
+                one_occupied, h_invalid_map)
+
+            smaller = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=1,
+                type_of_sites=["hollow"])
+            @test_throws DimensionMismatch interacting_energy(smaller, h_eV)
+
+            same_size_different_geometry = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pd", surface=:fcc100,
+                supercell_dimensions=(2, 8, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=1,
+                type_of_sites=["hollow"])
+            @test num_sites(same_size_different_geometry) == num_sites(lat)
+            @test_throws ArgumentError interacting_energy(
+                same_size_different_geometry, h_eV)
+
+            different_substrate = AtomicLattice{1,SquareLattice}(
+                lattice_atom="Pt", surface=:fcc100,
+                supercell_dimensions=(4, 4, 1), lattice_constant=3.947,
+                periodicity=(true, true, false), adsorbate_atoms=["O"],
+                coverage=0.0, num_nearest_neighbors=2,
+                type_of_sites=["hollow"])
+            @test_throws ArgumentError interacting_energy(different_substrate, h_eV)
+        end
+
+        @test_throws ArgumentError ICETHamiltonian(
+            "no_such_cluster_expansion.ce", lat)
+        @test_throws ArgumentError ICETHamiltonian(
+            "no_such_cluster_expansion.ce", lat;
+            energy_scale_to_eV=big"1e10000")
+        @test_throws ArgumentError ICETHamiltonian(
+            "no_such_cluster_expansion.ce", lat;
+            energy_scale_to_eV=big"1e-10000")
+
+        namespace = FreeBird.EnergyEval.pydict()
+        FreeBird.EnergyEval.pyimport("builtins").exec("""
+import importlib.util
+icet_available = (importlib.util.find_spec("icet") is not None and
+                  importlib.util.find_spec("mchammer") is not None)
+""", namespace)
+        if FreeBird.EnergyEval.pyconvert(Bool, namespace["icet_available"])
+            @testset "ICET binary-model file constructor" begin
+                mktempdir() do directory
+                    namespace["model_path"] = joinpath(directory, "binary.ce")
+                    FreeBird.EnergyEval.pyimport("builtins").exec("""
+import numpy as np
+from ase import Atoms
+from icet import ClusterSpace, ClusterExpansion
+spacing = 3.947 / np.sqrt(2)
+primitive = Atoms("X", positions=[[spacing / 2, spacing / 2, 0]],
+                  cell=[spacing, spacing, 20.0], pbc=True)
+cluster_space = ClusterSpace(primitive, cutoffs=[1.01 * spacing],
+                             chemical_symbols=["X", "O"])
+expansion = ClusterExpansion(cluster_space,
+                            0.13 + 0.2 * np.arange(len(cluster_space)))
+expansion.write(model_path)
+reference = expansion.get_cluster_space_copy().primitive_structure.repeat((4, 4, 1))
+reference.set_atomic_numbers([0] * len(reference))
+empty_energy = expansion.predict(reference) * len(reference)
+""", namespace)
+                    model_path = FreeBird.EnergyEval.pyconvert(
+                        String, namespace["model_path"])
+                    h = ICETHamiltonian(model_path, lat; energy_scale_to_eV=1.0)
+                    @test h.n_sites == num_sites(lat)
+                    @test (h.empty_occupation, h.occupied_occupation) == (0, 8)
+                    @test_throws FreeBird.EnergyEval.PyException ICETHamiltonian(
+                        joinpath(directory, "missing.ce"), lat;
+                        energy_scale_to_eV=1.0)
+                    reference = namespace["reference"]
+                    empty_energy = FreeBird.EnergyEval.pyconvert(
+                        Float64, namespace["empty_energy"])
+                    for occupied in (Int[], [1], [1, 3, 4, 6], collect(1:num_sites(lat)))
+                        config = deepcopy(lat)
+                        fill!(config.components[1], false)
+                        config.components[1][occupied] .= true
+                        numbers = zeros(Int, num_sites(lat))
+                        numbers[h.julia_to_icet[occupied]] .= 8
+                        reference.set_atomic_numbers(numbers)
+                        expected = FreeBird.EnergyEval.pyconvert(
+                            Float64, namespace["expansion"].predict(reference)) *
+                            num_sites(lat) - empty_energy
+                        @test ustrip(u"eV", interacting_energy(config, h)) ≈
+                              expected atol=1e-11
+                    end
+                end
+            end
+        else
+            exception = try
+                ICETHamiltonian("no_such_cluster_expansion.ce", lat;
+                                 energy_scale_to_eV=1.0)
+                nothing
+            catch error
+                error
+            end
+            @test exception isa FreeBird.EnergyEval.PyException
+            @test occursin("ModuleNotFoundError", sprint(showerror, exception))
+        end
+
+        # Optional integration gate for installations that provide ICET and a
+        # compatible 4×4 Pd(100) binary cluster expansion.
+        model_path = get(ENV, "FREEBIRD_ICET_TEST_MODEL", "")
+        if !isempty(model_path)
+            @test isfile(model_path)
+            h = ICETHamiltonian(model_path, lat; energy_scale_to_eV=1e-3)
+            empty = deepcopy(lat)
+            fill!(empty.components[1], false)
+            one_occupied = deepcopy(empty)
+            one_occupied.components[1][1] = true
+            @test interacting_energy(empty, h) ≈ 0.0u"eV" atol=1e-12u"eV"
+            @test isfinite(ustrip(u"eV", interacting_energy(one_occupied, h)))
+        end
+    end
 end
 
 # Fixtures for the external-field tests (#290). Structs must sit at file top level;

@@ -76,11 +76,32 @@ function get_bin_index(energy::Float64, bins::Vector{Float64})
     return searchsortedfirst(bins, energy) - 1 # if hits the bin edge, it will be assigned to the previous bin
 end
 
+@inline _lattice_bin_index(::AbstractLattice, energy, bins) = get_bin_index(energy, bins)
+@inline _lattice_bin_index(::AtomicLattice, energy, bins) = max(1, get_bin_index(energy, bins))
+
+function _validate_atomic_wl_parameters(parameters::WangLandauParameters)
+    parameters.num_steps > 0 || throw(ArgumentError("num_steps must be positive"))
+    parameters.max_iter >= 0 || throw(ArgumentError("max_iter must be non-negative"))
+    isfinite(parameters.flatness_criterion) &&
+        0.0 <= parameters.flatness_criterion < 1.0 || throw(ArgumentError(
+            "flatness_criterion must be finite and satisfy 0 ≤ criterion < 1"))
+    isfinite(parameters.f_initial) && parameters.f_initial > 1.0 ||
+        throw(ArgumentError("f_initial must be finite and greater than one"))
+    isfinite(parameters.f_min) && parameters.f_min > 1.0 ||
+        throw(ArgumentError("f_min must be finite and greater than one"))
+    bins = parameters.energy_bins
+    length(bins) >= 2 && all(isfinite, bins) &&
+        all(i -> bins[i] < bins[i + 1], 1:(length(bins) - 1)) ||
+        throw(ArgumentError("energy_bins must contain at least two finite, " *
+                            "strictly increasing values"))
+    return nothing
+end
+
 
 """
     wang_landau(
         lattice::AbstractLattice,
-        h::ClassicalHamiltonian,
+        h,
         wl_params::WangLandauParameters
     )
 
@@ -94,7 +115,9 @@ Perform the Wang-Landau sampling scheme for a lattice or an atomistic system.
 
 # Arguments
 - `lattice::AbstractLattice`/`walker::AtomWalker`: The initial lattice/atomistic configuration.
-- `h::ClassicalHamiltonian`/`pot::AbstractPotential`: The Hamiltonian parameters for the lattice/atomistic system.
+- `h`/`pot::AbstractPotential`: The energy model for the lattice/atomistic
+  system. An `AtomicLattice` accepts either a `ClassicalHamiltonian` or a
+  `PyMLPotential`.
 - `wl_params::WangLandauParameters`: The parameters for the Wang-Landau sampling scheme.
 
 # Returns
@@ -106,9 +129,15 @@ Perform the Wang-Landau sampling scheme for a lattice or an atomistic system.
 """
 function wang_landau(
     lattice::AbstractLattice,
-    h::ClassicalHamiltonian,
+    h::Union{ClassicalHamiltonian,PyMLPotential},
     wl_params::WangLandauParameters
 )
+    lattice isa AtomicLattice && _validate_atomic_wl_parameters(wl_params)
+    if h isa PyMLPotential && !(lattice isa AtomicLattice)
+        throw(ArgumentError(
+            "PyMLPotential lattice sampling requires an AtomicLattice " *
+            "configuration; got $(typeof(lattice))"))
+    end
     # Set the random seed
     Random.seed!(wl_params.random_seed)
 
@@ -132,6 +161,13 @@ function wang_landau(
     
     current_lattice = deepcopy(lattice)
     current_energy = interacting_energy(current_lattice, h).val
+    if lattice isa AtomicLattice
+        isfinite(current_energy) || throw(DomainError(current_energy,
+            "the initial AtomicLattice energy must be finite"))
+        first(wl_params.energy_bins) <= current_energy <= last(wl_params.energy_bins) ||
+            throw(ArgumentError("the initial AtomicLattice energy must lie " *
+                                "within energy_bins"))
+    end
     
     # push!(energies, current_energy)
     # push!(configurations, deepcopy(current_lattice))
@@ -153,13 +189,16 @@ function wang_landau(
 
             # Calculate the proposed energy
             proposed_energy = interacting_energy(proposed_lattice, h).val
+            lattice isa AtomicLattice && !isfinite(proposed_energy) &&
+                throw(DomainError(proposed_energy,
+                    "the proposed AtomicLattice energy must be finite"))
 
             if proposed_energy > wl_params.energy_bins[end] || proposed_energy < wl_params.energy_bins[1]
                 continue
             end
             
-            current_bin = get_bin_index(current_energy, wl_params.energy_bins)
-            proposed_bin = get_bin_index(proposed_energy, wl_params.energy_bins)
+            current_bin = _lattice_bin_index(lattice, current_energy, wl_params.energy_bins)
+            proposed_bin = _lattice_bin_index(lattice, proposed_energy, wl_params.energy_bins)
 
             # Calculate the ratio of the density of states which results if the occupation state is swapped
             # η = g[current_bin] / g[proposed_bin]
@@ -176,7 +215,7 @@ function wang_landau(
             end
 
             # Set g(E) = g(E) * f and H(E) = H(E) + 1
-            current_bin = get_bin_index(current_energy, wl_params.energy_bins)
+            current_bin = _lattice_bin_index(lattice, current_energy, wl_params.energy_bins)
             # g[current_bin] *= f
             S[current_bin] += log(f)
             H[current_bin] += 1

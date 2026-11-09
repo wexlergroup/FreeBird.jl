@@ -1,3 +1,9 @@
+# Deterministic Hamiltonian for AtomicLattice GCNS tests.
+struct AtomicLatticeSmokeHamiltonian <: ClassicalHamiltonian end
+FreeBird.EnergyEval.interacting_energy(lattice::AtomicLattice,
+                                       ::AtomicLatticeSmokeHamiltonian) =
+    -0.04 * n_occupied(lattice) * u"eV"
+
 @testset "Grand-canonical nested sampling tests" begin
  
     # ================================================================
@@ -380,6 +386,171 @@
         rm("test_gc.ls", force=true)
     end
 
+    @testset "AtomicLattice GCNS and output smoke test" begin
+        template = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd",
+            supercell_dimensions=(4, 4, 1),
+            lattice_constant=3.947,
+            periodicity=(true, true, false),
+            adsorbate_atoms=["O"],
+            coverage=0.25,
+            num_nearest_neighbors=2,
+            type_of_sites=["hollow"])
+        walkers = [LatticeWalker(deepcopy(template)) for _ in 1:8]
+        liveset = LatticeGasWalkers(walkers, AtomicLatticeSmokeHamiltonian())
+        params = GrandCanonicalNestedSamplingParameters(
+            mc_steps=10, chemical_potential=-0.02,
+            energy_perturbation=1e-9, random_seed=20260912)
+        routine = MCGrandCanonicalMoves(clusters_freq=0)
+        save = SaveEveryN("atomic_gcns.csv", "atomic_gcns.traj.extxyz",
+                          "atomic_gcns.ls.extxyz", 25, 100, 1000)
+
+        df, final_liveset, _ = grand_canonical_nested_sampling(
+            liveset, params, Int64(100), routine, save)
+
+        @test nrow(df) > 0
+        @test readline("atomic_gcns.csv") ==
+              "iter,omega,energy,num_particles"
+        @test !isempty(read_configs("atomic_gcns.traj.extxyz"))
+        restored = read_walkers("atomic_gcns.ls.extxyz")
+        @test length(restored) == length(final_liveset.walkers)
+        @test all(w -> w isa LatticeWalker{1}, restored)
+        @test all(w -> w.configuration isa AtomicLattice{1,SquareLattice}, restored)
+
+        cluster_lattice = deepcopy(template)
+        fill!(cluster_lattice.components[1], false)
+        cluster_lattice.components[1][1] = true
+        cluster_before = copy.(cluster_lattice.components)
+        cluster_counts = sum.(cluster_lattice.components)
+        cluster_record = Tuple{Int,Int}[]
+        Random.seed!(8)
+        FreeBird.MonteCarloMoves.geometric_cluster_swap!(
+            cluster_lattice, 0.3; record=cluster_record)
+        @test !isempty(cluster_record)
+        @test cluster_lattice.components != cluster_before
+        @test sum.(cluster_lattice.components) == cluster_counts
+        FreeBird.MonteCarloMoves._apply_cluster_pairs!(cluster_lattice, cluster_record)
+        @test cluster_lattice.components == cluster_before
+
+        rm("atomic_gcns.csv", force=true)
+        rm("atomic_gcns.traj.extxyz", force=true)
+        rm("atomic_gcns.ls.extxyz", force=true)
+    end
+
+    @testset "AtomicLattice PyMLPotential GCNS" begin
+        template = AtomicLattice{1,SquareLattice}(
+            lattice_atom="Pd", surface=:fcc100,
+            supercell_dimensions=(2, 2, 1), lattice_constant=3.947,
+            periodicity=(true, true, false), adsorbate_atoms=["O"],
+            coverage=0.25, num_nearest_neighbors=1,
+            type_of_sites=["hollow"], adsorbate_height=2.0)
+        ase_lj = FreeBird.EnergyEval.pyimport(
+            "ase.calculators.lj").LennardJones()
+        potential = PyMLPotential(
+            FreeBird.AbstractPotentials.ASEcalculator(ase_lj))
+        walkers = [LatticeWalker(deepcopy(template)) for _ in 1:6]
+        liveset = LatticeGasWalkers(walkers, potential)
+
+        @test liveset.hamiltonian === potential
+        @test all(isfinite(walker.energy.val) for walker in liveset.walkers)
+
+        random_walker = deepcopy(first(walkers))
+        random_accepted, random_rate, _ = MC_random_walk!(
+            4, random_walker, potential, 1.0e12; energy_perturb=1e-9)
+        @test random_accepted
+        @test 0.0 <= random_rate <= 1.0
+
+        new_accepted, new_walker = MC_new_sample!(
+            deepcopy(first(walkers)), potential, 1.0e12;
+            energy_perturb=1e-9)
+        @test new_accepted
+        @test isfinite(new_walker.energy.val)
+
+        rejection_walker = deepcopy(first(walkers))
+        rejection_walker.energy = 1.0e13u"eV"
+        rejection_accepted, rejection_walker = MC_rejection_sampling!(
+            rejection_walker, potential, 1.0e12; energy_perturb=1e-9,
+            max_iter=2)
+        @test rejection_accepted
+        @test isfinite(rejection_walker.energy.val)
+
+        cluster_accepted, cluster_rate, cluster_walker = MC_cluster_walk!(
+            2, deepcopy(first(walkers)), potential, 1.0e12, 0.3;
+            energy_perturb=1e-9)
+        @test cluster_accepted
+        @test 0.0 <= cluster_rate <= 1.0
+        @test isfinite(cluster_walker.energy.val)
+
+        exact_df, exact_liveset = exact_enumeration(template, potential)
+        @test nrow(exact_df) == num_sites(template)
+        @test length(exact_liveset.walkers) == num_sites(template)
+        @test all(isfinite(walker.energy.val)
+                  for walker in exact_liveset.walkers)
+
+        wl_params = WangLandauParameters(
+            num_steps=2, flatness_criterion=0.0,
+            f_initial=exp(1.0), f_min=2.0,
+            energy_min=-100.0, energy_max=100.0,
+            num_energy_bins=20, max_iter=1, random_seed=20260914)
+        wl_energies, wl_configs, _, wl_entropy, wl_histogram = wang_landau(
+            template, potential, wl_params)
+        @test !isempty(wl_energies)
+        @test all(isfinite, wl_energies)
+        @test all(config isa AtomicLattice for config in wl_configs)
+        @test length(wl_entropy) == 20
+        @test length(wl_histogram) == 20
+        rm("entropy.csv", force=true)
+
+        Random.seed!(20260914)
+        accepted, rate, walked, _, _, move_stats = MC_grand_canonical_walk!(
+            12, deepcopy(first(walkers)), potential, 1.0e12, 0.0;
+            energy_perturb=1e-9, clusters_freq=1, swaps_freq=1)
+        @test accepted
+        @test 0.0 <= rate <= 1.0
+        @test isfinite(walked.energy.val)
+        @test sum(values(move_stats)) >= 1
+
+        # The neighbor-guided insertion channel is available with the same
+        # AtomicLattice/PyMLPotential pairing. Force its channel draw so this
+        # remains a dispatch-and-energy-evaluation test rather than a
+        # probabilistic coverage assertion.
+        biased_walker = deepcopy(first(walkers))
+        Random.seed!(20260916)
+        _, _, biased_walker, _, _, biased_stats = MC_grand_canonical_walk!(
+            1, biased_walker, potential, 1.0e12, 0.0;
+            p_move=0.0, p_insert=1.0, p_bias=1.0,
+            bias_predicate=:contact, bias_shells=1)
+        @test biased_stats.insert_biased_attempted == 1
+        @test biased_stats.insert_uniform_attempted == 0
+        @test isfinite(biased_walker.energy.val)
+
+        params = GrandCanonicalNestedSamplingParameters(
+            mc_steps=8, chemical_potential=-0.02,
+            energy_perturbation=1e-9, random_seed=20260914)
+        save = SaveEveryN("atomic_pyml_gcns.csv",
+                          "atomic_pyml_gcns.traj.extxyz",
+                          "atomic_pyml_gcns.ls.extxyz", 1000, 1000, 1000)
+        Random.seed!(params.random_seed)
+        df, final_liveset, _ = grand_canonical_nested_sampling(
+            liveset, params, Int64(12), MCGrandCanonicalMoves(), save)
+
+        @test nrow(df) > 0
+        @test names(df) == ["iter", "omega", "energy", "num_particles"]
+        @test all(isfinite, df.energy)
+        @test all(walker.configuration isa AtomicLattice
+                  for walker in final_liveset.walkers)
+
+        ml_walker = LatticeWalker(deepcopy(square_lattice))
+        @test_throws ArgumentError LatticeGasWalkers([ml_walker], potential;
+                                                     assign_energy=false)
+        @test_throws ArgumentError MC_grand_canonical_walk!(
+            1, ml_walker, potential, 1.0e12, 0.0)
+
+        rm("atomic_pyml_gcns.csv", force=true)
+        rm("atomic_pyml_gcns.traj.extxyz", force=true)
+        rm("atomic_pyml_gcns.ls.extxyz", force=true)
+    end
+
     # ================================================================
     @testset "move_stats: accumulated per run, reset between runs" begin
         walkers_ms = [LatticeWalker(deepcopy(square_lattice), energy=0.0u"eV", iter=0) for _ in 1:10]
@@ -432,7 +603,7 @@
         @test_throws DimensionMismatch gc_thermodynamic_stats(
             1.0, [0.5], [0.0, 1.0], [0.0, 1.0], [0, 1], 0.0)
     end
- 
+
     # ================================================================
     @testset "Validation against exact grand-canonical enumeration" begin
         # 4x4 lattice, NN interactions only, single component
@@ -510,7 +681,7 @@
         # Compute NS thermodynamic stats
         mean_E_ns, Cv_ns, mean_N_ns = gc_thermodynamic_stats(
             df, [beta_test], n_walkers, mu_val)
- 
+
         # Compare with exact values (generous tolerances for stochastic algorithm)
         @test mean_E_ns[1] ≈ exact_mean_E rtol=0.3
         @test mean_N_ns[1] ≈ exact_mean_N rtol=0.3
@@ -1011,7 +1182,6 @@
         ls_v = LatticeGasWalkers(ws_v, ll_ham; assign_energy=false)
         @test_throws ArgumentError SamplingSchemes._validate_observables(
             [:swap_attempted => cfg -> 0.0], ls_v)
-
         # Swap-acceptance decay diagnostic, post-accounting-fix semantics:
         # the effective (null-excluded) swap acceptance in the final descent
         # quartile sits well below its first-quartile value. Calibration

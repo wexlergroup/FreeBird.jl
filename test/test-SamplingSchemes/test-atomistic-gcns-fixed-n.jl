@@ -697,7 +697,9 @@ end
             df = ns_outputs[idx]
             @test names(df) == ["iter", "emax", "log_compression", "n_live"]  # compression keyword: the ledger gained the n_live column
             @test nrow(df) >= 0.5 * n_ns_steps
-            @test length(live_emax_all[idx]) == K
+            # a kept unmoved clone ties its parent exactly and the pair is evicted
+            # as a tie block, so a run can end inside one with fewer than K live walkers
+            @test length(live_emax_all[idx]) <= K
         end
     end
 
@@ -707,8 +709,10 @@ end
     function _U_with_tail(df::DataFrame, live_emax_N::Vector{Float64})
         ωi = ωᵢ(df.iter, K)
         n_iters = length(df.iter)
-        tail_w = (K / (K + 1))^n_iters / K
-        ωi_full = vcat(ωi, fill(tail_w, K))
+        # the residual mass is split over the walkers actually live (fewer than K
+        # when the run ends inside a tie block)
+        tail_w = (K / (K + 1))^n_iters / length(live_emax_N)
+        ωi_full = vcat(ωi, fill(tail_w, length(live_emax_N)))
         Es_full = vcat(collect(Float64, df.emax), live_emax_N)
         return internal_energy(β, ωi_full, Es_full)
     end
@@ -1036,7 +1040,9 @@ end
             df = ns_outputs[idx]
             @test names(df) == ["iter", "emax", "log_compression", "n_live"]  # compression keyword: the ledger gained the n_live column
             @test nrow(df) >= 0.5 * n_ns_steps
-            @test length(live_emax_all[idx]) == K
+            # a kept unmoved clone ties its parent exactly and the pair is evicted
+            # as a tie block, so a run can end inside one with fewer than K live walkers
+            @test length(live_emax_all[idx]) <= K
         end
     end
 
@@ -1047,8 +1053,10 @@ end
     function _U_with_tail(df::DataFrame, live_emax_N::Vector{Float64})
         ωi = ωᵢ(df.iter, K)
         n_iters = length(df.iter)
-        tail_w = (K / (K + 1))^n_iters / K
-        ωi_full = vcat(ωi, fill(tail_w, K))
+        # the residual mass is split over the walkers actually live (fewer than K
+        # when the run ends inside a tie block)
+        tail_w = (K / (K + 1))^n_iters / length(live_emax_N)
+        ωi_full = vcat(ωi, fill(tail_w, length(live_emax_N)))
         Es_full = vcat(collect(Float64, df.emax), live_emax_N)
         return internal_energy(β, ωi_full, Es_full)
     end

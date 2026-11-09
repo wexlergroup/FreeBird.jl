@@ -362,7 +362,7 @@
         # (Ω = 0.02 eV, every isolated particle) and the empty configuration
         # (Ω = 0) are atoms of Ω. When the N = 1 level is the top block, its
         # survivors are empties, whose clones stay below it only by accepting
-        # no move, so the refill exhausts its budget and the live set shrinks;
+        # no move, so the refill keeps those copies and the live set fills with empties;
         # when either atom holds the whole live set, the step attempts no walk.
         # Either way the driver stalls on an all-tied live set and never draws
         # a parent from an empty range (the shipped code threw there).

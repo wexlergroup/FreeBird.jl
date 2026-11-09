@@ -320,13 +320,17 @@ end
         @test results[:move] > 0.09
     end
 
-    @testset "Refill failure budget" begin
+    @testset "Plateau refill under the failure budgets" begin
         # Bit-exact duplicate dimers form a tie block above three slightly
         # deeper dimers; five-step walks at step 1.5 rarely land below the tie
-        # energy, so the cumulative budget (allowed_fail_count = 2) abandons
-        # the refill where a dedicated budget completes it. Calibrated at
-        # seeds 4000/4001: n_live 3 vs 6 at both.
-        for (budget, expected) in ((0, 3), (300, 6))
+        # energy. The refill keeps the clone of a walk that accepted no move (a
+        # copy of a survivor below the tie), so it completes under either budget
+        # on the block's third step: this expectation was n_live 3 under the
+        # cumulative budget (allowed_fail_count = 2) when such clones were
+        # discarded. A refill attempt now fails only when its walk accepted moves
+        # and the re-anchored clone is not below the plateau. Later steps can
+        # evict kept clones as new tie blocks, so the check stops at the refill.
+        for (budget, expected) in ((0, 6), (300, 6))
             Random.seed!(4000)
             dup = hard_pair(2.90)
             ls = LJAtomWalkers([deepcopy(dup), deepcopy(dup), deepcopy(dup),
@@ -336,7 +340,7 @@ end
                 step_size=1.5, allowed_fail_count=2, refill_fail_budget=budget)
             routine = MCAtomGrandCanonicalMoves(p_move=0.6, p_insert=0.2)
             z0V = FreeBird.SamplingSchemes._atomistic_igref_z0V(ls, params)
-            for i in 1:6
+            for i in 1:3
                 FreeBird.SamplingSchemes.nested_sampling_step!(ls, params, routine; ns_iteration=i, z0V=z0V)
             end
             @test length(ls.walkers) == expected
@@ -585,17 +589,18 @@ end
     end
 
     @testset "step-method contract and plateau cooperation (tie fixture)" begin
-        # bit-exact duplicate dimers above two deeper dimers: the new step
-        # method's plateau branch must charge the deterministic Fowlie-Handley-Su
-        # schedule (exact logs of integer ratios) and refill through the
-        # reflective kernel
+        # dimers with equal energies above two deeper dimers (their energies are
+        # set equal by hand: bit-exact copies would be a block of copies, charged as
+        # ordinary culls): the new step method's plateau branch must charge the
+        # deterministic Fowlie-Handley-Su schedule (exact logs of integer ratios)
+        # and refill through the reflective kernel
         gal_pair(r) = AtomWalker(FastSystem(periodic_system(
             [:Ar => [0.3, 0.5, 0.5], :Ar => [0.3 + r / gal_L, 0.5, 0.5]],
             gal_box, fractional=true)))
         Random.seed!(76543)
-        dup = gal_pair(2.90)
-        ls = LJAtomWalkers([deepcopy(dup), deepcopy(dup), deepcopy(dup),
+        ls = LJAtomWalkers([gal_pair(2.90), gal_pair(2.90 + 1e-6), gal_pair(2.90 + 2e-6),
                             gal_pair(2.82), gal_pair(2.84)], gal_lj)
+        foreach(k -> ls.walkers[k].energy = ls.walkers[1].energy, 2:3)
         p = NestedSamplingParameters(mc_steps=5, initial_step_size=0.5, step_size=0.5,
             step_size_lo=0.01, step_size_up=2.0, accept_range=(0.25, 0.75),
             allowed_fail_count=1000, energy_perturbation=1e-12)
